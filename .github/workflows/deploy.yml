@@ -23,6 +23,8 @@ jobs:
         run: |
           make clean
           make
+          mkdir -p web/wasm
+          cp wasm/* web/wasm/
           
       - name: Setup Pages
         uses: actions/configure-pages@v3

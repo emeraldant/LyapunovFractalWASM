@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lyapunov Fractal Explorer</title>
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #121212;
+            color: #ffffff;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        input, select, button {
+            padding: 8px;
+            border: 1px solid #333;
+            border-radius: 4px;
+            background: #1e1e1e;
+            color: #ffffff;
+        }
+        button {
+            background: #bb86fc;
+            color: #000000;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+            min-width: 120px;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background: #c49afc;
+        }
+        button:disabled {
+            background: #6b6b6b;
+            cursor: not-allowed;
+        }
+        canvas {
+            border: 1px solid #333;
+            background: #1e1e1e;
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+        }
+        .error {
+            color: #cf6679;
+            margin: 10px 0;
+        }
+        label {
+            color: #bb86fc;
+            margin-right: 4px;
+        }
+        .progress-container {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            text-align: center;
+            background: rgba(30, 30, 30, 0.9);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(5px);
+            display: none;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #333;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #bb86fc, #c49afc);
+            transition: width 0.3s ease;
+            border-radius: 4px;
+        }
+        .progress-text {
+            color: #bb86fc;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+        .canvas-container {
+            position: relative;
+            width: fit-content;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Lyapunov Fractal Explorer</h1>
+        <div class="controls">
+            <label for="sequence">Sequence:</label>
+            <input type="text" id="sequence" placeholder="e.g., AB" value="AB">
+            
+            <label for="iterations">Iterations:</label>
+            <input type="number" id="iterations" placeholder="Iterations" value="1000" min="100" max="10000">
+            
+            <label for="color-scheme">Color:</label>
+            <select id="color-scheme">
+                <option value="cosmic">Cosmic</option>
+                <option value="nebula">Nebula</option>
+                <option value="aurora">Aurora</option>
+                <option value="solarflare">Solar Flare</option>
+                <option value="blackhole">Black Hole</option>
+                <option value="psychedelic">Psychedelic</option>
+                <option value="rainbow">Rainbow</option>
+            </select>
+            
+            <button id="generate">Generate Fractal</button>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="fractal-canvas" width="800" height="800"></canvas>
+            <div class="progress-container" id="progress-container">
+                <div class="progress-text">Computing Fractal...</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <div class="progress-text" id="progress-percentage">0%</div>
+            </div>
+        </div>
+        
+        <div class="description">
+            <h2>About Lyapunov Fractals</h2>
+            <p>
+                Lyapunov fractals visualize the chaos and stability in dynamical systems. Each point in this image represents a unique 
+                combination of two parameters (A and B) in a mathematical sequence that determines how the system evolves over time.
+            </p>
+            
+            <h3>How It Works</h3>
+            <p>
+                The sequence (like "AB") tells us which parameter to use at each step. For example, with sequence "AB":
+                <ul>
+                    <li>Step 1 uses parameter A</li>
+                    <li>Step 2 uses parameter B</li>
+                    <li>Then it repeats: A, B, A, B, ...</li>
+                </ul>
+                Parameters A and B each range from 0 to 4, controlling how quickly values grow or shrink in the system.
+            </p>
+
+            <h3>Understanding the Colors</h3>
+            <p>
+                The colors in the fractal indicate the system's behavior at each point:
+                <ul>
+                    <li><strong>Black regions:</strong> Highly stable or highly chaotic behavior</li>
+                    <li><strong>White regions:</strong> Moderate stability</li>
+                    <li><strong>Colored regions:</strong> Transitions between stability and chaos</li>
+                </ul>
+                Different sequences create vastly different patterns. Try changing the sequence to explore new patterns!
+            </p>
+
+            <h3>Tips for Exploration</h3>
+            <p>
+                - Try simple sequences first: "AB", "AAB", "AABB"<br>
+                - Longer sequences often create more intricate patterns<br>
+                - Different color schemes highlight different aspects of the system's behavior
+            </p>
+        </div>
+    </div>
+
+    <!-- Global error handler -->
+    <script>
+        window.addEventListener('error', function(event) {
+            console.error('Global error:', event.error);
+            const canvas = document.getElementById('fractal-canvas');
+            if (canvas) {
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#1e1e1e';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#cf6679';
+                ctx.font = '16px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText(`Error: ${event.error.message}`, canvas.width / 2, canvas.height / 2);
+            }
+        });
+    </script>
+
+    <!-- Core application scripts -->
+    <script src="fractal_renderer.js"></script>
+    <script src="wasm_loader.js"></script>
+</body>
+</html>

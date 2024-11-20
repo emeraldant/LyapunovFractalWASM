@@ -1,0 +1,123 @@
+:root {
+    --bg-color: #121212;
+    --text-color: #e0e0e0;
+    --accent-color: #bb86fc;
+    --surface-color: #1e1e1e;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+h1 {
+    text-align: center;
+    color: var(--accent-color);
+    margin-bottom: 2rem;
+    font-size: 2.5rem;
+    text-shadow: 0 0 10px rgba(187, 134, 252, 0.5);
+}
+
+.fractal-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 2rem;
+    background-color: var(--surface-color);
+    padding: 1rem;
+    border-radius: 8px;
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+label {
+    color: var(--text-color);
+    font-weight: 500;
+}
+
+input, select {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    border: 1px solid var(--accent-color);
+    padding: 0.5rem;
+    border-radius: 4px;
+}
+
+#generate-btn {
+    background-color: var(--accent-color);
+    color: var(--bg-color);
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+#generate-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 15px rgba(187, 134, 252, 0.5);
+}
+
+.fractal-display {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 2rem;
+}
+
+#fractal-canvas {
+    max-width: 100%;
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.chaos-explanation {
+    background-color: var(--surface-color);
+    padding: 1.5rem;
+    border-radius: 8px;
+    text-align: center;
+}
+
+.chaos-explanation h2 {
+    color: var(--accent-color);
+    margin-bottom: 1rem;
+}
+
+details {
+    margin-top: 1rem;
+    cursor: pointer;
+}
+
+details > summary {
+    list-style: none;
+    color: var(--accent-color);
+    font-weight: bold;
+}
+
+details > summary::-webkit-details-marker {
+    display: none;
+}
+
+@media (max-width: 768px) {
+    .fractal-controls {
+        flex-direction: column;
+    }
+}

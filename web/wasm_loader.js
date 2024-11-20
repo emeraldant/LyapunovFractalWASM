@@ -4,7 +4,7 @@ let moduleLoadAttempted = false;
 async function loadWasmScript() {
     return new Promise((resolve, reject) => {
         const script = document.createElement('script');
-        script.src = './wasm/lyapunov_fractal.js';
+        script.src = `${window.location.pathname}wasm/lyapunov_fractal.js`;
         script.onload = () => {
             console.log('WASM JavaScript file loaded successfully');
             resolve();
@@ -28,7 +28,7 @@ async function createModule() {
     await loadWasmScript();
     
     // Verify WASM binary exists
-    const wasmResponse = await fetch('./wasm/lyapunov_fractal.wasm');
+    const wasmResponse = await fetch(`${window.location.pathname}wasm/lyapunov_fractal.wasm`);
     if (!wasmResponse.ok) {
         throw new Error(`WASM binary not found: ${wasmResponse.status}`);
     }
@@ -38,7 +38,7 @@ async function createModule() {
         // Configure module
         const moduleConfig = {
             locateFile: function(filename) {
-                const path = `./wasm/${filename}`;
+                const path = `${window.location.pathname}wasm/${filename}`;
                 console.log('Locating file:', path);
                 return path;
             },

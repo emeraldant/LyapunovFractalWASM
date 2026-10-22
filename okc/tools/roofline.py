@@ -18,8 +18,8 @@ BW_STREAM = 4.3e12        # long contiguous reads, cold L2 (~90% of peak)
 BW_GATHER = 3.6e12        # one random 128 B row per key per cache (page size 1, ~75%)
 BF16_EFF = 700e12         # wgmma BF16 at realistic clocks/occupancy (~70%)
 FP8_EFF = 1300e12
-ALU = 132 * 128 * 1.98e9  # lane-ops/s on CUDA cores (33.5 T)
-DEQUANT_OPS = 2.0         # lane-ops per NVFP4 weight element, Marlin-style bit tricks
+ALU = 132 * 64 * 1.83e9   # INT32/LOP3/shift lane-ops/s (15.5 T): dequant is integer work
+DEQUANT_OPS = 1.875       # INT ops per NVFP4 weight in Marlin's sequence (tools/exact.py)
 STAGE_US = 1.0            # per dependent kernel stage beyond the first: launch gap + ramp + tail
                           # (the judge subtracts ~4 us of graph replay cost per shape)
 

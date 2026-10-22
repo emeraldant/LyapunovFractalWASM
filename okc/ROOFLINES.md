@@ -1,7 +1,9 @@
 # Rooflines: Muse Spark Open kernel problems on one H200
 
-Generated tables come from `python3 tools/roofline.py`; the reasoning is here. Every rate below
-is an assumption until calibrated against measured runs (see "Calibration" at the end).
+Generated tables come from `python3 tools/roofline.py`; the reasoning is here. The "practical"
+rates below are assumptions until calibrated against measured runs (see "Calibration" at the end).
+Exact byte and FLOP counts, peak-rate floors per resource and their validation are in
+[EXACT.md](EXACT.md) (`tools/exact.py --validate`).
 
 ## Machine model
 
@@ -12,8 +14,8 @@ is an assumption until calibrated against measured runs (see "Calibration" at th
 | HBM, one random 128 B row per key (page size 1) | 3.6 TB/s (assumed ~75%) | the paged KV cache |
 | BF16 tensor peak / achievable | 989 / 700 TFLOP/s | GEMMs (wgmma) |
 | FP8 tensor peak / achievable | 1979 / 1300 TFLOP/s | prefill attention (FP8 queries are allowed) |
-| CUDA-core lane ops | 33.5 T/s (132 SM x 128 x 1.98 GHz) | NVFP4 dequant, norms |
-| NVFP4 dequant | ~2 lane ops per weight (Marlin-style lop3/prmt) | MoE |
+| INT32 / LOP3 / shift | 15.5 T ops/s (132 SM x 64 x 1.83 GHz) | NVFP4 dequant |
+| NVFP4 dequant | 1.875 INT ops per weight (Marlin's sequence, counted in EXACT.md) | MoE |
 | each dependent kernel stage | ~1 µs beyond the first (launch gap, ramp, tail) | fusion value |
 | small-kernel critical path | ~3 µs (3 dependent DRAM round trips) | tiny attention |
 
@@ -67,13 +69,14 @@ boards are wide open. "packed" adds lossless weight compression (below).
 - Prefetch the page table a block ahead so the KV gather never waits on it.
 - Keep queries BF16 (more accurate than FA3's FP8 path, at no cost: decode isn't tensor-bound).
 
-### muse_moe_w4a16: HBM-bound at every decode shape, with dequant ALU at ~45%
+### muse_moe_w4a16: HBM- and INT-bound together at every decode shape
 
 - The busiest GPU touches 2.5 experts at bs 1 and 24 at bs 256 (simulated with the judge's
   generator; its floor counts only 75% of these). 28.3 MB per expert.
 - FLOP/B <= 56: memory-bound throughout, so time = touched experts x 28.3 MB / bandwidth.
-- Dequant must stay ~2 ops per weight, or it becomes the bound: a naive Triton dequant (~6-8
-  ops) is ALU-bound below bandwidth. This is why Marlin is hard to beat on the GEMMs
+- Dequant runs on the 64-lane INT pipe: Marlin's 1.875 ops per weight decode 8.25 T weights/s
+  against HBM's 8.53 T, so the experts are co-bound by INT and HBM. A naive Triton dequant
+  (~6-8 ops) would run at a third of bandwidth. This is why Marlin is hard to beat on the GEMMs
   themselves, and why the glue (align, eager post-norm below 32 tokens, padding over 257
   buckets) is the first target.
 - At bs 1 only 2-3 experts are touched: both GEMMs must still spread each expert across all

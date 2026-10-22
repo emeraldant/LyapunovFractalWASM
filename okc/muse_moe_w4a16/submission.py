@@ -82,7 +82,8 @@ ALIGN_CHUNK = 256
 @triton.jit
 def _align_local_kernel(ids_ptr, local_start_ptr, sorted_ptr, block_expert_ptr, n_padded_ptr, local_ids_ptr,
                         P, MAX_BLOCKS, NE: tl.constexpr,
-                        E: tl.constexpr, BS: tl.constexpr, CHUNK: tl.constexpr, BLOCKS_CHUNK: tl.constexpr):
+                        E: tl.constexpr, BS: tl.constexpr, BS_P2: tl.constexpr, CHUNK: tl.constexpr,
+                        BLOCKS_CHUNK: tl.constexpr):
     """Sort the P = tokens * top_k routes that land on local experts [local_start,
     local_start + E) (mod NE; local_start is read from device memory) into Marlin's layout: each expert's routes (in route order) padded to a
     multiple of BS with the sentinel P; block_expert[i] is block i's local expert (-1 past
@@ -115,7 +116,7 @@ def _align_local_kernel(ids_ptr, local_start_ptr, sorted_ptr, block_expert_ptr, 
         running += tl.sum(hit, axis=0)
 
     # Padding: each expert's slots [start + count, start + padded) get the sentinel.
-    j = tl.arange(0, BS)
+    j = tl.arange(0, BS_P2)  # BS may be 48: arange needs a power of two
     pad_pos = (starts + counts)[:, None] + j[None, :]
     tl.store(sorted_ptr + pad_pos, P, mask=j[None, :] < (padded - counts)[:, None])
 
@@ -237,7 +238,8 @@ def _moe_fast(x, ids, topk_weights, local_start, state, block_size_m, atomic):
     n_padded = torch.empty((1,), dtype=torch.int32, device=x.device)
     local_ids = torch.empty((num_tokens, TOP_K), dtype=torch.int32, device=x.device)
     _align_local_kernel[(1,)](ids, local_start, sorted_ids, block_experts, n_padded, local_ids,
-                              p, max_blocks, NE=N_EXPERTS, E=count, BS=block_size_m, CHUNK=ALIGN_CHUNK,
+                              p, max_blocks, NE=N_EXPERTS, E=count, BS=block_size_m,
+                              BS_P2=triton.next_power_of_2(block_size_m), CHUNK=ALIGN_CHUNK,
                               BLOCKS_CHUNK=min(512, triton.next_power_of_2(max_blocks)), num_warps=8)
     y = _experts(x, bank, state, sorted_ids, block_experts, n_padded, local_ids, topk_weights,
                  block_size_m, atomic)

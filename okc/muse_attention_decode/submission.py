@@ -1,6 +1,7 @@
 # okc: problem=muse_attention_decode
-"""Gated attention decode for Muse Spark Open: two Triton launches on sliding-window decode
-steps, SGLang's FA3 path elsewhere (see kernel_fn).
+"""Gated attention decode for Muse Spark Open: our Triton kernels on decode steps (v1 on
+sliding-window layers, v3 on full-attention layers), SGLang's FA3 path on verify blocks
+(see kernel_fn).
 
 SGLang runs five or six kernels per call (QK-norm + RoPE, the cache store, the query's FP8
 cast, FA3 and its split combine, the gated norm). At these sizes most of that is launch
@@ -354,10 +355,10 @@ def _attn3_split_kernel(
         QKV_W, PT_STRIDE, CHUNK, sm_scale_log2, qk_factor, eps,
         HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr, G: tl.constexpr,
         R: tl.constexpr, RN: tl.constexpr, PAGE: tl.constexpr, WINDOW: tl.constexpr, ROPE: tl.constexpr,
-        SPLITS: tl.constexpr, BLOCK_N: tl.constexpr):
+        SPLITS: tl.constexpr, BLOCK_N: tl.constexpr, HP: tl.constexpr):
     s = tl.program_id(0)
-    h0 = tl.program_id(1) * 2
-    h1 = h0 + 1
+    h0 = tl.program_id(1) * HP
+    h1 = h0 + HP - 1  # == h0 when HP == 1 (its work is skipped)
     b = tl.program_id(2)
     seq = tl.load(seq_lens_ptr + b)
     rows = tl.arange(0, R)
@@ -395,23 +396,25 @@ def _attn3_split_kernel(
         off0 = (base + h0)[:, None] * HD + d[None, :]
         off1 = off0 + HD
         k0 = tl.load(k_cache_ptr + off0, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
-        k1 = tl.load(k_cache_ptr + off1, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
         v0 = tl.load(v_cache_ptr + off0, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
-        v1 = tl.load(v_cache_ptr + off1, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
         valid = kmask[None, :]
         if WINDOW > 0:
             valid = valid & (kpos[None, :] > qpos[:, None] - WINDOW)
         m0, l0, a0 = _attn3_step(q0, k0, v0, valid, m0, l0, a0, qk_scale)
-        m1, l1, a1 = _attn3_step(q1, k1, v1, valid, m1, l1, a1, qk_scale)
+        if HP == 2:
+            k1 = tl.load(k_cache_ptr + off1, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+            v1 = tl.load(v_cache_ptr + off1, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+            m1, l1, a1 = _attn3_step(q1, k1, v1, valid, m1, l1, a1, qk_scale)
 
     if s == SPLITS - 1:
         m0, l0, a0 = _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q0, m0, l0, a0,
                                      tok0, seq, h0, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
                                      HQ, HKV, HD, L, RN, ROPE)
-        m1, l1, a1 = _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q1, m1, l1, a1,
-                                     tok0, seq, h1, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
-                                     HQ, HKV, HD, L, RN, ROPE)
-    for hh in tl.static_range(2):
+        if HP == 2:
+            m1, l1, a1 = _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q1, m1, l1,
+                                         a1, tok0, seq, h1, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
+                                         HQ, HKV, HD, L, RN, ROPE)
+    for hh in tl.static_range(HP):
         if hh == 0:
             m_i, l_i, acc, h = m0, l0, a0, h0
         else:
@@ -426,42 +429,40 @@ def _attn3_split_kernel(
 def _attn3_combine_kernel(qkv_ptr, out_ptr, ws_acc_ptr, ws_ml_ptr, v_scale_ptr, QKV_W, eps,
                           HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr,
                           G: tl.constexpr, R: tl.constexpr, SPLITS: tl.constexpr, SC: tl.constexpr):
-    """One program per (query head, request): merges the splits of each of its L rows in
-    vectorized chunks of SC splits, then RMSNorm x sigmoid(gate)."""
+    """One program per (query head, request, block token): merges that row's splits in
+    vectorized chunks of SC, then RMSNorm x sigmoid(gate)."""
     hq = tl.program_id(0)
     b = tl.program_id(1)
+    j = tl.program_id(2)
     h = hq // G
-    g = hq % G
+    r = j * G + hq % G
     d = tl.arange(0, HD)
     sc = tl.arange(0, SC)
-    v_scale = tl.load(v_scale_ptr)
-    for j in tl.static_range(L):
-        r = j * G + g
-        m_run = tl.full((1,), float("-inf"), tl.float32)
-        l_run = tl.zeros((1,), tl.float32)
-        acc = tl.zeros((HD,), tl.float32)
-        for c0 in range(0, SPLITS, SC):
-            si = c0 + sc
-            smask = si < SPLITS
-            idx = (((b * HKV + h) * SPLITS + si).to(tl.int64) * R + r)
-            m_s = tl.load(ws_ml_ptr + idx * 2, mask=smask, other=float("-inf"))
-            l_s = tl.load(ws_ml_ptr + idx * 2 + 1, mask=smask, other=0.0)
-            a_s = tl.load(ws_acc_ptr + idx[:, None] * HD + d[None, :], mask=smask[:, None], other=0.0)
-            m_new = tl.maximum(m_run, tl.max(m_s, axis=0))
-            m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
-            alpha = tl.exp2(m_run - m_safe)
-            beta = tl.exp2(m_s - m_safe)
-            l_run = l_run * alpha + tl.sum(l_s * beta, axis=0)
-            acc = acc * alpha + tl.sum(a_s * beta[:, None], axis=0)
-            m_run = m_new
-        o = acc / tl.where(l_run == 0.0, 1.0, l_run) * v_scale
-        inv = tl.rsqrt(tl.sum(o * o, axis=0) / HD + eps)
-        tok = (b * L + j).to(tl.int64)
-        gate = tl.load(qkv_ptr + tok * QKV_W + (HQ + 2 * HKV) * HD + hq * HD + d).to(tl.float32)
-        tl.store(out_ptr + tok * (HQ * HD) + hq * HD + d, (o * inv * tl.sigmoid(gate)).to(tl.bfloat16))
+    m_run = tl.full((1,), float("-inf"), tl.float32)
+    l_run = tl.zeros((1,), tl.float32)
+    acc = tl.zeros((HD,), tl.float32)
+    for c0 in range(0, SPLITS, SC):
+        si = c0 + sc
+        smask = si < SPLITS
+        idx = ((b * HKV + h) * SPLITS + si).to(tl.int64) * R + r
+        m_s = tl.load(ws_ml_ptr + idx * 2, mask=smask, other=float("-inf"))
+        l_s = tl.load(ws_ml_ptr + idx * 2 + 1, mask=smask, other=0.0)
+        a_s = tl.load(ws_acc_ptr + idx[:, None] * HD + d[None, :], mask=smask[:, None], other=0.0)
+        m_new = tl.maximum(m_run, tl.max(m_s, axis=0))
+        m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+        alpha = tl.exp2(m_run - m_safe)
+        beta = tl.exp2(m_s - m_safe)
+        l_run = l_run * alpha + tl.sum(l_s * beta, axis=0)
+        acc = acc * alpha + tl.sum(a_s * beta[:, None], axis=0)
+        m_run = m_new
+    o = acc / tl.where(l_run == 0.0, 1.0, l_run) * tl.load(v_scale_ptr)
+    inv = tl.rsqrt(tl.sum(o * o, axis=0) / HD + eps)
+    tok = (b * L + j).to(tl.int64)
+    gate = tl.load(qkv_ptr + tok * QKV_W + (HQ + 2 * HKV) * HD + hq * HD + d).to(tl.float32)
+    tl.store(out_ptr + tok * (HQ * HD) + hq * HD + d, (o * inv * tl.sigmoid(gate)).to(tl.bfloat16))
 
 
-def _attn3(qkv, data, cfg, block_n=64, warps=4, stages=3, per_sm=4, min_chunk=256):
+def _attn3(qkv, data, cfg, block_n=64, warps=4, stages=3, per_sm=4, min_chunk=256, hp=2):
     """v3 attention: qkv [T, W] -> [T, Hq * 64]; writes the new cache entries."""
     batch, length = cfg["batch"], cfg["q_len"]
     hq, hkv, hd = cfg["num_q_heads"], cfg["num_kv_heads"], cfg["head_dim"]
@@ -473,7 +474,9 @@ def _attn3(qkv, data, cfg, block_n=64, warps=4, stages=3, per_sm=4, min_chunk=25
     page_table = data["page_table"]
     capacity = page_table.shape[1] * page
     span = min(window, capacity) if window else capacity
-    pairs = hkv // 2
+    if hkv % hp:
+        hp = 1
+    pairs = hkv // hp
     splits = max(1, min(triton.cdiv(per_sm * NUM_SMS, batch * pairs), triton.cdiv(span, min_chunk)))
     chunk = triton.cdiv(triton.cdiv(span, splits), block_n) * block_n
     splits = triton.cdiv(span, chunk)
@@ -489,8 +492,9 @@ def _attn3(qkv, data, cfg, block_n=64, warps=4, stages=3, per_sm=4, min_chunk=25
         data["k_scale"], data["v_scale"], ws_acc, ws_ml,
         qkv_w, page_table.stride(0), chunk, cfg["sm_scale"] * LOG2E, cfg["qk_scale_factor"], RMS_EPS,
         HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, RN=rows_new, PAGE=page, WINDOW=window,
-        ROPE=bool(cfg["rope_theta"]), SPLITS=splits, BLOCK_N=block_n, num_warps=warps, num_stages=stages)
-    _attn3_combine_kernel[(hq, batch)](
+        ROPE=bool(cfg["rope_theta"]), SPLITS=splits, BLOCK_N=block_n, HP=hp, num_warps=warps,
+        num_stages=stages)
+    _attn3_combine_kernel[(hq, batch, length)](
         qkv, out, ws_acc, ws_ml, data["v_scale"], qkv_w, RMS_EPS,
         HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, SPLITS=splits,
         SC=min(64, triton.next_power_of_2(splits)), num_warps=4)
@@ -579,9 +583,14 @@ def _sglang_attention(data):
 
 
 def kernel_fn(data: Inputs) -> torch.Tensor:
+    """Routing measured on held-out inputs (sim run 3c2e9a7a, 42 cases, all correct):
+    sliding decode steps -> v1 (1.47-1.57x FA3), full-attention decode steps -> v3 (1.18-1.55x),
+    verify blocks -> FA3 (both of ours lose there for now)."""
     cfg = data["config"]
     batch, length = cfg["batch"], cfg["q_len"]
-    if not (cfg["window"] and length == 1):
+    if length != 1 or cfg["num_kv_heads"] % 2:
         return _sglang_attention(data)
-    qkv = data["qkv"].reshape(batch * length, -1)
-    return _fused_attention(qkv, data, cfg).view(batch, length, -1)
+    qkv = data["qkv"].reshape(batch, -1)
+    if cfg["window"]:
+        return _fused_attention(qkv, data, cfg).view(batch, 1, -1)
+    return _attn3(qkv, data, cfg, block_n=64, warps=4, stages=3, per_sm=4).view(batch, 1, -1)

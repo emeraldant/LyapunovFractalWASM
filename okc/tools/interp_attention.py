@@ -37,7 +37,7 @@ for i, c in enumerate(CASES):
     if os.environ.get("VARIANT") == "v3":
         cfg = data["config"]
         out = S._attn3(data["qkv"].reshape(cfg["batch"] * cfg["q_len"], -1), data, cfg,
-                       block_n=32, min_chunk=128).view(cfg["batch"], cfg["q_len"], -1)
+                       block_n=32, min_chunk=128, hp=int(os.environ.get("HP", "2"))).view(cfg["batch"], cfg["q_len"], -1)
     else:
         out = S.kernel_fn(data)
     raw = R.collect(data, out)

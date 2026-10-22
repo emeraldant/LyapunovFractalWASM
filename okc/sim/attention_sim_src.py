@@ -83,7 +83,7 @@ def _clone_inputs(data):
     return {k: (v.clone() if isinstance(v, torch.Tensor) else v) for k, v in data.items()}
 
 
-def run_attention_sim(variants, budget_s=240.0, seed=7_000_000, groups=("tests", "scored", "nearby")):
+def run_attention_sim(variants, budget_s=240.0, seed=7_000_000, groups=("tests", "scored", "nearby"), only=None):
     """variants: {name: fn(data) -> out [B, L, Hq*64]}. Checks every variant on every case and
     times each against SGLang on the scored and nearby cases."""
     t0 = time.time()
@@ -94,6 +94,8 @@ def run_attention_sim(variants, budget_s=240.0, seed=7_000_000, groups=("tests",
     i = 0
     for group in groups:
         for case in sets[group]:
+            if only is not None and not only(case):
+                continue
             if time.time() - t0 > budget_s:
                 print(f"sim attention: budget reached at {group} {_attn_name(case)}")
                 break

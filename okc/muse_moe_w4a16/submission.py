@@ -80,19 +80,20 @@ ALIGN_CHUNK = 256
 
 
 @triton.jit
-def _align_local_kernel(ids_ptr, sorted_ptr, block_expert_ptr, n_padded_ptr, local_ids_ptr,
-                        P, local_start, MAX_BLOCKS,
+def _align_local_kernel(ids_ptr, local_start_ptr, sorted_ptr, block_expert_ptr, n_padded_ptr, local_ids_ptr,
+                        P, MAX_BLOCKS, NE: tl.constexpr,
                         E: tl.constexpr, BS: tl.constexpr, CHUNK: tl.constexpr, BLOCKS_CHUNK: tl.constexpr):
     """Sort the P = tokens * top_k routes that land on local experts [local_start,
-    local_start + E) into Marlin's layout: each expert's routes (in route order) padded to a
+    local_start + E) (mod NE; local_start is read from device memory) into Marlin's layout: each expert's routes (in route order) padded to a
     multiple of BS with the sentinel P; block_expert[i] is block i's local expert (-1 past
     the end); local_ids[p] is route p's local expert or -1."""
     experts = tl.arange(0, E)
     offs = tl.arange(0, CHUNK)
+    local_start = tl.load(local_start_ptr)
     counts = tl.zeros((E,), tl.int32)
     for c0 in range(0, P, CHUNK):
         p = c0 + offs
-        loc = tl.load(ids_ptr + p, mask=p < P, other=-1) - local_start
+        loc = (tl.load(ids_ptr + p, mask=p < P, other=0) - local_start + NE) % NE
         hit = ((loc[:, None] == experts[None, :]) & (p < P)[:, None]).to(tl.int32)
         counts += tl.sum(hit, axis=0)
     padded = (counts + BS - 1) // BS * BS
@@ -104,7 +105,7 @@ def _align_local_kernel(ids_ptr, sorted_ptr, block_expert_ptr, n_padded_ptr, loc
     for c0 in range(0, P, CHUNK):
         p = c0 + offs
         in_range = p < P
-        loc = tl.load(ids_ptr + p, mask=in_range, other=-1) - local_start
+        loc = (tl.load(ids_ptr + p, mask=in_range, other=0) - local_start + NE) % NE
         valid = (loc >= 0) & (loc < E) & in_range
         hit = ((loc[:, None] == experts[None, :]) & valid[:, None]).to(tl.int32)
         before = tl.cumsum(hit, axis=0) - hit  # earlier routes to the same expert in this chunk
@@ -218,15 +219,15 @@ def _baseline(data, state):
         slot_expert_ids=local_ids)
 
 
-def _fast(data, state, block_size_m, atomic):
-    cfg = data["config"]
+def _moe_fast(x, ids, topk_weights, local_start, state, block_size_m, atomic):
+    """The local experts' share of the MoE output, [M, H] BF16: x [M, H] BF16, ids [M, 8]
+    global expert ids, topk_weights [M, 8] FP32, local_start an int32 [1] device tensor."""
     bank = state["bank"]
-    x = data["hidden_states"].contiguous()
+    x = x.contiguous()
     num_tokens, hidden = x.shape
-    ids = data["topk_ids"]
     if ids.dtype != torch.int32 or not ids.is_contiguous():
         ids = ids.to(torch.int32).contiguous()
-    topk_weights = data["topk_weights"].to(torch.float32).contiguous()
+    topk_weights = topk_weights.to(torch.float32).contiguous()
     p = num_tokens * TOP_K
     count = bank["count"]
     max_padded = (p + count * (block_size_m - 1) + 3) // 4 * 4
@@ -235,9 +236,8 @@ def _fast(data, state, block_size_m, atomic):
     block_experts = torch.empty((max_blocks,), dtype=torch.int32, device=x.device)
     n_padded = torch.empty((1,), dtype=torch.int32, device=x.device)
     local_ids = torch.empty((num_tokens, TOP_K), dtype=torch.int32, device=x.device)
-    _align_local_kernel[(1,)](ids, sorted_ids, block_experts, n_padded, local_ids,
-                              p, cfg["local_start"], max_blocks,
-                              E=count, BS=block_size_m, CHUNK=ALIGN_CHUNK,
+    _align_local_kernel[(1,)](ids, local_start, sorted_ids, block_experts, n_padded, local_ids,
+                              p, max_blocks, NE=N_EXPERTS, E=count, BS=block_size_m, CHUNK=ALIGN_CHUNK,
                               BLOCKS_CHUNK=min(512, triton.next_power_of_2(max_blocks)), num_warps=8)
     y = _experts(x, bank, state, sorted_ids, block_experts, n_padded, local_ids, topk_weights,
                  block_size_m, atomic)
@@ -245,6 +245,11 @@ def _fast(data, state, block_size_m, atomic):
     _post_norm_sum_kernel[(num_tokens,)](y, state["norm_w"], topk_weights, local_ids, out, POST_NORM_EPS,
                                          TOPK=TOP_K, H=hidden, num_warps=8)
     return out
+
+
+def _fast(data, state, block_size_m, atomic):
+    return _moe_fast(data["hidden_states"], data["topk_ids"], data["topk_weights"], state["local_start"],
+                     state, block_size_m, atomic)
 
 
 def _run(plan, data, state):
@@ -361,6 +366,7 @@ def prepare(weights: Weights):
             "count": count, "size_n": layer.intermediate_size_per_partition,
         },
         "local": (start, count),
+        "local_start": torch.tensor([start], dtype=torch.int32, device=device),
         "expert_map": expert_map,
         "workspace": marlin_make_workspace(device, max_blocks_per_sm=4),
         "norm_w": (weights["post_norm_w"].float() + 1.0).to(torch.bfloat16),

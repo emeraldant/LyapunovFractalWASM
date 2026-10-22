@@ -28,6 +28,6 @@ okc submit okc/muse_attention_decode/submission.py
 |---|---|
 | muse_bf16_proj | Triton skinny GEMM / GEMV, split-K, tuned in prepare() with SGLang fallback |
 | muse_attention_decode | fused 2-launch split-KV attention (QK-norm, RoPE, FP8 cache write, gated norm); passes the reference in the interpreter |
-| muse_moe_w4a16 | starter only |
-| muse_decode_layer | starter only |
+| muse_moe_w4a16 | SGLang's Marlin GEMMs with one-launch local routing align and one-launch post-expert norm; tuned in prepare() |
+| muse_decode_layer | SGLang's layer with the three parts above swapped in where prepare() finds them correct and faster; whole-layer check with fallback. Generated: edit `submission_src.py`, then `python3 okc/tools/bundle.py okc/muse_decode_layer/submission_src.py okc/muse_decode_layer/submission.py` |
 | muse_prefill_layer | starter only |

@@ -250,14 +250,15 @@ def _plan(batch, hkv, span, length):
     return splits, block_n
 
 
-def kernel_fn(data: Inputs) -> torch.Tensor:
-    cfg = data["config"]
+def _fused_attention(qkv, data, cfg):
+    """Attention between the QKV and output projections: qkv [T, (2Hq + 2Hkv) * 64] BF16 (the
+    fused projection output, request-major), returns [T, Hq * 64] BF16. Writes the new keys
+    and values into data's caches."""
     batch, length = cfg["batch"], cfg["q_len"]
     hq, hkv, hd = cfg["num_q_heads"], cfg["num_kv_heads"], cfg["head_dim"]
     group = hq // hkv
     page = cfg["page_size"]
     window = cfg["window"]
-    qkv = data["qkv"]
     if not qkv.is_contiguous():
         qkv = qkv.contiguous()
     device = qkv.device
@@ -270,7 +271,7 @@ def kernel_fn(data: Inputs) -> torch.Tensor:
     splits = triton.cdiv(span, chunk)
     rows = max(16, triton.next_power_of_2(group * length))
     rows_new = max(16, triton.next_power_of_2(length))
-    out = torch.empty((batch, length, hq * hd), device=device, dtype=torch.bfloat16)
+    out = torch.empty((batch * length, hq * hd), device=device, dtype=torch.bfloat16)
     direct = splits == 1
     if direct:
         ws_acc = ws_ml = out  # unused
@@ -291,3 +292,10 @@ def kernel_fn(data: Inputs) -> torch.Tensor:
             qkv, out, ws_acc, ws_ml, data["v_scale"], qkv_w, RMS_EPS,
             HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, SPLITS=splits, num_warps=4)
     return out
+
+
+def kernel_fn(data: Inputs) -> torch.Tensor:
+    cfg = data["config"]
+    batch, length = cfg["batch"], cfg["q_len"]
+    qkv = data["qkv"].reshape(batch * length, -1)
+    return _fused_attention(qkv, data, cfg).view(batch, length, -1)

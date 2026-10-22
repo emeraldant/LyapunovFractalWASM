@@ -1,0 +1,233 @@
+{
+ "page": {
+  "title": "Dense projections",
+  "short": "Proj",
+  "summary": "The attention and MoE-block projections and the router, as one GPU runs them serving Muse Spark Open on 8\u00d7H200. They are BF16 (the router FP32).",
+  "computation": "# x: [m, k] BF16   W: [n, k] = weights[layer]\n# qkv_gate, o, pooler, unpooler: BF16; router: FP32\nout = x @ W.T  # [m, n], BF16 (router: FP32)",
+  "signature": "kernel_fn(data: Inputs, state)",
+  "returns": "bfloat16 / float32 [m, n]",
+  "shape_notes": [
+   "m is the tokens per step: 1, 16 and 32 for decode, and 8, 128 and 256 for 8-token verify blocks. The weights arrive once, in prepare(), untimed.",
+   "Decode loads are SGLang serving with speculative decoding off; verify loads are its default recipe, which checks each request's 8-token draft in one step."
+  ],
+  "correctness": [
+   "The output, against an FP64 reference: at most 1%, and 0.01% for the router, whose outputs choose the experts. Splitting the router's FP32 weights into a BF16 hi + lo pair with FP32 accumulation, as SGLang does above 8 tokens, passes at any m; BF16 router weights alone don't.",
+   "Use the weights at their own precision (the router's hi + lo split aside). About one row in eight of x has a single nonzero entry, a power of two, so its output is a column of the weights, exact with the original weights and slightly off with the router's hi + lo split. Those rows must be within 0.1%."
+  ]
+ },
+ "benchmarks": [
+  {
+   "m": 1,
+   "layer": "qkv_gate",
+   "load": "decode 1",
+   "weight": 62,
+   "seed": 201
+  },
+  {
+   "m": 1,
+   "layer": "o",
+   "load": "decode 1",
+   "weight": 62,
+   "seed": 202
+  },
+  {
+   "m": 1,
+   "layer": "pooler",
+   "load": "decode 1",
+   "weight": 62,
+   "seed": 203
+  },
+  {
+   "m": 1,
+   "layer": "unpooler",
+   "load": "decode 1",
+   "weight": 62,
+   "seed": 204
+  },
+  {
+   "m": 1,
+   "layer": "router",
+   "load": "decode 1",
+   "weight": 62,
+   "seed": 205
+  },
+  {
+   "m": 16,
+   "layer": "qkv_gate",
+   "load": "decode 16",
+   "weight": 62,
+   "seed": 206
+  },
+  {
+   "m": 16,
+   "layer": "o",
+   "load": "decode 16",
+   "weight": 62,
+   "seed": 207
+  },
+  {
+   "m": 16,
+   "layer": "pooler",
+   "load": "decode 16",
+   "weight": 62,
+   "seed": 208
+  },
+  {
+   "m": 16,
+   "layer": "unpooler",
+   "load": "decode 16",
+   "weight": 62,
+   "seed": 209
+  },
+  {
+   "m": 16,
+   "layer": "router",
+   "load": "decode 16",
+   "weight": 62,
+   "seed": 210
+  },
+  {
+   "m": 32,
+   "layer": "qkv_gate",
+   "load": "decode 32",
+   "weight": 62,
+   "seed": 211
+  },
+  {
+   "m": 32,
+   "layer": "o",
+   "load": "decode 32",
+   "weight": 62,
+   "seed": 212
+  },
+  {
+   "m": 32,
+   "layer": "pooler",
+   "load": "decode 32",
+   "weight": 62,
+   "seed": 213
+  },
+  {
+   "m": 32,
+   "layer": "unpooler",
+   "load": "decode 32",
+   "weight": 62,
+   "seed": 214
+  },
+  {
+   "m": 32,
+   "layer": "router",
+   "load": "decode 32",
+   "weight": 62,
+   "seed": 215
+  },
+  {
+   "m": 8,
+   "layer": "qkv_gate",
+   "load": "verify 1",
+   "weight": 62,
+   "seed": 216
+  },
+  {
+   "m": 8,
+   "layer": "o",
+   "load": "verify 1",
+   "weight": 62,
+   "seed": 217
+  },
+  {
+   "m": 8,
+   "layer": "pooler",
+   "load": "verify 1",
+   "weight": 62,
+   "seed": 218
+  },
+  {
+   "m": 8,
+   "layer": "unpooler",
+   "load": "verify 1",
+   "weight": 62,
+   "seed": 219
+  },
+  {
+   "m": 8,
+   "layer": "router",
+   "load": "verify 1",
+   "weight": 62,
+   "seed": 220
+  },
+  {
+   "m": 128,
+   "layer": "qkv_gate",
+   "load": "verify 16",
+   "weight": 62,
+   "seed": 221
+  },
+  {
+   "m": 128,
+   "layer": "o",
+   "load": "verify 16",
+   "weight": 62,
+   "seed": 222
+  },
+  {
+   "m": 128,
+   "layer": "pooler",
+   "load": "verify 16",
+   "weight": 62,
+   "seed": 223
+  },
+  {
+   "m": 128,
+   "layer": "unpooler",
+   "load": "verify 16",
+   "weight": 62,
+   "seed": 224
+  },
+  {
+   "m": 128,
+   "layer": "router",
+   "load": "verify 16",
+   "weight": 62,
+   "seed": 225
+  },
+  {
+   "m": 256,
+   "layer": "qkv_gate",
+   "load": "verify 32",
+   "weight": 62,
+   "seed": 226
+  },
+  {
+   "m": 256,
+   "layer": "o",
+   "load": "verify 32",
+   "weight": 62,
+   "seed": 227
+  },
+  {
+   "m": 256,
+   "layer": "pooler",
+   "load": "verify 32",
+   "weight": 62,
+   "seed": 228
+  },
+  {
+   "m": 256,
+   "layer": "unpooler",
+   "load": "verify 32",
+   "weight": 62,
+   "seed": 229
+  },
+  {
+   "m": 256,
+   "layer": "router",
+   "load": "verify 32",
+   "weight": 62,
+   "seed": 230
+  }
+ ],
+ "sglang_us": 4830.8,
+ "sglang_per": "decode step",
+ "description": "The dense projections of Muse Spark Open, at the shapes one GPU runs when SGLang serves\nthe model on 8xH200 (TP8/EP8). The released NVFP4 checkpoint keeps every attention\nprojection and the MoE block's pooler and unpooler in BF16, and the router in FP32. In\nSGLang's H200 profile they are the largest share of a decode step at low batch: about\na third of GPU time with one request.\n\nThe weights arrive once, in prepare(weights), which is untimed (repack them however you\nlike). Each timed call is kernel_fn(data, state): out[M, N] = x[M, K] @ W[:N, K]^T,\nwhere W is the weight named by config[\"layer\"] and N = config[\"n\"] (all of W's rows,\nexcept the unpooler's first 1024 up to 8 tokens):\n  qkv_gate  2304x8192  BF16  fused query, key, value and output-gate projection (16/2/2/16 heads of 64)\n  o         8192x1024  BF16  output projection\n  pooler    4096x8192  BF16  MoE block: hidden -> expert width (replicated on every GPU)\n  unpooler  8192x4096  BF16  MoE block: expert width -> hidden. Up to 8 tokens SGLang computes\n                             only this GPU's 1/8 of the output (rows 0-1023) and all-gathers\n                             it; above that, the whole output (replicated on every GPU)\n  router     256x8192  FP32  expert logits; x is BF16, the output is FP32\nBF16 projections return bfloat16; the router returns float32.\n\nM is tokens per step: decode steps of 1, 16 and 32 requests, and 8-token speculative\nverify blocks for 1, 16 and 32 requests (M = 8, 128, 256). The serving recipe runs at\nmost 32 requests at once: that is what its KV pool holds at agentic contexts (~80K).\nEvery load runs all five projections.\n\nCorrectness: relative L2 error vs. an FP64 reference <= 1e-2 (the router: 1e-4, since its\nlogits choose experts), no single row off by more than five times that, no NaN/Inf. The\nrouter's FP32 weights may run as a BF16 hi + lo pair with FP32 accumulation at any M, as\nSGLang does above 8 tokens; BF16 router weights alone fail. Otherwise the weights are\nused at their own precision: about one row in 8 of x has a single nonzero entry, a power\nof two, so its output is a weight column: exact with the original weights in any\naccumulation order (split-K, BF16 partials), about 3e-6 off with the router's hi + lo\nsplit. Such rows must be within 1e-3. Weights re-quantized to 8 bits miss that by 5-10x.\n"
+}

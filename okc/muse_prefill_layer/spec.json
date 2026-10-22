@@ -1,0 +1,116 @@
+{
+ "page": {
+  "title": "Prefill layer",
+  "short": "Prefill",
+  "summary": "The whole decoder layer at the prefill shapes of an agentic coding turn: 753 new tokens on an 80K-token conversation, four conversations at once, and the first turn\u2019s 16K-token chunks. Most of the time goes to the routed experts, as one large grouped NVFP4 GEMM.",
+  "computation": "# x: attention input [T, 8192] BF16   s: residual stream FP32\nq, k, v, g = split(x @ qkv_gate.T);  QK-norm, RoPE, write fp8(k), fp8(v)\na = (rmsnorm(attention(q)) * sigmoid(g)) @ o.T     # all-reduce: identity\ns = \u03b11 * s + \u03b21 * rmsnorm(a);  h = rmsnorm(s) * (1 + w)\nexperts = top8(sigmoid(0.177 * h @ router.T) + bias)\ny = local experts(rmsnorm(h @ pooler.T) * (1 + w))  # all-reduce: identity\nf = y @ unpooler.T   # T \u2264 8: [y @ unpooler[:1024].T, 0, \u2026, 0]\ns = \u03b12 * s + \u03b22 * rmsnorm(f * (1 + w))\nreturn rmsnorm(s) * (1 + w), s, experts",
+  "signature": "kernel_fn(data: Inputs, state)",
+  "returns": "(bfloat16 [T, 8192], float32 [T, 8192], int32 [T, 8])",
+  "shape_notes": [
+   "Each case is one prefill forward: B requests, each adding L new tokens (causal within the block) after seq_lens[b] cached ones, written into the paged FP8 cache.",
+   "Inputs, outputs, bounds and the routing check are muse_decode_layer\u2019s. The cache\u2019s page size is 1, except one test with 64-token pages, so read config[\"page_size\"].",
+   "Prefill isn\u2019t part of a decode step, so this problem has its own board and doesn\u2019t count toward the overall board."
+  ]
+ },
+ "benchmarks": [
+  {
+   "batch": 1,
+   "ctx": 80000,
+   "layer": "sliding",
+   "q_len": 753,
+   "page": 1,
+   "dist": "soft",
+   "load": "turn 1",
+   "weight": 46,
+   "repeats": 6,
+   "seed": 1001
+  },
+  {
+   "batch": 1,
+   "ctx": 80000,
+   "layer": "full",
+   "q_len": 753,
+   "page": 1,
+   "dist": "soft",
+   "load": "turn 1",
+   "weight": 16,
+   "repeats": 6,
+   "seed": 1002
+  },
+  {
+   "batch": 4,
+   "ctx": 80000,
+   "layer": "sliding",
+   "q_len": 753,
+   "page": 1,
+   "dist": "soft",
+   "load": "turn 4",
+   "weight": 46,
+   "repeats": 6,
+   "seed": 1003
+  },
+  {
+   "batch": 4,
+   "ctx": 80000,
+   "layer": "full",
+   "q_len": 753,
+   "page": 1,
+   "dist": "soft",
+   "load": "turn 4",
+   "weight": 16,
+   "repeats": 6,
+   "seed": 1004
+  },
+  {
+   "batch": 1,
+   "ctx": 0,
+   "layer": "full",
+   "q_len": 16384,
+   "page": 1,
+   "dist": "soft",
+   "load": "first turn",
+   "weight": 16,
+   "repeats": 6,
+   "seed": 1006
+  },
+  {
+   "batch": 1,
+   "ctx": 32768,
+   "layer": "sliding",
+   "q_len": 16384,
+   "page": 1,
+   "dist": "soft",
+   "load": "first turn",
+   "weight": 138,
+   "repeats": 6,
+   "seed": 1007
+  },
+  {
+   "batch": 1,
+   "ctx": 32768,
+   "layer": "full",
+   "q_len": 16384,
+   "page": 1,
+   "dist": "soft",
+   "load": "first turn",
+   "weight": 16,
+   "repeats": 6,
+   "seed": 1008
+  },
+  {
+   "batch": 1,
+   "ctx": 65536,
+   "layer": "full",
+   "q_len": 16384,
+   "page": 1,
+   "dist": "soft",
+   "load": "first turn",
+   "weight": 16,
+   "repeats": 6,
+   "seed": 1010
+  }
+ ],
+ "sglang_us": 387403.9,
+ "sglang_per": "prefill load",
+ "description": "One whole decoder layer of Muse Spark Open at the prefill shapes of an agentic coding\nturn, as one H200 runs it when SGLang serves the model on 8xH200 (TP8/EP8): the same\nlayer, inputs, outputs and reference as muse_decode_layer (whose files this problem\nshares), with long query blocks instead of decode steps.\n\nSGLang's layer at these shapes is mostly the routed experts as one large grouped NVFP4\nGEMM, then the dense GEMMs and, on full layers at long context, chunked-prefill attention\nover the paged FP8 cache.\n\nEach case is one prefill forward: B requests, each adding L new tokens (causal within the\nblock) after seq_lens[b] cached ones, page size 1 as SGLang serves H200 (one test keeps\n64-token pages, so read config[\"page_size\"]). The block's keys and values are written\ninto the cache; everything else, including the correctness bounds and the routing check,\nis muse_decode_layer's.\n\nLoads: a later turn (753 new tokens on an 80K-token conversation), four conversations'\nlater turns in one forward, each on a sliding-window and a full-attention layer, and the\nfirst turn's 16K-token chunks (SGLang's chunked-prefill size): full-attention chunks at\ncontexts 0, 32K and 64K, and one sliding-window chunk at 32K that stands for all three,\nsince a sliding layer attends only its 2,048-token window.\n"
+}

@@ -1,0 +1,168 @@
+{
+ "page": {
+  "title": "Whole decoder layer",
+  "short": "Layer",
+  "summary": "Everything one GPU does for one layer of Muse Spark Open under TP8/EP8: the projections, attention, the router and experts, and every norm and residual in between.",
+  "computation": "# x: attention input [T, 8192] BF16   s: residual stream FP32\nq, k, v, g = split(x @ qkv_gate.T);  QK-norm, RoPE, write fp8(k), fp8(v)\na = (rmsnorm(attention(q)) * sigmoid(g)) @ o.T     # all-reduce: identity\ns = \u03b11 * s + \u03b21 * rmsnorm(a);  h = rmsnorm(s) * (1 + w)\nexperts = top8(sigmoid(0.177 * h @ router.T) + bias)\ny = local experts(rmsnorm(h @ pooler.T) * (1 + w))  # all-reduce: identity\nf = y @ unpooler.T   # T \u2264 8: [y @ unpooler[:1024].T, 0, \u2026, 0]\ns = \u03b12 * s + \u03b22 * rmsnorm(f * (1 + w))\nreturn rmsnorm(s) * (1 + w), s, experts",
+  "signature": "kernel_fn(data: Inputs, state)",
+  "returns": "(bfloat16 [T, 8192], float32 [T, 8192], int32 [T, 8])",
+  "shape_notes": [
+   "T is the tokens per step, batch \u00d7 q_len (B \u00d7 L). Each load times a sliding-window and a full-attention layer, at contexts around 80K tokens.",
+   "Communication is left out: each all-reduce and all-gather is the identity on this GPU\u2019s partial result, as if the other seven GPUs contributed nothing.",
+   "`scheduler_metadata` is FA3's tile schedule for the step, built from its lengths as SGLang does: set on full-attention decode steps, None on sliding layers and verify blocks. Kernels that don't use FA3 can ignore it.",
+   "Routing is skewed, as in the real model; a few experts per layer take most tokens.",
+   "Decode loads are SGLang serving with speculative decoding off; verify loads are its default recipe, which checks each request's 8-token draft in one step."
+  ],
+  "correctness": [
+   "The residual update (output stream \u2212 \u03b11\u00b7\u03b12 \u00b7 input stream) and the next attention input, against an FP32 reference: within 2.5\u00d7 the reference's own error when its queries are rounded to FP8, which comes to 3\u201315% depending on the shape.",
+   "The new cache entries: within 8% of the reference's."
+  ],
+  "routing": [
+   "Each expert you pick must score (sigmoid + router_bias) within 0.05 of the reference's 8th best.",
+   "Each of the reference's top 8 on this GPU that beats its 9th best by more than 0.03 (0.04 above 256 tokens) must be among yours.",
+   "This GPU must get at least the reference's routes minus 8% and 4, and its distinct experts minus 15% and 2.",
+   "The MoE output is then checked with the experts you picked."
+  ]
+ },
+ "benchmarks": [
+  {
+   "batch": 1,
+   "ctx": 80000,
+   "layer": "sliding",
+   "page": 1,
+   "dist": "soft",
+   "load": "decode 1",
+   "weight": 46,
+   "repeats": 60,
+   "seed": 801
+  },
+  {
+   "batch": 1,
+   "ctx": 80000,
+   "layer": "full",
+   "page": 1,
+   "dist": "soft",
+   "load": "decode 1",
+   "weight": 16,
+   "repeats": 60,
+   "seed": 802
+  },
+  {
+   "batch": 16,
+   "ctx": 80000,
+   "layer": "sliding",
+   "page": 1,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "decode 16",
+   "weight": 46,
+   "seed": 803
+  },
+  {
+   "batch": 16,
+   "ctx": 80000,
+   "layer": "full",
+   "page": 1,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "decode 16",
+   "weight": 16,
+   "seed": 804
+  },
+  {
+   "batch": 32,
+   "ctx": 80000,
+   "layer": "sliding",
+   "page": 1,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "decode 32",
+   "weight": 46,
+   "seed": 805
+  },
+  {
+   "batch": 32,
+   "ctx": 80000,
+   "layer": "full",
+   "page": 1,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "decode 32",
+   "weight": 16,
+   "seed": 806
+  },
+  {
+   "batch": 1,
+   "ctx": 80000,
+   "layer": "sliding",
+   "page": 1,
+   "q_len": 8,
+   "dist": "soft",
+   "load": "verify 1",
+   "weight": 46,
+   "seed": 807
+  },
+  {
+   "batch": 1,
+   "ctx": 80000,
+   "layer": "full",
+   "page": 1,
+   "q_len": 8,
+   "dist": "soft",
+   "load": "verify 1",
+   "weight": 16,
+   "seed": 808
+  },
+  {
+   "batch": 16,
+   "ctx": 80000,
+   "layer": "sliding",
+   "page": 1,
+   "q_len": 8,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "verify 16",
+   "weight": 46,
+   "seed": 809
+  },
+  {
+   "batch": 16,
+   "ctx": 80000,
+   "layer": "full",
+   "page": 1,
+   "q_len": 8,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "verify 16",
+   "weight": 16,
+   "seed": 810
+  },
+  {
+   "batch": 32,
+   "ctx": 80000,
+   "layer": "sliding",
+   "page": 1,
+   "q_len": 8,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "verify 32",
+   "weight": 46,
+   "seed": 811
+  },
+  {
+   "batch": 32,
+   "ctx": 80000,
+   "layer": "full",
+   "page": 1,
+   "q_len": 8,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "verify 32",
+   "weight": 16,
+   "seed": 812
+  }
+ ],
+ "sglang_us": 22620.3,
+ "sglang_per": "decode step",
+ "description": "One whole decoder layer of Muse Spark Open, as one H200 runs it when SGLang serves the\nmodel on 8xH200 (TP8/EP8): everything the other three problems cover (the projections,\nthe routed experts, attention) and everything between them: QK-norm and RoPE, the cache\nwrite, the gated output norm, both fused norm-residual boundaries, the router and its\ntop-8 routing, the pre- and post-expert norms. In SGLang's H200 profile that glue alone\nis a quarter of a decode step with one request; this is the problem that rewards fusing\nacross ops.\n\nEverything except cross-GPU communication. On 8 GPUs the output projection and the\nexperts end in an all-reduce, and up to 8 tokens the unpooler in an all-gather; here each\nis the identity on this GPU's partial result, as if the other seven GPUs contributed\nnothing. The partial sums pass through unchanged, and up to 8 tokens the all-gathered\nunpooler output is this GPU's 1/8 slice (rank 0's 1024 columns, from the weight's first\n1024 rows) followed by zeros. Above 8 tokens SGLang runs the whole unpooler on every GPU,\nso its output is the full product.\n\nThe weights arrive once, in prepare(weights), which is untimed (repack them however you\nlike). Each timed call is kernel_fn(data, state), with T = B * L tokens\n(request-major) and Muse's FP32 residual stream:\n  qkv, gate = split(attn_input @ qkv_gate.T)          # q 16x64, k 2x64, v 2x64, gate 16x64\n  q, k = rmsnorm(q) per head, rmsnorm(k) per head     # no weight, eps 1e-5\n  q, k = rope(q, p), rope(k, p)                       # sliding layers; interleaved pairs, theta 5e5\n  cache[p] = fp8(k / k_scale), fp8(v / v_scale)       # at p = seq_lens[b] + j (row cache_loc[t])\n  a = softmax(5.473 * q @ K.T / 8) @ V                # causal; a 2,048-token window on sliding layers\n  a = (rmsnorm(a) per head * sigmoid(gate)) @ o.T     # then all-reduce: identity\n  stream = alpha1 * stream + beta1 * rmsnorm(a)       # eps 1e-8; alpha, beta from the residual gate\n  h = rmsnorm(stream) * (1 + pre_ffn_norm)\n  scores = sigmoid(0.17678 * h @ router.T)            # FP32 router\n  experts = top8(scores + router_bias)                # weights: chosen scores / their sum\n  x = rmsnorm(h @ pooler.T) * (1 + pre_expert_norm)\n  m = sum over local experts e of weight_e * rmsnorm(expert_e(x) * (1 + post_expert_norm))\n                                                      # this GPU's 32 experts; then all-reduce: identity\n  f = m @ unpooler.T                                  # T > 8: replicated on every GPU\n  f = [m @ unpooler[:1024].T, 0, ..., 0]              # T <= 8: this GPU's slice; all-gather: identity\n  f = f * (1 + post_ffn_norm)\n  stream = alpha2 * stream + beta2 * rmsnorm(f)       # eps 1e-8\n  out = rmsnorm(stream) * (1 + next_pre_attn_norm)    # the next layer's attention input\nwhere expert_e(x) = (silu(x @ w1.T) * (x @ w3.T)) @ w2.T with NVFP4 weights, and a residual\ngate g gives beta = sigmoid(g / 0.3), alpha = sqrt(max(sigmoid(-g / 0.3) * (1 + beta), 1e-3)).\nThis GPU's 32 experts are local_start .. local_start + 31 (data[\"local_start\"], an int32\ntensor; their weights are w13[i] for expert local_start + i). A step waits for the\nall-reduce, so its time is the busiest GPU's: each input's local_start is the range its\nrouting sends the most (token, expert) pairs to.\nReturn (out bfloat16 [T, 8192], stream float32 [T, 8192], experts int32 [T, 8] global ids),\nand write the block's keys and values into the cache in place.\n\nCorrectness: the residual update (the output stream minus alpha1 * alpha2 times the input\nstream) and the next attention input each within 2.5x the reference's own error with FP8\nE4M3 queries (between 3% and 15%) relative L2 of an FP32 reference, no row off by more than\nfive times that, and the new cache entries within 8e-2. The layer inherits\nmuse_attention_decode's FP8 queries: on soft keys (the scored shapes) SGLang's path lands\nat about 5%, on i.i.d. keys at up to 13.6%; a plain BF16 implementation at about 1%.\nRouting: as on the released checkpoint, the router reads what attention adds to the\nstream, so FP8 attention moves a token's near-tied experts, and Muse's routing\nconcentrates on a few experts per layer (the stream has a persistent direction the router\npartly aligns with). Your experts pass if each one's biased score (sigmoid score +\nrouter_bias) is within 5e-2 of the reference's 8th best; you keep each of the reference's\nexperts on this GPU whose biased score beats its 9th best by more than 0.03 (0.04 above\n256 tokens); and you route no fewer tokens, nor fewer distinct experts, to this GPU's\nexperts than the reference does, beyond a small slack (8% + 4 routes; 15% + 2 experts).\nThe rest of the check then follows your experts. SGLang's FP8 path reroutes 9-46% of\ntokens and stays within all three.\n\nThe scored shapes, and some tests, give each KV head's cached keys a shared direction, as\nMuse's real keys have, so a query's weight spreads as in the real model: over tens of keys\nin a sliding window, hundreds to thousands on a full layer at long context (not one-hot,\nas i.i.d. keys would make it).\nThe step's metadata comes with the inputs, as SGLang builds it once per step for every\nlayer: positions, cache_loc (each new token's flat cache row), cache_seqlens (seq_lens + L),\ncu_seqlens_q and, on full-attention decode steps, scheduler_metadata (FA3's tile schedule\nfrom get_scheduler_metadata, None otherwise). The FP8 cache scales are 1 in the scored cases (SGLang leaves the released\ncheckpoint's unset) and 1/64 in a test.\nThe scored cases use page size 1, as SGLang serves Muse on H200; some tests use 64-token\npages, so read config[\"page_size\"].\nShapes follow SGLang's H200 profile and LMSYS's agentic coding workload: decode steps of\n1, 16 and 32 requests and 8-token verify blocks for the same, at contexts around 80K\ntokens, each on a sliding-window and a full-attention layer. 32 is the most requests the\nserving recipe runs at once: what its KV pool holds at these contexts.\n"
+}

@@ -1,0 +1,174 @@
+{
+ "page": {
+  "title": "Gated attention decode",
+  "short": "Attention",
+  "summary": "One decode step or 8-token verify block of grouped-query attention over a paged FP8 cache: QK-norm, a 2,048-token sliding window with RoPE or full attention over the whole context, and a gated, normalized output.",
+  "computation": "# per request b and block token j, at position p = positions[t]\nq, k, v, gate = split(qkv[t])   # the fused projection output\nq = rmsnorm(q) * 5.473;  k = rmsnorm(k)\nq, k = rope(q, p), rope(k, p)   # sliding layers\ncache[cache_loc[t]] = fp8(k), fp8(v)\na = softmax(q @ K.T / 8) @ V    # up to p: window or all\nout = rmsnorm(a) * sigmoid(gate)",
+  "returns": "bfloat16 [B, L, Hq\u00b764]",
+  "shape_notes": [
+   "B is batch and L is q_len: 1 for a decode step, or 8 for a speculative verify block (causal inside it). Each GPU has 16 query heads and 2 key/value heads (TP8).",
+   "Each load times a sliding-window layer (the last 2,048 tokens, with RoPE) and a full-attention layer (the whole context, no RoPE). Contexts are around 80K tokens.",
+   "The inputs are what SGLang\u2019s attention receives: the fused projection output, plus the step\u2019s positions, cache rows and FA3 lengths, which SGLang builds once per step.",
+   "`scheduler_metadata` is FA3's tile schedule for the step, built from its lengths as SGLang does: set on full-attention decode steps, None on sliding layers and verify blocks. Kernels that don't use FA3 can ignore it.",
+   "The cache is FP8 E4M3. Its page size is 1 in the scored cases and 64 in most tests, so read config[\"page_size\"]. Its scales are 1 in the scored cases and 1/64 in some tests.",
+   "Decode loads are SGLang serving with speculative decoding off; verify loads are its default recipe, which checks each request's 8-token draft in one step."
+  ],
+  "correctness": [
+   "The output: within 2.5\u00d7 the reference's own error when its queries are rounded to FP8 E4M3, plus 1.5%, kept between 3% and 15%, against an FP32 reference.",
+   "The new cache entries: within 8% of the reference's. Your output is checked against the reference attending to your own new entries.",
+   "Some tests put keys at the window's edges.",
+   "Each head's keys share a direction, so attention spreads over many keys. On full layers the low-attention keys' values share a direction too."
+  ]
+ },
+ "benchmarks": [
+  {
+   "batch": 1,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "sliding",
+   "page": 1,
+   "dist": "soft",
+   "load": "decode 1",
+   "weight": 46,
+   "seed": 601
+  },
+  {
+   "batch": 1,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "full",
+   "page": 1,
+   "dist": "coherent",
+   "load": "decode 1",
+   "weight": 16,
+   "seed": 602
+  },
+  {
+   "batch": 16,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "sliding",
+   "page": 1,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "decode 16",
+   "weight": 46,
+   "seed": 603
+  },
+  {
+   "batch": 16,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "full",
+   "page": 1,
+   "spread": "agentic",
+   "dist": "coherent",
+   "load": "decode 16",
+   "weight": 16,
+   "seed": 604
+  },
+  {
+   "batch": 32,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "sliding",
+   "page": 1,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "decode 32",
+   "weight": 46,
+   "seed": 605
+  },
+  {
+   "batch": 32,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "full",
+   "page": 1,
+   "spread": "agentic",
+   "dist": "coherent",
+   "load": "decode 32",
+   "weight": 16,
+   "seed": 606
+  },
+  {
+   "batch": 1,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "sliding",
+   "page": 1,
+   "q_len": 8,
+   "dist": "soft",
+   "load": "verify 1",
+   "weight": 46,
+   "seed": 607
+  },
+  {
+   "batch": 1,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "full",
+   "page": 1,
+   "q_len": 8,
+   "dist": "coherent",
+   "load": "verify 1",
+   "weight": 16,
+   "seed": 608
+  },
+  {
+   "batch": 16,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "sliding",
+   "page": 1,
+   "q_len": 8,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "verify 16",
+   "weight": 46,
+   "seed": 609
+  },
+  {
+   "batch": 16,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "full",
+   "page": 1,
+   "q_len": 8,
+   "spread": "agentic",
+   "dist": "coherent",
+   "load": "verify 16",
+   "weight": 16,
+   "seed": 610
+  },
+  {
+   "batch": 32,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "sliding",
+   "page": 1,
+   "q_len": 8,
+   "spread": "agentic",
+   "dist": "soft",
+   "load": "verify 32",
+   "weight": 46,
+   "seed": 611
+  },
+  {
+   "batch": 32,
+   "ctx": 80000,
+   "heads": "tp8",
+   "layer": "full",
+   "page": 1,
+   "q_len": 8,
+   "spread": "agentic",
+   "dist": "coherent",
+   "load": "verify 32",
+   "weight": 16,
+   "seed": 612
+  }
+ ],
+ "sglang_us": 3766.3,
+ "sglang_per": "decode step",
+ "description": "One decode step, or one speculative-decoding verify block, of Muse Spark Open's attention\nfor a batch of requests in a paged FP8 KV cache, on one H200: from the projections'\noutputs to the input of the output projection.\n\nMuse uses grouped-query attention (128 query and 16 key/value heads of 64; 16 and 2 per\nGPU under TP8, as SGLang serves it on 8xH200) with two layer types. Three of every four\nlayers attend over a 2,048-token sliding window with RoPE; every fourth is full attention\nover the whole context, with no RoPE, and the context runs to 1M tokens. Queries and keys\nare RMS-normalized per head (no weight; queries then scaled by 5.473), and the attention\noutput is normalized per head and gated by sigmoid(gate). The KV cache is FP8 E4M3, as\nSGLang uses for Muse on every GPU, with per-tensor scales: 1 in the scored cases (SGLang\nleaves the released checkpoint's unset), 1/64 in some tests, so apply them.\n\nThe inputs are what SGLang's attention layer receives: `qkv` is the fused projection\noutput, [B, L, 2304] per token q | k | v | gate (16, 2, 2 and 16 heads of 64 under tp8;\n128, 16, 16 and 128 heads in the dp tests), and the\nstep's metadata, which SGLang builds once per step for every layer: `positions` (each new\ntoken's position), `cache_loc` (its flat cache row), `cache_seqlens` (seq_lens + L),\n`cu_seqlens_q` (0, L, 2L, ...) and, on full-attention decode steps, `scheduler_metadata`\n(FA3's tile schedule from get_scheduler_metadata, None otherwise).\n\nEach step: normalize the queries and the block's new keys, apply RoPE on sliding layers\n(interleaved pairs, as SGLang applies it to Muse), write the new keys and values into the\ncache (FP8, at the rows in cache_loc: positions seq_lens[b] onwards), attend with scale 1/8 (each\ntoken sees the cache and the block's tokens up to itself, within the window on sliding\nlayers), then return rmsnorm(attention) * sigmoid(gate) as bfloat16 [B, L, Hq*64]. L is 1\nfor a decode step and 8 for a verify block (SGLang's default serving mode drafts 8 tokens\nper step). The scored cases use page size 1, one token per page, as SGLang serves Muse on\nH200; some tests use 64-token pages, so read config[\"page_size\"].\n\nCorrectness: relative L2 error vs. an FP32 reference (BF16 queries) within the case's\nbound: 2.5x the reference's own error when its queries are rounded to FP8 E4M3, plus\n0.015, between 3% and 15% (15%, the cap, on the scored sliding-window cases and the sharp\ntests; about 8-11% on the scored full-attention cases). Queries may be attended in E4M3,\nas FA3 does; nothing coarser. The new cache entries must be within 8e-2 of the\nreference's, and since FP8 entries round differently by implementation, the output is\nchecked against the reference attending your own new entries.\nSome tests plant keys at the window's edges, so an off-by-one window fails.\nThe scored shapes, and some tests, give each KV head's cached keys a shared direction, as\nMuse's real keys have, so a query's weight spreads as in the real model: over tens of keys\nin a sliding window, hundreds to thousands on a full layer at long context (not one-hot,\nas i.i.d. keys would make it).\nOn full layers the scored shapes also give the values of each head's low-attention keys\na shared direction (as attention sinks do), so that long tail counts. The rules forbid\nskipping values by their attention weight, and final review checks for it.\n\nShapes follow SGLang's H200 profile and LMSYS's agentic coding workload (contexts around\n80K tokens): decode steps of 1, 16 and 32 requests and 8-token verify blocks for the\nsame, each on a sliding-window and a full-attention layer. 32 is the most requests the\nserving recipe runs at once: what its KV pool holds at these contexts.\n"
+}

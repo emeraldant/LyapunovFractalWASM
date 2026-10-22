@@ -1,0 +1,66 @@
+{
+ "page": {
+  "title": "Routed experts",
+  "short": "MoE",
+  "summary": "Top-8 of 256 experts at width 4096: SwiGLU, NVFP4 weights, and a norm on each expert\u2019s output before it is weighted and summed.",
+  "computation": "# per token: its top 8 of 256 experts; only local ones here\nfor t, (e, g) in routes if e is local:\n    h = x[t] @ dequant(w13[e]).T\n    gate, up = split(h)\n    y = (silu(gate) * up) @ dequant(w2[e]).T\n    out[t] += g * rmsnorm(y * (1 + post_norm_w))",
+  "signature": "kernel_fn(data: Inputs, state)",
+  "returns": "bfloat16 [M, H]",
+  "shape_notes": [
+   "bs (M in the shapes) is the tokens per step: 1, 16 and 32 for decode, and 8, 128 and 256 for 8-token verify blocks. The weights arrive once, in prepare(), untimed.",
+   "This GPU holds 32 of the 256 experts, as under 8-way expert parallelism. Every token arrives, and only its routes to local experts are computed.",
+   "Routings follow real routers\u2019 skewed expert popularity. A step waits for the busiest GPU, so each routing makes this GPU the busiest.",
+   "Decode loads are SGLang serving with speculative decoding off; verify loads are its default recipe, which checks each request's 8-token draft in one step."
+  ],
+  "correctness": [
+   "The output, against an FP32 reference: at most 1.5%."
+  ]
+ },
+ "benchmarks": [
+  {
+   "bs": 1,
+   "sharding": "ep8",
+   "load": "decode 1",
+   "weight": 60,
+   "seed": 401
+  },
+  {
+   "bs": 16,
+   "sharding": "ep8",
+   "load": "decode 16",
+   "weight": 60,
+   "seed": 402
+  },
+  {
+   "bs": 32,
+   "sharding": "ep8",
+   "load": "decode 32",
+   "weight": 60,
+   "seed": 403
+  },
+  {
+   "bs": 8,
+   "sharding": "ep8",
+   "load": "verify 1",
+   "weight": 60,
+   "seed": 404
+  },
+  {
+   "bs": 128,
+   "sharding": "ep8",
+   "load": "verify 16",
+   "weight": 60,
+   "seed": 405
+  },
+  {
+   "bs": 256,
+   "sharding": "ep8",
+   "load": "verify 32",
+   "weight": 60,
+   "seed": 406
+  }
+ ],
+ "sglang_us": 13448.5,
+ "sglang_per": "decode step",
+ "description": "The routed experts of Muse Spark Open's mixture-of-experts layer, with NVFP4 expert\nweights and BF16 activations, on one H200, as SGLang serves it (Marlin W4A16 on Hopper).\n\nMuse's MoE block projects the hidden state 8192 -> 4096, routes each token to the top 8\nof 256 experts (intermediate 4096, SwiGLU, no shared expert) and projects back; this\nproblem is the experts in between. Each expert's output is normalized on its own\n(RMSNorm, scaled first) before it is weighted and summed. As SGLang serves it on 8xH200\n(EP8), this GPU holds experts 0-31 of 256. Every token arrives, routed over all 256, and\nonly its pairs with local experts are computed, and rows with no local expert are zero\n(the GPUs' partial sums are then all-reduced). A step waits for that all-reduce, so its\ntime is the busiest GPU's: each routing is drawn over all 256 experts, then relabelled\nby whole GPUs so that the GPU with the most pairs is this one (2.6 experts for one token,\nabout 14 pairs for 8 tokens, 50 for 32, 390 for 256).\n\nThe weights arrive once, in prepare(weights), which is untimed: repack them however you\nlike, as production does at load. Each timed call is kernel_fn(data, state).\n\n`data`:\n  hidden_states  bfloat16 [M, 4096]\n  topk_ids       int32 [M, 8]    global expert ids\n  topk_weights   float32 [M, 8]\n  config         {\"bs\", \"d_hidden\", \"d_expert\", \"n_experts\", \"local_start\", \"local_count\", \"top_k\", \"sharding\"}\nweights: w13 uint8 [256, 8192, 2048] (gate rows then up rows, packed E2M1), w13_sf\nfloat8_e4m3fn [256, 8192, 256], w13_gs float32 [256], w2 uint8 [256, 4096, 2048], w2_sf\nfloat8_e4m3fn [256, 4096, 256], w2_gs float32 [256], post_norm_w bfloat16 [4096].\n\nFor each token t and each (expert e, weight g) in its top-k row with e local:\n  gate, up = split(hidden_states[t] @ dequant(w13[e]).T)\n  y = (silu(gate) * up) @ dequant(w2[e]).T\n  out[t] += g * rmsnorm(y * (1 + post_norm_w))      (eps 1e-8)\n\nM is tokens per step: decode steps of 1, 16 and 32 requests, and 8-token speculative\nverify blocks for 1, 16 and 32 requests (M = 8, 128, 256). The serving recipe runs at\nmost 32 requests at once: that is what its KV pool holds at agentic contexts (~80K).\nWith speculative decoding on (SGLang's default), the experts are the largest share of a\ndecode step from 16 requests up.\n\nCorrectness: relative L2 error vs. an FP32 reference <= 1.5e-2, no single token's row off\nby more than five times that (7.5e-2, relative to the row's own norm or a tenth of the mean\nrow norm, whichever is larger), no NaN/Inf.\n"
+}

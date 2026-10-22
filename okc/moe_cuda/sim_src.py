@@ -12,7 +12,7 @@ import triton.language as tl
 
 # @bundle muse_moe_w4a16/reference.py D_HIDDEN D_EXPERT ROUTED_PER_TOKEN LOCAL POPULARITY generate_input
 # @bundle muse_moe_w4a16/nvfp4.py outlier_channels
-# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULE moe_cuda_module _NIBBLE_POS _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _post_norm_rows_kernel build_cuda_bank moe_cuda_stages moe_cuda_forward
+# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULE moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_cuda_stages moe_cuda_forward
 # @bundle sim/harness.py SimBench rel_l2 row_worst SimReport
 
 MOE_SIM_CASES = (
@@ -46,11 +46,14 @@ def run_moe_cuda_sim(weights, state, budget_s=200.0, seed=9_000_000):
     if bank is None:
         print("moe cuda: scales unsupported, skipped")
         return
+    ws_layout(bank)
     torch.cuda.synchronize()
     print(f"moe cuda: repacked in {time.time() - t1:.1f} s")
     bench = SimBench()
-    variants = {"mt1s4": dict(stages=4, ctas_per_sm=4, mt=1), "mt1s8": dict(stages=8, ctas_per_sm=1, mt=1),
-                "mt2s4": dict(stages=4, ctas_per_sm=4, mt=2), "mt4s4": dict(stages=4, ctas_per_sm=2, mt=4)}
+    variants = {"v4 mt1s4": dict(stages=4, ctas_per_sm=4, mt=1),
+                "ws mt1s4c4": dict(stages=4, ctas_per_sm=4, mt=1, ws=True),
+                "ws mt1s8c2": dict(stages=8, ctas_per_sm=2, mt=1, ws=True),
+                "ws mt2s4c4": dict(stages=4, ctas_per_sm=4, mt=2, ws=True)}
     reps = {k: SimReport(k) for k in variants}
     rep_p = SimReport("plan vs sglang")
     ls = torch.zeros(1, dtype=torch.int32, device="cuda")

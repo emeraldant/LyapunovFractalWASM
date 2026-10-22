@@ -161,6 +161,31 @@ def report(body, label, work_note=""):
     return c, issue, cycles
 
 
+def moe_ws(args):
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "moe_cuda"))
+    import kernel as K
+    insts = [(1, 1, 2, 4), (2, 1, 1, 4), (1, 2, 2, 4), (2, 2, 1, 4)]
+    names = [f"moe_gemm_ws_kernel<{m}, {t}, {g}, {s}>" for m, t, g, s in insts]
+    src = NVRTC_PRELUDE + K.MOE_DEVICE_SRC.replace("#include <stdint.h>", "") + "\n" + "\n".join(
+        f"template __global__ void moe_gemm_ws_kernel<{m}, {t}, {g}, {s}>("
+        "const __nv_bfloat16*, const int32_t*, const uint8_t*, const uint8_t*, "
+        "const float*, const int32_t*, const int32_t*, const int32_t*, "
+        "__nv_bfloat16*, int);" for m, t, g, s in insts)
+    log, sass = compile_sass(nvrtc_ptx(src, names))
+    for line in log.splitlines():
+        if "Used" in line or "spill" in line:
+            print(line.strip())
+    for fname, lines in split_functions(sass).items():
+        if "ws_kernel" not in fname:
+            continue
+        instrs = parse(lines)
+        body = main_loop(instrs)
+        m = re.search(r"ILi(\d)ELi(\d)ELi(\d)ELi(\d)E", fname)
+        ngw = int(m.group(3))
+        print(f"\n== WS MODE {m.group(1)} MT {m.group(2)} NGW {ngw} STAGES {m.group(4)}: {len(instrs)} instructions")
+        report(body, "", f"(per {int(m.group(4))} chunks x {ngw * 1024} weights per warp)")
+
+
 def moe(args):
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "moe_cuda"))
     import kernel as K
@@ -188,4 +213,4 @@ def moe(args):
 
 
 if __name__ == "__main__":
-    {"moe": moe}[sys.argv[1]](sys.argv[2:])
+    {"moe": moe, "moe_ws": moe_ws}[sys.argv[1]](sys.argv[2:])

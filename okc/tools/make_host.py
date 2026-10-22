@@ -15,7 +15,7 @@ import sys
 OKC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 
-def main(host, sim, out, call, extra=""):
+def main(host, sim, out, call, extra="", after=False):
     src = open(os.path.join(OKC, host)).read()
     sim_src = open(os.path.join(OKC, sim)).read()
     hook = ("def prepare(weights: Weights):\n"
@@ -26,7 +26,19 @@ def main(host, sim, out, call, extra=""):
             "        print('sim failed:', ''.join(traceback.format_exc())[-1500:])\n"
             "    torch.cuda.empty_cache()\n")
     assert src.count("def prepare(weights: Weights):\n") == 1, "host prepare() signature not found"
-    src = src.replace("def prepare(weights: Weights):\n", hook, 1)
+    if after:
+        # Run the sim at the end of prepare(), with the host's `state` and `weights`.
+        start = src.index("def prepare(weights: Weights):\n")
+        end = src.index("\n    return state\n", start)
+        tail = ("\n    try:\n"
+                f"        {call}\n"
+                "    except Exception as e:  # the sim must never break the host's own result\n"
+                "        import traceback\n"
+                "        print('sim failed:', ''.join(traceback.format_exc())[-1500:])\n"
+                "    torch.cuda.empty_cache()")
+        src = src[:end] + tail + src[end:]
+    else:
+        src = src.replace("def prepare(weights: Weights):\n", hook, 1)
     marker = src.index("def prepare(weights: Weights):")
     src = src[:marker] + "# " + "-" * 87 + "\n# Sim (okc/" + sim + ")\n\n" + sim_src + "\n" + extra + "\n\n" + src[marker:]
     tmp = os.path.join(OKC, out + ".src")
@@ -36,4 +48,5 @@ def main(host, sim, out, call, extra=""):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:5], *(sys.argv[5:6] or [""]))
+    args = [a for a in sys.argv[1:] if a != "--after"]
+    main(*args[:4], *(args[4:5] or [""]), after="--after" in sys.argv)

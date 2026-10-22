@@ -301,6 +301,203 @@ def _fused_attention(qkv, data, cfg):
 
 
 # ---------------------------------------------------------------------------------------
+# v3: memory-first. The probe run (8433b3e3) measured random 128 B rows at 4.03 TB/s, the
+# same as streaming, while FA3 reaches 1.3-1.7 TB/s on full layers and v1 1.1 TB/s (each
+# step waited on its page-table load, then its KV load, with few keys in flight). Here one
+# program covers a key range for a pair of KV heads (each key's 128 B K and V rows are read
+# by one program, and page indices once), the grid is sized to ~4 programs per SM, and a
+# separate combine reduces the splits per query head in parallel.
+
+
+@triton.jit
+def _attn3_step(q, k, v, valid, m_i, l_i, acc, qk_scale):
+    """One online-softmax step: scores of q [R, HD] against k [N, HD], masked by valid [R, N]."""
+    sc = tl.dot(q, tl.trans(k)) * qk_scale
+    sc = tl.where(valid, sc, float("-inf"))
+    m_new = tl.maximum(m_i, tl.max(sc, axis=1))
+    m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+    alpha = tl.exp2(m_i - m_safe)
+    p = tl.exp2(sc - m_safe[:, None])
+    l_i = l_i * alpha + tl.sum(p, axis=1)
+    acc = acc * alpha[:, None] + tl.dot(p.to(tl.bfloat16), v)
+    return m_new, l_i, acc
+
+
+@triton.jit
+def _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q, m_i, l_i, acc,
+                    tok0, seq, h, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
+                    HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr, RN: tl.constexpr,
+                    ROPE: tl.constexpr):
+    """The block's own L keys and values for KV head h: normalized (+ RoPE), stored to the
+    cache in FP8, and attended from registers (causal inside the block)."""
+    d = tl.arange(0, HD)
+    nrows = tl.arange(0, RN)
+    nmask = nrows < L
+    kn = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, HQ * HD + h * HD, nrows, QKV_W, eps, 1.0,
+                     1, L, HD, ROPE, True)
+    vn = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, (HQ + HKV) * HD + h * HD, nrows, QKV_W, eps, 1.0,
+                     1, L, HD, False, False)
+    kq = (kn / k_scale).to(k_cache_ptr.dtype.element_ty)
+    vq = (vn / v_scale).to(v_cache_ptr.dtype.element_ty)
+    loc = tl.load(cache_loc_ptr + tok0 + nrows, mask=nmask, other=0).to(tl.int64)
+    off = (loc * HKV + h)[:, None] * HD + d[None, :]
+    tl.store(k_cache_ptr + off, kq, mask=nmask[:, None])
+    tl.store(v_cache_ptr + off, vq, mask=nmask[:, None])
+    valid = nmask[None, :] & (nrows[None, :] <= jrow[:, None])
+    return _attn3_step(q, kq.to(tl.bfloat16), vq.to(tl.bfloat16), valid, m_i, l_i, acc, qk_scale)
+
+
+@triton.jit
+def _attn3_split_kernel(
+        qkv_ptr, inv_freq_ptr, seq_lens_ptr, page_table_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr,
+        k_scale_ptr, v_scale_ptr, ws_acc_ptr, ws_ml_ptr,
+        QKV_W, PT_STRIDE, CHUNK, sm_scale_log2, qk_factor, eps,
+        HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr, G: tl.constexpr,
+        R: tl.constexpr, RN: tl.constexpr, PAGE: tl.constexpr, WINDOW: tl.constexpr, ROPE: tl.constexpr,
+        SPLITS: tl.constexpr, BLOCK_N: tl.constexpr):
+    s = tl.program_id(0)
+    h0 = tl.program_id(1) * 2
+    h1 = h0 + 1
+    b = tl.program_id(2)
+    seq = tl.load(seq_lens_ptr + b)
+    rows = tl.arange(0, R)
+    jrow = rows // G
+    qpos = seq + jrow
+    d = tl.arange(0, HD)
+    tok0 = b * L
+    q0 = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, h0 * G * HD, rows, QKV_W, eps, qk_factor,
+                     G, G * L, HD, ROPE, True).to(tl.bfloat16)
+    q1 = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, h1 * G * HD, rows, QKV_W, eps, qk_factor,
+                     G, G * L, HD, ROPE, True).to(tl.bfloat16)
+    k_scale = tl.load(k_scale_ptr)
+    v_scale = tl.load(v_scale_ptr)
+    qk_scale = sm_scale_log2 * k_scale
+    if WINDOW > 0:
+        first = tl.maximum(seq - WINDOW + 1, 0)
+    else:
+        first = seq * 0
+    lo = first + s * CHUNK
+    hi = tl.minimum(lo + CHUNK, seq)
+
+    m0 = tl.full((R,), float("-inf"), tl.float32)
+    l0 = tl.zeros((R,), tl.float32)
+    a0 = tl.zeros((R, HD), tl.float32)
+    m1 = tl.full((R,), float("-inf"), tl.float32)
+    l1 = tl.zeros((R,), tl.float32)
+    a1 = tl.zeros((R, HD), tl.float32)
+    offs_n = tl.arange(0, BLOCK_N)
+    pt_row = page_table_ptr + b.to(tl.int64) * PT_STRIDE
+    for start in range(lo, hi, BLOCK_N):
+        kpos = start + offs_n
+        kmask = kpos < hi
+        page = tl.load(pt_row + kpos // PAGE, mask=kmask, other=0)
+        base = (page.to(tl.int64) * PAGE + kpos % PAGE) * HKV
+        off0 = (base + h0)[:, None] * HD + d[None, :]
+        off1 = off0 + HD
+        k0 = tl.load(k_cache_ptr + off0, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        k1 = tl.load(k_cache_ptr + off1, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        v0 = tl.load(v_cache_ptr + off0, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        v1 = tl.load(v_cache_ptr + off1, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        valid = kmask[None, :]
+        if WINDOW > 0:
+            valid = valid & (kpos[None, :] > qpos[:, None] - WINDOW)
+        m0, l0, a0 = _attn3_step(q0, k0, v0, valid, m0, l0, a0, qk_scale)
+        m1, l1, a1 = _attn3_step(q1, k1, v1, valid, m1, l1, a1, qk_scale)
+
+    if s == SPLITS - 1:
+        m0, l0, a0 = _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q0, m0, l0, a0,
+                                     tok0, seq, h0, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
+                                     HQ, HKV, HD, L, RN, ROPE)
+        m1, l1, a1 = _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q1, m1, l1, a1,
+                                     tok0, seq, h1, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
+                                     HQ, HKV, HD, L, RN, ROPE)
+    for hh in tl.static_range(2):
+        if hh == 0:
+            m_i, l_i, acc, h = m0, l0, a0, h0
+        else:
+            m_i, l_i, acc, h = m1, l1, a1, h1
+        base_ws = ((b * HKV + h) * SPLITS + s).to(tl.int64) * R
+        tl.store(ws_acc_ptr + (base_ws + rows)[:, None] * HD + d[None, :], acc)
+        tl.store(ws_ml_ptr + (base_ws + rows) * 2, m_i)
+        tl.store(ws_ml_ptr + (base_ws + rows) * 2 + 1, l_i)
+
+
+@triton.jit
+def _attn3_combine_kernel(qkv_ptr, out_ptr, ws_acc_ptr, ws_ml_ptr, v_scale_ptr, QKV_W, eps,
+                          HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr,
+                          G: tl.constexpr, R: tl.constexpr, SPLITS: tl.constexpr, SC: tl.constexpr):
+    """One program per (query head, request): merges the splits of each of its L rows in
+    vectorized chunks of SC splits, then RMSNorm x sigmoid(gate)."""
+    hq = tl.program_id(0)
+    b = tl.program_id(1)
+    h = hq // G
+    g = hq % G
+    d = tl.arange(0, HD)
+    sc = tl.arange(0, SC)
+    v_scale = tl.load(v_scale_ptr)
+    for j in tl.static_range(L):
+        r = j * G + g
+        m_run = tl.full((1,), float("-inf"), tl.float32)
+        l_run = tl.zeros((1,), tl.float32)
+        acc = tl.zeros((HD,), tl.float32)
+        for c0 in range(0, SPLITS, SC):
+            si = c0 + sc
+            smask = si < SPLITS
+            idx = (((b * HKV + h) * SPLITS + si).to(tl.int64) * R + r)
+            m_s = tl.load(ws_ml_ptr + idx * 2, mask=smask, other=float("-inf"))
+            l_s = tl.load(ws_ml_ptr + idx * 2 + 1, mask=smask, other=0.0)
+            a_s = tl.load(ws_acc_ptr + idx[:, None] * HD + d[None, :], mask=smask[:, None], other=0.0)
+            m_new = tl.maximum(m_run, tl.max(m_s, axis=0))
+            m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+            alpha = tl.exp2(m_run - m_safe)
+            beta = tl.exp2(m_s - m_safe)
+            l_run = l_run * alpha + tl.sum(l_s * beta, axis=0)
+            acc = acc * alpha + tl.sum(a_s * beta[:, None], axis=0)
+            m_run = m_new
+        o = acc / tl.where(l_run == 0.0, 1.0, l_run) * v_scale
+        inv = tl.rsqrt(tl.sum(o * o, axis=0) / HD + eps)
+        tok = (b * L + j).to(tl.int64)
+        gate = tl.load(qkv_ptr + tok * QKV_W + (HQ + 2 * HKV) * HD + hq * HD + d).to(tl.float32)
+        tl.store(out_ptr + tok * (HQ * HD) + hq * HD + d, (o * inv * tl.sigmoid(gate)).to(tl.bfloat16))
+
+
+def _attn3(qkv, data, cfg, block_n=64, warps=4, stages=3, per_sm=4, min_chunk=256):
+    """v3 attention: qkv [T, W] -> [T, Hq * 64]; writes the new cache entries."""
+    batch, length = cfg["batch"], cfg["q_len"]
+    hq, hkv, hd = cfg["num_q_heads"], cfg["num_kv_heads"], cfg["head_dim"]
+    group = hq // hkv
+    page, window = cfg["page_size"], cfg["window"]
+    if not qkv.is_contiguous():
+        qkv = qkv.contiguous()
+    device = qkv.device
+    page_table = data["page_table"]
+    capacity = page_table.shape[1] * page
+    span = min(window, capacity) if window else capacity
+    pairs = hkv // 2
+    splits = max(1, min(triton.cdiv(per_sm * NUM_SMS, batch * pairs), triton.cdiv(span, min_chunk)))
+    chunk = triton.cdiv(triton.cdiv(span, splits), block_n) * block_n
+    splits = triton.cdiv(span, chunk)
+    rows = max(16, triton.next_power_of_2(group * length))
+    rows_new = max(16, triton.next_power_of_2(length))
+    ws_acc = torch.empty((batch, hkv, splits, rows, hd), device=device, dtype=torch.float32)
+    ws_ml = torch.empty((batch, hkv, splits, rows, 2), device=device, dtype=torch.float32)
+    out = torch.empty((batch * length, hq * hd), device=device, dtype=torch.bfloat16)
+    inv_freq = _inv_freq(cfg["rope_theta"], hd, device)
+    qkv_w = qkv.shape[-1]
+    _attn3_split_kernel[(splits, pairs, batch)](
+        qkv, inv_freq, data["seq_lens"], page_table, data["cache_loc"], data["k_cache"], data["v_cache"],
+        data["k_scale"], data["v_scale"], ws_acc, ws_ml,
+        qkv_w, page_table.stride(0), chunk, cfg["sm_scale"] * LOG2E, cfg["qk_scale_factor"], RMS_EPS,
+        HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, RN=rows_new, PAGE=page, WINDOW=window,
+        ROPE=bool(cfg["rope_theta"]), SPLITS=splits, BLOCK_N=block_n, num_warps=warps, num_stages=stages)
+    _attn3_combine_kernel[(hq, batch)](
+        qkv, out, ws_acc, ws_ml, data["v_scale"], qkv_w, RMS_EPS,
+        HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, SPLITS=splits,
+        SC=min(64, triton.next_power_of_2(splits)), num_warps=4)
+    return out
+
+
+# ---------------------------------------------------------------------------------------
 # SGLang's path (baseline.py), for the shapes where FA3 is faster: measured on the judge's
 # H200 (check run 6047873c), the fused kernel wins decode steps on sliding layers (18.3 vs
 # 25.5 µs at B 1, 23.3 vs 32.1 at B 16, 28.8 vs 38.8 at B 32) and loses verify blocks and

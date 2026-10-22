@@ -302,7 +302,7 @@ def _make_input(bs, start, count, device, gen):
 _E2M1 = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)
 
 
-def _dequant(packed, sf, gs):
+def _nvfp4_dequant(packed, sf, gs):
     grid = torch.tensor(_E2M1, dtype=torch.float32, device=packed.device)
     codes = torch.stack((packed & 0x0F, packed >> 4), dim=-1).flatten(-2)
     vals = torch.where((codes & 8) != 0, -grid[(codes & 7).long()], grid[(codes & 7).long()])
@@ -322,9 +322,9 @@ def _reference(data, weights):
         if not lo <= e < hi:
             continue
         tok, slot = (ids == e).nonzero(as_tuple=True)
-        h = x[tok] @ _dequant(weights["w13"][e], weights["w13_sf"][e], weights["w13_gs"][e]).T
+        h = x[tok] @ _nvfp4_dequant(weights["w13"][e], weights["w13_sf"][e], weights["w13_gs"][e]).T
         inter = torch.nn.functional.silu(h[:, :d_expert]) * h[:, d_expert:]
-        y = (inter @ _dequant(weights["w2"][e], weights["w2_sf"][e], weights["w2_gs"][e]).T) * (1.0 + w)
+        y = (inter @ _nvfp4_dequant(weights["w2"][e], weights["w2_sf"][e], weights["w2_gs"][e]).T) * (1.0 + w)
         y = y * torch.rsqrt(y.pow(2).mean(-1, keepdim=True) + POST_NORM_EPS)
         out.index_add_(0, tok, y * data["topk_weights"][tok, slot].unsqueeze(1))
     return out

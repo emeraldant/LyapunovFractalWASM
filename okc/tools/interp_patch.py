@@ -46,3 +46,29 @@ def _create_dot(self, a, b, d, input_precision, max_num_imprecise_acc):
 
 
 _interp.InterpreterBuilder.create_dot = _create_dot
+
+
+def stub_sglang():
+    """Make `from sglang... import x` / `from sgl_kernel... import x` succeed on CPU: every
+    attribute is None. Only for interpreter tests of our own Triton code paths."""
+    import importlib.abc
+    import importlib.machinery
+    import sys
+    import types
+
+    class _Finder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+        def find_spec(self, name, path, target=None):
+            if name.split(".")[0] in ("sglang", "sgl_kernel"):
+                return importlib.machinery.ModuleSpec(name, self, is_package=True)
+            return None
+
+        def create_module(self, spec):
+            m = types.ModuleType(spec.name)
+            m.__path__ = []
+            m.__getattr__ = lambda attr: None
+            return m
+
+        def exec_module(self, module):
+            pass
+
+    sys.meta_path.insert(0, _Finder())

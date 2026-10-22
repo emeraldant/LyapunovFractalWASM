@@ -28,15 +28,30 @@ def definitions(path):
 
 def main(template, output):
     result = []
+    seen = {}
     for line in open(template):
         if line.startswith("# @bundle "):
             rel, *names = line.split()[2:]
             defs = definitions(os.path.join(OKC, rel))
             for name in names:
+                if name in seen and seen[name] != defs[name]:
+                    raise SystemExit(f"bundle: {name} from {rel} differs from an earlier definition")
+                seen[name] = defs[name]
                 result.append(defs[name].rstrip("\n") + "\n\n\n")
         else:
             result.append(line)
-    open(output, "w").write("".join(result).rstrip("\n") + "\n")
+    text = "".join(result).rstrip("\n") + "\n"
+    # Top-level names defined twice with different source would silently shadow each other.
+    final = {}
+    for node in ast.parse(text).body:
+        names = [node.name] if isinstance(node, (ast.FunctionDef, ast.ClassDef)) else [
+            t.id for t in getattr(node, "targets", []) if isinstance(t, ast.Name)]
+        seg = ast.get_source_segment(text, node)
+        for name in names:
+            if name in final and final[name] != seg:
+                raise SystemExit(f"bundle: top-level {name} is defined twice with different source")
+            final[name] = seg
+    open(output, "w").write(text)
 
 
 if __name__ == "__main__":

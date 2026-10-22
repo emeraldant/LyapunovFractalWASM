@@ -7,8 +7,10 @@ sys.path.insert(0, os.path.join(here, "..", "muse_attention_decode"))
 import torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import interp_patch  # noqa: F401
+interp_patch.stub_sglang()
 import reference as R
 import submission as S
+R._fa3_scheduler_metadata = lambda *a, **k: None  # FA3 only; not on CPU
 
 CASES = [
     dict(batch=1, ctx=10, heads="tp8", layer="sliding"),
@@ -32,7 +34,12 @@ for i, c in enumerate(CASES):
         continue
     t = time.time()
     data = R.generate_input(seed=100 + i, device="cpu", **c)
-    out = S.kernel_fn(data)
+    if os.environ.get("VARIANT") == "v3":
+        cfg = data["config"]
+        out = S._attn3(data["qkv"].reshape(cfg["batch"] * cfg["q_len"], -1), data, cfg,
+                       block_n=32, min_chunk=128).view(cfg["batch"], cfg["q_len"], -1)
+    else:
+        out = S.kernel_fn(data)
     raw = R.collect(data, out)
     ok, msg = R.check_implementation(data, raw)
     fails += not ok

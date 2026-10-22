@@ -42,7 +42,8 @@ def run_moe_cuda_sim(weights, state, budget_s=200.0, seed=9_000_000):
     torch.cuda.synchronize()
     print(f"moe cuda: repacked in {time.time() - t1:.1f} s")
     bench = SimBench()
-    rep_c = SimReport("cuda vs sglang")
+    variants = {"v2c2": dict(stages=4, ctas_per_sm=2), "v2c3": dict(stages=4, ctas_per_sm=3)}
+    reps = {k: SimReport(k) for k in variants}
     rep_p = SimReport("plan vs sglang")
     ls = torch.zeros(1, dtype=torch.int32, device="cuda")
     for i, (group, case) in enumerate(MOE_SIM_CASES):
@@ -54,19 +55,22 @@ def run_moe_cuda_sim(weights, state, budget_s=200.0, seed=9_000_000):
         name = f"bs{bs} {case.get('dist', 'normal')}"
         mt = _mt_for(bs)
 
-        def ours():
-            return moe_cuda_forward(data["hidden_states"], data["topk_ids"], data["topk_weights"], ls, bank,
-                                    state["norm_w"], POST_NORM_EPS, mt=mt)
         try:
             ref = _reference(data, weights)
-            out = ours()
-            err = rel_l2(out, ref)
-            ok = bool(torch.isfinite(out.float()).all()) and err <= 1.5e-2 and row_worst(out, ref) <= 7.5e-2
+            for vname, kw in variants.items():
+                def ours(kw=kw):
+                    return moe_cuda_forward(data["hidden_states"], data["topk_ids"], data["topk_weights"], ls,
+                                            bank, state["norm_w"], POST_NORM_EPS, mt=mt, **kw)
+                out = ours()
+                err = rel_l2(out, ref)
+                ok = bool(torch.isfinite(out.float()).all()) and err <= 1.5e-2 and row_worst(out, ref) <= 7.5e-2
+                if group == "tests":
+                    reps[vname].add(group, name, ok, err, 1.5e-2)
+                    continue
+                a, b, sp, ci = bench.compare(ours, lambda: _baseline(data, state), pairs=15)
+                reps[vname].add(group, name, ok, err, 1.5e-2, a, b, sp, ci)
             if group == "tests":
-                rep_c.add(group, name, ok, err, 1.5e-2)
                 continue
-            a, b, sp, ci = bench.compare(ours, lambda: _baseline(data, state), pairs=15)
-            rep_c.add(group, name, ok, err, 1.5e-2, a, b, sp, ci)
             plan = ("base",)
             for bk in BUCKETS:
                 if bs <= bk:
@@ -76,7 +80,8 @@ def run_moe_cuda_sim(weights, state, budget_s=200.0, seed=9_000_000):
             rep_p.add(group, name, True, 0.0, 1.0, a, b, sp, ci)
         except Exception as e:
             import traceback
-            rep_c.add(group, name, False, float("nan"), 0.0, note=f"{type(e).__name__}: {str(e)[:150]}")
+            reps["v2c2"].add(group, name, False, float("nan"), 0.0, note=f"{type(e).__name__}: {str(e)[:150]}")
             print(traceback.format_exc()[-800:])
-    rep_c.summary()
+    for rep in reps.values():
+        rep.summary()
     rep_p.summary()

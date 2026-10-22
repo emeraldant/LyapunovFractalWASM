@@ -450,10 +450,7 @@ MOE_CUDA_SRC = r"""
 #include <cuda_bf16.h>
 #include <stdint.h>
 
-#define NG 4          // n8 groups per CTA
-#define KW 8          // warps per CTA, each a K slice
 #define KTOT 4096
-#define CHUNKS_PER_WARP (KTOT / 128 / KW)   // 4
 
 __device__ __forceinline__ void unpack8(uint32_t q, uint32_t out[4]) {
   const uint32_t M = 0x70007000u, S = 0x80008000u;
@@ -485,31 +482,30 @@ __device__ __forceinline__ void mma16816(float c[4], const uint32_t a[4], uint32
                : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
 }
 
-__device__ __forceinline__ uint4 ldg_stream16(const void* p) {
-  uint4 v;
-  asm volatile("ld.global.nc.L1::no_allocate.v4.u32 {%0,%1,%2,%3}, [%4];\n"
-               : "=r"(v.x), "=r"(v.y), "=r"(v.z), "=r"(v.w) : "l"(p));
-  return v;
-}
-
-__device__ __forceinline__ uint2 ldg_stream8(const void* p) {
-  uint2 v;
-  asm volatile("ld.global.nc.L1::no_allocate.v2.u32 {%0,%1}, [%2];\n" : "=r"(v.x), "=r"(v.y) : "l"(p));
-  return v;
-}
-
-// MODE 1: inter[row, 8p + c] = silu(h_gate) * h_up, groups (gate p0, up p0, gate p1, up p1).
-// MODE 2: y[row, 8g + c] = h, groups g = 4 nb .. 4 nb + 3.
-// a_rows: GEMM1 -> x [M, 4096] indexed by token (route / 8); GEMM2 -> inter [rows, 4096].
-template <int MODE, int MT>
+// v2 (v1 reached 1.7 TB/s at bs 1 and 0.35 TB/s at bs 256: one chunk in flight per warp,
+// per-step global gathers of the activations, and a K-split reduction per item).
+//
+// CTA = 8 warps; a work item is (active expert, block of 8 warps' groups, token chunk). Each
+// warp owns NGW n8 groups over the whole K (MODE 1: a gate group and its up group, so
+// silu(gate) * up stays in registers; MODE 2: one group). A STAGES-deep cp.async pipeline
+// moves, per 128-k chunk, the item's activation tile (MT x 16 rows, XOR-swizzled 16-byte
+// segments, read with ldmatrix) and each warp's weight and scale bytes into shared memory.
+template <int MODE, int MT, int NGW, int STAGES>
 __global__ void __launch_bounds__(256) moe_gemm_kernel(
     const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
     const uint32_t* __restrict__ wq, const uint8_t* __restrict__ ws, const float* __restrict__ gs,
     const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
-    const int32_t* __restrict__ exp_start, const __nv_bfloat16* __restrict__ zero_row,
-    __nv_bfloat16* __restrict__ out, int n_blocks, int m_chunks) {
-  extern __shared__ float red[];   // [KW][MT][NG][32 lanes][4]
-  const int warp = threadIdx.x / 32, lane = threadIdx.x % 32;
+    const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out, int n_blocks, int m_chunks) {
+  constexpr int A_STAGE = MT * 16 * 128 * 2;          // bytes
+  constexpr int W_STAGE = 8 * NGW * 512;
+  constexpr int S_STAGE = 8 * NGW * 64;
+  constexpr int NCHUNK = KTOT / 128;
+  constexpr int GROUPS = MODE == 1 ? 1024 : 512;      // n8 groups per expert
+  extern __shared__ __align__(128) uint8_t smem[];
+  uint8_t* sA = smem;
+  uint8_t* sW = smem + STAGES * A_STAGE;
+  uint8_t* sS = sW + STAGES * W_STAGE;
+  const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
   const int r = lane / 4, c = (lane % 4) * 2;
   const int n_active = *n_active_ptr;
   const int total = n_active * n_blocks * m_chunks;
@@ -521,172 +517,173 @@ __global__ void __launch_bounds__(256) moe_gemm_kernel(
     const int rows_e = exp_start[e + 1] - row0;
     if (rows_e <= 0) continue;
     const int tiles = min(MT, (rows_e + 15) / 16);
-    const float g = gs[e] * 256.0f;   // global scale x 2^8 (the B values carry 2^-8)
+    const float gsc = gs[e] * 256.0f;
 
-    // A-fragment row pointers for this lane: rows r and r + 8 of each tile.
-    const uint32_t* arow[MT][2];
+    // This thread's activation segments: MT of them per stage (row = seg / 16, 16 B each).
+    const uint8_t* a_row[MT];
+    int a_ok[MT];
 #pragma unroll
-    for (int mt = 0; mt < MT; ++mt) {
-#pragma unroll
-      for (int h = 0; h < 2; ++h) {
-        int lr = mt * 16 + r + 8 * h;
-        const __nv_bfloat16* p = zero_row;
-        if (lr < rows_e) {
-          int src = MODE == 1 ? row_route[row0 + lr] / 8 : row0 + lr;
-          p = a_src + (size_t)src * KTOT;
-        }
-        arow[mt][h] = reinterpret_cast<const uint32_t*>(p);
-      }
+    for (int i = 0; i < MT; ++i) {
+      int seg = tid + i * 256;
+      int lr = seg / 16;
+      a_ok[i] = lr < rows_e && lr < tiles * 16;
+      int src = 0;
+      if (a_ok[i]) src = MODE == 1 ? row_route[row0 + lr] / 8 : row0 + lr;
+      a_row[i] = reinterpret_cast<const uint8_t*>(a_src + (size_t)src * KTOT);
     }
-    float acc[MT][NG][4];
+    // This warp's weight groups.
+    size_t gch[NGW];
+#pragma unroll
+    for (int j = 0; j < NGW; ++j) {
+      int grp = MODE == 1 ? 2 * (nb * 8 + warp) + j : nb * 8 + warp;
+      gch[j] = ((size_t)e * GROUPS + grp) * NCHUNK;
+    }
+    auto load_stage = [&](int kc, int st) {
+#pragma unroll
+      for (int i = 0; i < MT; ++i) {
+        int seg = tid + i * 256;
+        int lr = seg / 16, cs = seg % 16;
+        if (lr < tiles * 16) {
+          uint32_t dst = (uint32_t)__cvta_generic_to_shared(sA + st * A_STAGE + lr * 256 + ((cs ^ (lr & 7)) * 16));
+          const uint8_t* src = a_row[i] + kc * 256 + cs * 16;
+          int bytes = a_ok[i] ? 16 : 0;
+          asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" :: "r"(dst), "l"(src), "r"(bytes));
+        }
+      }
+#pragma unroll
+      for (int j = 0; j < NGW; ++j) {
+        size_t ch = gch[j] + kc;
+        uint32_t dst = (uint32_t)__cvta_generic_to_shared(sW + st * W_STAGE + ((warp * NGW + j) * 32 + lane) * 16);
+        asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(dst), "l"(wq + (ch * 32 + lane) * 4));
+        if (lane < 4) {
+          uint32_t sdst = (uint32_t)__cvta_generic_to_shared(sS + st * S_STAGE + (warp * NGW + j) * 64 + lane * 16);
+          asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(sdst), "l"(ws + ch * 64 + lane * 16));
+        }
+      }
+    };
+    float acc[MT][NGW][4];
 #pragma unroll
     for (int mt = 0; mt < MT; ++mt)
 #pragma unroll
-      for (int ng = 0; ng < NG; ++ng)
+      for (int j = 0; j < NGW; ++j)
 #pragma unroll
-        for (int i = 0; i < 4; ++i) acc[mt][ng][i] = 0.f;
+        for (int i = 0; i < 4; ++i) acc[mt][j][i] = 0.f;
 
-    // Group base offsets (in chunks) for this expert and n-block.
-    // Groups per expert: MODE 1 has 1024 (512 gate/up pairs, interleaved), MODE 2 has 512.
-    size_t gbase[NG];
 #pragma unroll
-    for (int ng = 0; ng < NG; ++ng) {
-      size_t grp = MODE == 1 ? (size_t)(2 * (2 * nb + ng / 2) + (ng % 2)) : (size_t)(4 * nb + ng);
-      gbase[ng] = ((size_t)e * (MODE == 1 ? 1024 : 512) + grp) * (KTOT / 128);
-    }
-    const int kc0 = warp * CHUNKS_PER_WARP;
-    uint4 wv[NG];
-    uint2 sv[NG];
-#pragma unroll
-    for (int ng = 0; ng < NG; ++ng) {
-      size_t ch = gbase[ng] + kc0;
-      wv[ng] = ldg_stream16(wq + (ch * 32 + lane) * 4);
-      sv[ng] = ldg_stream8(ws + ch * 64 + r * 8);
+    for (int s = 0; s < STAGES - 1; ++s) {
+      load_stage(s, s);
+      asm volatile("cp.async.commit_group;\n" ::);
     }
 #pragma unroll 1
-    for (int i = 0; i < CHUNKS_PER_WARP; ++i) {
-      uint4 cw[NG];
-      uint2 cs[NG];
+    for (int kc = 0; kc < NCHUNK; ++kc) {
+      asm volatile("cp.async.wait_group %0;\n" :: "n"(STAGES - 2));
+      __syncthreads();
+      if (kc + STAGES - 1 < NCHUNK) load_stage(kc + STAGES - 1, (kc + STAGES - 1) % STAGES);
+      asm volatile("cp.async.commit_group;\n" ::);
+      const int st = kc % STAGES;
+      uint4 wv[NGW];
+      uint2 sv[NGW];
 #pragma unroll
-      for (int ng = 0; ng < NG; ++ng) { cw[ng] = wv[ng]; cs[ng] = sv[ng]; }
-      if (i + 1 < CHUNKS_PER_WARP) {
-#pragma unroll
-        for (int ng = 0; ng < NG; ++ng) {
-          size_t ch = gbase[ng] + kc0 + i + 1;
-          wv[ng] = ldg_stream16(wq + (ch * 32 + lane) * 4);
-          sv[ng] = ldg_stream8(ws + ch * 64 + r * 8);
-        }
+      for (int j = 0; j < NGW; ++j) {
+        wv[j] = *reinterpret_cast<const uint4*>(sW + st * W_STAGE + ((warp * NGW + j) * 32 + lane) * 16);
+        sv[j] = *reinterpret_cast<const uint2*>(sS + st * S_STAGE + (warp * NGW + j) * 64 + r * 8);
       }
-      const int kbase = (kc0 + i) * 128;
+      const uint8_t* a_stage = sA + st * A_STAGE;
 #pragma unroll
       for (int w = 0; w < 4; ++w) {
-        uint32_t v[NG][4];
+        uint32_t v[NGW][4];
 #pragma unroll
-        for (int ng = 0; ng < NG; ++ng) {
-          uint32_t q = w == 0 ? cw[ng].x : w == 1 ? cw[ng].y : w == 2 ? cw[ng].z : cw[ng].w;
-          unpack8(q, v[ng]);
+        for (int j = 0; j < NGW; ++j) {
+          uint32_t q = w == 0 ? wv[j].x : w == 1 ? wv[j].y : w == 2 ? wv[j].z : wv[j].w;
+          unpack8(q, v[j]);
         }
 #pragma unroll
         for (int half = 0; half < 2; ++half) {
           const int step = 2 * w + half;
-          const int k0 = kbase + step * 16;
-          uint32_t b0[NG], b1[NG];
+          uint32_t b0[NGW], b1[NGW];
 #pragma unroll
-          for (int ng = 0; ng < NG; ++ng) {
-            uint32_t sb = (step < 4 ? (cs[ng].x >> (8 * step)) : (cs[ng].y >> (8 * (step - 4)))) & 0xFFu;
+          for (int j = 0; j < NGW; ++j) {
+            uint32_t sb = (step < 4 ? (sv[j].x >> (8 * step)) : (sv[j].y >> (8 * (step - 4)))) & 0xFFu;
             uint32_t s2 = scale2(sb);
-            b0[ng] = mul2(v[ng][2 * half], s2);
-            b1[ng] = mul2(v[ng][2 * half + 1], s2);
+            b0[j] = mul2(v[j][2 * half], s2);
+            b1[j] = mul2(v[j][2 * half + 1], s2);
           }
 #pragma unroll
           for (int mt = 0; mt < MT; ++mt) {
             if (mt < tiles) {
+              int row = mt * 16 + (lane % 16);
+              int cs = step * 2 + lane / 16;
+              uint32_t addr = (uint32_t)__cvta_generic_to_shared(a_stage + row * 256 + ((cs ^ (row & 7)) * 16));
               uint32_t a[4];
-              a[0] = arow[mt][0][(k0 + c) / 2];
-              a[1] = arow[mt][1][(k0 + c) / 2];
-              a[2] = arow[mt][0][(k0 + c + 8) / 2];
-              a[3] = arow[mt][1][(k0 + c + 8) / 2];
+              asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+                           : "=r"(a[0]), "=r"(a[1]), "=r"(a[2]), "=r"(a[3]) : "r"(addr));
 #pragma unroll
-              for (int ng = 0; ng < NG; ++ng) mma16816(acc[mt][ng], a, b0[ng], b1[ng]);
+              for (int j = 0; j < NGW; ++j) mma16816(acc[mt][j], a, b0[j], b1[j]);
             }
           }
         }
       }
     }
-    // Reduce the KW warps' partial sums through shared memory.
-#pragma unroll
-    for (int mt = 0; mt < MT; ++mt)
-#pragma unroll
-      for (int ng = 0; ng < NG; ++ng)
-#pragma unroll
-        for (int i = 0; i < 4; ++i)
-          red[((((warp * MT + mt) * NG + ng) * 32 + lane) * 4) + i] = acc[mt][ng][i];
+    asm volatile("cp.async.wait_group 0;\n" ::);
     __syncthreads();
-    // Each thread finishes (mt, lane, i) outputs for a pair of groups (MODE 1) or groups.
-    const int per_warp = MT * NG * 32 * 4;
-    for (int idx = threadIdx.x; idx < MT * 32 * 4 * (MODE == 1 ? NG / 2 : NG); idx += blockDim.x) {
-      int i = idx % 4, ln = (idx / 4) % 32;
-      int rest = idx / 128;
-      int mt, ng;
-      if (MODE == 1) { int pr = rest % (NG / 2); mt = rest / (NG / 2); ng = 2 * pr; }
-      else { ng = rest % NG; mt = rest / NG; }
+    // Epilogue straight from the accumulators: c0, c1 row r cols c, c+1; c2, c3 row r + 8.
+#pragma unroll
+    for (int mt = 0; mt < MT; ++mt) {
       if (mt >= tiles) continue;
-      int orow = mt * 16 + ln / 4 + (i >= 2 ? 8 : 0);
-      int ocol = (ln % 4) * 2 + (i & 1);
-      if (orow >= rows_e) continue;
-      float s0 = 0.f, s1 = 0.f;
 #pragma unroll
-      for (int kw = 0; kw < KW; ++kw) {
-        s0 += red[kw * per_warp + ((mt * NG + ng) * 32 + ln) * 4 + i];
-        if (MODE == 1) s1 += red[kw * per_warp + ((mt * NG + ng + 1) * 32 + ln) * 4 + i];
+      for (int h = 0; h < 2; ++h) {
+        int orow = mt * 16 + r + 8 * h;
+        if (orow >= rows_e) continue;
+        float v0, v1;
+        int n;
+        if (MODE == 1) {
+          float g0 = acc[mt][0][2 * h] * gsc, g1 = acc[mt][0][2 * h + 1] * gsc;
+          float u0 = acc[mt][NGW - 1][2 * h] * gsc, u1 = acc[mt][NGW - 1][2 * h + 1] * gsc;
+          v0 = g0 / (1.f + __expf(-g0)) * u0;
+          v1 = g1 / (1.f + __expf(-g1)) * u1;
+          n = 8 * (nb * 8 + warp) + c;
+        } else {
+          v0 = acc[mt][0][2 * h] * gsc;
+          v1 = acc[mt][0][2 * h + 1] * gsc;
+          n = 8 * (nb * 8 + warp) + c;
+        }
+        __nv_bfloat162 pr = __floats2bfloat162_rn(v0, v1);
+        *reinterpret_cast<__nv_bfloat162*>(out + (size_t)(row0 + orow) * KTOT + n) = pr;
       }
-      float val;
-      int n;
-      if (MODE == 1) {
-        float gate = s0 * g, up = s1 * g;
-        val = gate / (1.f + __expf(-gate)) * up;
-        n = 8 * (2 * nb + ng / 2) + ocol;
-      } else {
-        val = s0 * g;
-        n = 8 * (4 * nb + ng) + ocol;
-      }
-      out[(size_t)(row0 + orow) * KTOT + n] = __float2bfloat16(val);
     }
-    __syncthreads();
   }
 }
 
-template <int MODE, int MT>
+template <int MODE, int MT, int STAGES>
 void launch(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
-            torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor zero_row,
-            torch::Tensor out, int n_blocks, int m_chunks, int grid) {
-  size_t smem = (size_t)KW * MT * NG * 32 * 4 * sizeof(float);
-  auto k = moe_gemm_kernel<MODE, MT>;
+            torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
+            int n_blocks, int m_chunks, int grid) {
+  constexpr int NGW = MODE == 1 ? 2 : 1;
+  size_t smem = (size_t)STAGES * (MT * 16 * 128 * 2 + 8 * NGW * 512 + 8 * NGW * 64);
+  auto k = moe_gemm_kernel<MODE, MT, NGW, STAGES>;
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   k<<<grid, 256, smem, at::cuda::getCurrentCUDAStream()>>>(
       reinterpret_cast<const __nv_bfloat16*>(a_src.data_ptr()), row_route.data_ptr<int32_t>(),
       reinterpret_cast<const uint32_t*>(wq.data_ptr()), ws.data_ptr<uint8_t>(), gs.data_ptr<float>(),
       active.data_ptr<int32_t>(), n_active.data_ptr<int32_t>(), exp_start.data_ptr<int32_t>(),
-      reinterpret_cast<const __nv_bfloat16*>(zero_row.data_ptr()),
       reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks, m_chunks);
 }
 
-void moe_gemm(int64_t mode, int64_t mt, torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq,
-              torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
-              torch::Tensor exp_start, torch::Tensor zero_row, torch::Tensor out, int64_t n_blocks,
-              int64_t m_chunks, int64_t grid) {
-#define CASE(M_, T_) if (mode == M_ && mt == T_) { launch<M_, T_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, zero_row, out, n_blocks, m_chunks, grid); return; }
-  CASE(1, 1) CASE(1, 2) CASE(1, 4) CASE(2, 1) CASE(2, 2) CASE(2, 4)
-  TORCH_CHECK(false, "moe_gemm: unsupported mode / m tiles");
+void moe_gemm(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
+              torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
+              torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t m_chunks, int64_t grid) {
+#define CASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch<M_, T_, S_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, m_chunks, grid); return; }
+  CASE(1, 1, 4) CASE(1, 2, 4) CASE(1, 4, 4) CASE(2, 1, 4) CASE(2, 2, 4) CASE(2, 4, 4)
+  CASE(1, 1, 6) CASE(2, 1, 6)
+  TORCH_CHECK(false, "moe_gemm: unsupported mode / m tiles / stages");
 }
 """
 
 
 MOE_CUDA_CPP = """
-void moe_gemm(int64_t mode, int64_t mt, torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq,
-              torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
-              torch::Tensor exp_start, torch::Tensor zero_row, torch::Tensor out, int64_t n_blocks,
-              int64_t m_chunks, int64_t grid);
+void moe_gemm(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
+              torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
+              torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t m_chunks, int64_t grid);
 """
 
 
@@ -823,12 +820,12 @@ def build_cuda_bank(weights, start=0, count=32):
         "w13q": torch.stack(w13q).contiguous(), "w13s": torch.stack(w13s).contiguous(),
         "w2q": torch.stack(w2q).contiguous(), "w2s": torch.stack(w2s).contiguous(),
         "w13_gs": weights["w13_gs"][sl].float().contiguous(), "w2_gs": weights["w2_gs"][sl].float().contiguous(),
-        "zero_row": torch.zeros(4096, dtype=torch.bfloat16, device=device),
         "count": count,
     }
 
 
-def moe_cuda_forward(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8):
+def moe_cuda_forward(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8,
+                     stages=4):
     """x [M, 4096] BF16, ids [M, 8] global expert ids, topk_weights [M, 8] FP32, local_start
     int32 [1] (device) -> [M, 4096] BF16: this GPU's experts' weighted, normed sum."""
     mod = moe_cuda_module()
@@ -852,10 +849,11 @@ def moe_cuda_forward(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1,
     y = torch.empty((rows, 4096), dtype=torch.bfloat16, device=device)
     m_chunks = triton.cdiv(min(m, rows), mt * 16)
     grid = 132 * ctas_per_sm
-    mod.moe_gemm(1, mt, x, row_route, bank["w13q"], bank["w13s"], bank["w13_gs"], active, n_active, exp_start,
-                 bank["zero_row"], inter, 4096 // 16, m_chunks, grid)
-    mod.moe_gemm(2, mt, inter, row_route, bank["w2q"], bank["w2s"], bank["w2_gs"], active, n_active, exp_start,
-                 bank["zero_row"], y, 4096 // 32, m_chunks, grid)
+    # 64 work items per active expert per GEMM: 8 warps x (MODE 1: a gate/up pair, MODE 2: an n8 group).
+    mod.moe_gemm(1, mt, stages, x, row_route, bank["w13q"], bank["w13s"], bank["w13_gs"], active, n_active,
+                 exp_start, inter, 512 // 8, m_chunks, grid)
+    mod.moe_gemm(2, mt, stages, inter, row_route, bank["w2q"], bank["w2s"], bank["w2_gs"], active, n_active,
+                 exp_start, y, 512 // 8, m_chunks, grid)
     out = torch.empty((m, hidden), dtype=x.dtype, device=device)
     _post_norm_rows_kernel[(m,)](y, norm_w, topk_weights, pos_of_route, out, eps, TOPK=topk, H=hidden, num_warps=8)
     return out
@@ -1000,7 +998,8 @@ def run_moe_cuda_sim(weights, state, budget_s=200.0, seed=9_000_000):
     torch.cuda.synchronize()
     print(f"moe cuda: repacked in {time.time() - t1:.1f} s")
     bench = SimBench()
-    rep_c = SimReport("cuda vs sglang")
+    variants = {"v2c2": dict(stages=4, ctas_per_sm=2), "v2c3": dict(stages=4, ctas_per_sm=3)}
+    reps = {k: SimReport(k) for k in variants}
     rep_p = SimReport("plan vs sglang")
     ls = torch.zeros(1, dtype=torch.int32, device="cuda")
     for i, (group, case) in enumerate(MOE_SIM_CASES):
@@ -1012,19 +1011,22 @@ def run_moe_cuda_sim(weights, state, budget_s=200.0, seed=9_000_000):
         name = f"bs{bs} {case.get('dist', 'normal')}"
         mt = _mt_for(bs)
 
-        def ours():
-            return moe_cuda_forward(data["hidden_states"], data["topk_ids"], data["topk_weights"], ls, bank,
-                                    state["norm_w"], POST_NORM_EPS, mt=mt)
         try:
             ref = _reference(data, weights)
-            out = ours()
-            err = rel_l2(out, ref)
-            ok = bool(torch.isfinite(out.float()).all()) and err <= 1.5e-2 and row_worst(out, ref) <= 7.5e-2
+            for vname, kw in variants.items():
+                def ours(kw=kw):
+                    return moe_cuda_forward(data["hidden_states"], data["topk_ids"], data["topk_weights"], ls,
+                                            bank, state["norm_w"], POST_NORM_EPS, mt=mt, **kw)
+                out = ours()
+                err = rel_l2(out, ref)
+                ok = bool(torch.isfinite(out.float()).all()) and err <= 1.5e-2 and row_worst(out, ref) <= 7.5e-2
+                if group == "tests":
+                    reps[vname].add(group, name, ok, err, 1.5e-2)
+                    continue
+                a, b, sp, ci = bench.compare(ours, lambda: _baseline(data, state), pairs=15)
+                reps[vname].add(group, name, ok, err, 1.5e-2, a, b, sp, ci)
             if group == "tests":
-                rep_c.add(group, name, ok, err, 1.5e-2)
                 continue
-            a, b, sp, ci = bench.compare(ours, lambda: _baseline(data, state), pairs=15)
-            rep_c.add(group, name, ok, err, 1.5e-2, a, b, sp, ci)
             plan = ("base",)
             for bk in BUCKETS:
                 if bs <= bk:
@@ -1034,9 +1036,10 @@ def run_moe_cuda_sim(weights, state, budget_s=200.0, seed=9_000_000):
             rep_p.add(group, name, True, 0.0, 1.0, a, b, sp, ci)
         except Exception as e:
             import traceback
-            rep_c.add(group, name, False, float("nan"), 0.0, note=f"{type(e).__name__}: {str(e)[:150]}")
+            reps["v2c2"].add(group, name, False, float("nan"), 0.0, note=f"{type(e).__name__}: {str(e)[:150]}")
             print(traceback.format_exc()[-800:])
-    rep_c.summary()
+    for rep in reps.values():
+        rep.summary()
     rep_p.summary()
 
 

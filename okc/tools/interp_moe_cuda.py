@@ -10,18 +10,18 @@ import kernel as K
 
 fails = 0
 gen = torch.Generator().manual_seed(0)
-for bs, ls in ((1, 0), (5, 32), (33, 224), (257, 96)):
+for bs, ls, rows_per in ((1, 0, 16), (5, 32, 16), (33, 224, 32), (257, 96, 16), (257, 96, 64)):
     ids = torch.randint(0, 256, (bs, 8), generator=gen, dtype=torch.int32)
     p = bs * 8
     row_route = torch.full((p,), -7, dtype=torch.int32); pos = torch.full((p,), -7, dtype=torch.int32)
-    exp_start = torch.zeros(33, dtype=torch.int32); active = torch.full((32,), -7, dtype=torch.int32)
+    exp_start = torch.zeros(33, dtype=torch.int32); active = torch.full((32 + p // rows_per + 1,), -7, dtype=torch.int32)
     n_active = torch.zeros(1, dtype=torch.int32)
     K._route_compact_kernel[(32,)](ids, torch.tensor([ls], dtype=torch.int32), row_route, pos, exp_start, active,
-                                   n_active, p, NE=256, E=32, CHUNK=256)
+                                   n_active, p, rows_per, NE=256, E=32, CHUNK=256)
     loc = ((ids.flatten().long() - ls) % 256)
     counts = torch.bincount(loc[loc < 32], minlength=32)
     ok = torch.equal(exp_start[:32].long(), torch.cumsum(counts, 0) - counts) and int(exp_start[32]) == int(counts.sum())
-    act = (counts > 0).nonzero().flatten()
+    act = torch.tensor([e | (j << 8) for e in range(32) for j in range(-(-int(counts[e]) // rows_per))], dtype=torch.long)
     ok &= int(n_active) == len(act) and torch.equal(active[:len(act)].long(), act)
     for e in range(32):
         rows = row_route[exp_start[e]:exp_start[e + 1]].long()
@@ -29,7 +29,7 @@ for bs, ls in ((1, 0), (5, 32), (33, 224), (257, 96)):
         ok &= torch.equal(pos[rows].long(), torch.arange(int(exp_start[e]), int(exp_start[e + 1])))
     ok &= bool((pos[loc >= 32] == -1).all())
     fails += not ok
-    print(f"{'OK ' if ok else 'BAD'} route bs{bs} local_start {ls}: {int(n_active)} active, {int(exp_start[32])} rows")
+    print(f"{'OK ' if ok else 'BAD'} route bs{bs} local_start {ls}: rows/chunk {rows_per}: {int(n_active)} chunks, {int(exp_start[32])} rows")
 # Post-norm through the row map.
 bs = 5
 y = torch.randn(40, 4096).to(torch.bfloat16); s = torch.rand(bs, 8); w = (1 + 0.1 * torch.randn(4096)).to(torch.bfloat16)

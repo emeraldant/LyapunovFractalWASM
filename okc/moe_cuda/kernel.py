@@ -22,9 +22,7 @@ import torch
 import triton
 import triton.language as tl
 
-MOE_CUDA_SRC = r"""
-#include <torch/extension.h>
-#include <ATen/cuda/CUDAContext.h>
+MOE_DEVICE_SRC = r"""
 #include <cuda_bf16.h>
 #include <stdint.h>
 
@@ -42,10 +40,13 @@ __device__ __forceinline__ void unpack8(uint32_t q, uint32_t out[4]) {
   out[3] = (b & S) | ((b & M) >> 6);
 }
 
-// E4M3 byte -> bf16x2 (both halves) = scale * 2^118 (normal scales; prepare checks).
-__device__ __forceinline__ uint32_t scale2(uint32_t s) {
-  uint32_t bits = (((s & 0x80u) << 8) | ((s & 0x7Fu) << 4)) + (238u << 7);
-  return bits | (bits << 16);
+// Byte i of a scale word (E4M3, sign 0, normal: prepare checks) -> bf16x2 broadcast of
+// scale * 2^118: PRMT puts the byte in both halves, then one IMAD shifts it into the BF16
+// exponent/mantissa fields and adds the exponent bias (238) to both halves.
+template <int I>
+__device__ __forceinline__ uint32_t scale2(uint32_t word) {
+  uint32_t t = __byte_perm(word, 0u, 0x4040u | I | (I << 8));
+  return t * 16u + ((238u << 7) | (238u << 23));
 }
 
 __device__ __forceinline__ uint32_t mul2(uint32_t a, uint32_t b) {
@@ -73,7 +74,7 @@ __global__ void __launch_bounds__(256) moe_gemm_kernel(
     const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
     const uint32_t* __restrict__ wq, const uint8_t* __restrict__ ws, const float* __restrict__ gs,
     const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
-    const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out, int n_blocks, int m_chunks) {
+    const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out, int n_blocks) {
   constexpr int A_STAGE = MT * 16 * 128 * 2;          // bytes
   constexpr int W_STAGE = 8 * NGW * 512;
   constexpr int S_STAGE = 8 * NGW * 64;
@@ -85,60 +86,80 @@ __global__ void __launch_bounds__(256) moe_gemm_kernel(
   uint8_t* sS = sW + STAGES * W_STAGE;
   const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
   const int r = lane / 4, c = (lane % 4) * 2;
+  // active[] is the compact list of non-empty token chunks, e | (chunk index << 8), so every
+  // item has rows: chunks of the same expert and n block are n_blocks items apart and share
+  // their weight reads through L2.
   const int n_active = *n_active_ptr;
-  const int total = n_active * n_blocks * m_chunks;
+  const int total = n_active * n_blocks;
   for (int item = blockIdx.x; item < total; item += gridDim.x) {
-    const int mc = item % m_chunks;
-    const int nb = (item / m_chunks) % n_blocks;
-    const int e = active[item / (m_chunks * n_blocks)];
+    const int nb = item % n_blocks;
+    const int ch = active[item / n_blocks];
+    const int e = ch & 255, mc = ch >> 8;
     const int row0 = exp_start[e] + mc * MT * 16;
     const int rows_e = exp_start[e + 1] - row0;
     if (rows_e <= 0) continue;
     const int tiles = min(MT, (rows_e + 15) / 16);
     const float gsc = gs[e] * 256.0f;
 
-    // This thread's activation segments: MT of them per stage (row = seg / 16, 16 B each).
-    const uint8_t* a_row[MT];
-    int a_ok[MT];
+    // Streaming pointers, set once per item and advanced by constant strides per chunk.
+    const uint32_t smem_u32 = (uint32_t)__cvta_generic_to_shared(smem);
+    const uint8_t* a_ptr[MT];
+    uint32_t a_dst[MT], a_bytes[MT];
+    bool a_live[MT];
 #pragma unroll
     for (int i = 0; i < MT; ++i) {
       int seg = tid + i * 256;
-      int lr = seg / 16;
-      a_ok[i] = lr < rows_e && lr < tiles * 16;
+      int lr = seg / 16, cs = seg % 16;
+      a_live[i] = lr < tiles * 16;
+      bool ok = lr < rows_e && a_live[i];
       int src = 0;
-      if (a_ok[i]) src = MODE == 1 ? row_route[row0 + lr] / 8 : row0 + lr;
-      a_row[i] = reinterpret_cast<const uint8_t*>(a_src + (size_t)src * KTOT);
+      if (ok) src = MODE == 1 ? row_route[row0 + lr] / 8 : row0 + lr;
+      a_ptr[i] = reinterpret_cast<const uint8_t*>(a_src + (size_t)src * KTOT) + cs * 16;
+      a_dst[i] = smem_u32 + lr * 256 + ((cs ^ (lr & 7)) * 16);
+      a_bytes[i] = ok ? 16u : 0u;
     }
-    // This warp's weight groups.
-    size_t gch[NGW];
+    const uint8_t* w_ptr[NGW];
+    const uint8_t* s_ptr[NGW];
+    uint32_t w_dst[NGW], s_dst[NGW];
 #pragma unroll
     for (int j = 0; j < NGW; ++j) {
       int grp = MODE == 1 ? 2 * (nb * 8 + warp) + j : nb * 8 + warp;
-      gch[j] = ((size_t)e * GROUPS + grp) * NCHUNK;
+      size_t gch = ((size_t)e * GROUPS + grp) * NCHUNK;
+      w_ptr[j] = reinterpret_cast<const uint8_t*>(wq) + (gch * 32 + lane) * 16;
+      s_ptr[j] = ws + gch * 64 + (lane & 3) * 16;
+      w_dst[j] = smem_u32 + STAGES * A_STAGE + ((warp * NGW + j) * 32 + lane) * 16;
+      s_dst[j] = smem_u32 + STAGES * (A_STAGE + W_STAGE) + (warp * NGW + j) * 64 + (lane & 3) * 16;
     }
-    auto load_stage = [&](int kc, int st) {
+    // Issues the next chunk (in order) into stage st, then advances the pointers.
+    auto load_next = [&](int st) {
 #pragma unroll
       for (int i = 0; i < MT; ++i) {
-        int seg = tid + i * 256;
-        int lr = seg / 16, cs = seg % 16;
-        if (lr < tiles * 16) {
-          uint32_t dst = (uint32_t)__cvta_generic_to_shared(sA + st * A_STAGE + lr * 256 + ((cs ^ (lr & 7)) * 16));
-          const uint8_t* src = a_row[i] + kc * 256 + cs * 16;
-          int bytes = a_ok[i] ? 16 : 0;
-          asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" :: "r"(dst), "l"(src), "r"(bytes));
+        if (a_live[i]) {
+          asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n"
+                       :: "r"(a_dst[i] + st * A_STAGE), "l"(a_ptr[i]), "r"(a_bytes[i]));
         }
+        a_ptr[i] += 256;
       }
 #pragma unroll
       for (int j = 0; j < NGW; ++j) {
-        size_t ch = gch[j] + kc;
-        uint32_t dst = (uint32_t)__cvta_generic_to_shared(sW + st * W_STAGE + ((warp * NGW + j) * 32 + lane) * 16);
-        asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(dst), "l"(wq + (ch * 32 + lane) * 4));
+        asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(w_dst[j] + st * W_STAGE), "l"(w_ptr[j]));
         if (lane < 4) {
-          uint32_t sdst = (uint32_t)__cvta_generic_to_shared(sS + st * S_STAGE + (warp * NGW + j) * 64 + lane * 16);
-          asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(sdst), "l"(ws + ch * 64 + lane * 16));
+          asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(s_dst[j] + st * S_STAGE), "l"(s_ptr[j]));
         }
+        w_ptr[j] += 32 * 16;
+        s_ptr[j] += 64;
       }
     };
+    // ldmatrix source offsets for each k16 step within a stage (tile mt adds mt * 4096).
+    uint32_t lds_off[8];
+    {
+      const int row = lane % 16, hi = lane / 16;
+#pragma unroll
+      for (int step = 0; step < 8; ++step) lds_off[step] = row * 256 + (((step * 2 + hi) ^ (row & 7)) * 16);
+    }
+    const uint32_t w_src = smem_u32 + STAGES * A_STAGE + ((warp * NGW) * 32 + lane) * 16;
+    const uint32_t s_src = smem_u32 + STAGES * (A_STAGE + W_STAGE) + (warp * NGW) * 64 + r * 8;
+
     float acc[MT][NGW][4];
 #pragma unroll
     for (int mt = 0; mt < MT; ++mt)
@@ -148,25 +169,28 @@ __global__ void __launch_bounds__(256) moe_gemm_kernel(
         for (int i = 0; i < 4; ++i) acc[mt][j][i] = 0.f;
 
 #pragma unroll
-    for (int s = 0; s < STAGES - 1; ++s) {
-      load_stage(s, s);
+    for (int st = 0; st < STAGES - 1; ++st) {
+      load_next(st);
       asm volatile("cp.async.commit_group;\n" ::);
     }
 #pragma unroll 1
     for (int kc = 0; kc < NCHUNK; ++kc) {
       asm volatile("cp.async.wait_group %0;\n" :: "n"(STAGES - 2));
       __syncthreads();
-      if (kc + STAGES - 1 < NCHUNK) load_stage(kc + STAGES - 1, (kc + STAGES - 1) % STAGES);
-      asm volatile("cp.async.commit_group;\n" ::);
       const int st = kc % STAGES;
+      if (kc + STAGES - 1 < NCHUNK) load_next((kc + STAGES - 1) % STAGES);
+      asm volatile("cp.async.commit_group;\n" ::);
       uint4 wv[NGW];
       uint2 sv[NGW];
 #pragma unroll
       for (int j = 0; j < NGW; ++j) {
-        wv[j] = *reinterpret_cast<const uint4*>(sW + st * W_STAGE + ((warp * NGW + j) * 32 + lane) * 16);
-        sv[j] = *reinterpret_cast<const uint2*>(sS + st * S_STAGE + (warp * NGW + j) * 64 + r * 8);
+        asm volatile("ld.shared.v4.u32 {%0,%1,%2,%3}, [%4];\n"
+                     : "=r"(wv[j].x), "=r"(wv[j].y), "=r"(wv[j].z), "=r"(wv[j].w)
+                     : "r"(w_src + st * W_STAGE + j * 512));
+        asm volatile("ld.shared.v2.u32 {%0,%1}, [%2];\n" : "=r"(sv[j].x), "=r"(sv[j].y)
+                     : "r"(s_src + st * S_STAGE + j * 64));
       }
-      const uint8_t* a_stage = sA + st * A_STAGE;
+      const uint32_t a_stage = smem_u32 + st * A_STAGE;
 #pragma unroll
       for (int w = 0; w < 4; ++w) {
         uint32_t v[NGW][4];
@@ -181,20 +205,19 @@ __global__ void __launch_bounds__(256) moe_gemm_kernel(
           uint32_t b0[NGW], b1[NGW];
 #pragma unroll
           for (int j = 0; j < NGW; ++j) {
-            uint32_t sb = (step < 4 ? (sv[j].x >> (8 * step)) : (sv[j].y >> (8 * (step - 4)))) & 0xFFu;
-            uint32_t s2 = scale2(sb);
+            uint32_t sw = step < 4 ? sv[j].x : sv[j].y;
+            uint32_t s2 = (step % 4 == 0) ? scale2<0>(sw) : (step % 4 == 1) ? scale2<1>(sw)
+                        : (step % 4 == 2) ? scale2<2>(sw) : scale2<3>(sw);
             b0[j] = mul2(v[j][2 * half], s2);
             b1[j] = mul2(v[j][2 * half + 1], s2);
           }
 #pragma unroll
           for (int mt = 0; mt < MT; ++mt) {
             if (mt < tiles) {
-              int row = mt * 16 + (lane % 16);
-              int cs = step * 2 + lane / 16;
-              uint32_t addr = (uint32_t)__cvta_generic_to_shared(a_stage + row * 256 + ((cs ^ (row & 7)) * 16));
               uint32_t a[4];
               asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
-                           : "=r"(a[0]), "=r"(a[1]), "=r"(a[2]), "=r"(a[3]) : "r"(addr));
+                           : "=r"(a[0]), "=r"(a[1]), "=r"(a[2]), "=r"(a[3])
+                           : "r"(a_stage + lds_off[step] + mt * 4096));
 #pragma unroll
               for (int j = 0; j < NGW; ++j) mma16816(acc[mt][j], a, b0[j], b1[j]);
             }
@@ -232,35 +255,53 @@ __global__ void __launch_bounds__(256) moe_gemm_kernel(
   }
 }
 
+"""
+
+MOE_HOST_SRC = r"""
+#include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <algorithm>
+
 template <int MODE, int MT, int STAGES>
 void launch(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
             torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
-            int n_blocks, int m_chunks, int grid) {
+            int n_blocks, int grid) {
   constexpr int NGW = MODE == 1 ? 2 : 1;
   size_t smem = (size_t)STAGES * (MT * 16 * 128 * 2 + 8 * NGW * 512 + 8 * NGW * 64);
   auto k = moe_gemm_kernel<MODE, MT, NGW, STAGES>;
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+  // A persistent grid larger than what can be resident would serialize items onto late CTAs:
+  // cap the requested CTAs per SM by the occupancy shared memory and registers allow.
+  int per_sm = 0, sms = 0, dev = 0;
+  cudaGetDevice(&dev);
+  cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(&per_sm, k, 256, smem);
+  grid = std::min(grid, std::max(1, per_sm) * sms);
   k<<<grid, 256, smem, at::cuda::getCurrentCUDAStream()>>>(
       reinterpret_cast<const __nv_bfloat16*>(a_src.data_ptr()), row_route.data_ptr<int32_t>(),
       reinterpret_cast<const uint32_t*>(wq.data_ptr()), ws.data_ptr<uint8_t>(), gs.data_ptr<float>(),
       active.data_ptr<int32_t>(), n_active.data_ptr<int32_t>(), exp_start.data_ptr<int32_t>(),
-      reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks, m_chunks);
+      reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks);
 }
 
 void moe_gemm(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
               torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
-              torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t m_chunks, int64_t grid) {
-#define CASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch<M_, T_, S_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, m_chunks, grid); return; }
+              torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid) {
+#define CASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch<M_, T_, S_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid); return; }
   CASE(1, 1, 4) CASE(1, 2, 4) CASE(1, 4, 4) CASE(2, 1, 4) CASE(2, 2, 4) CASE(2, 4, 4)
-  CASE(1, 1, 6) CASE(2, 1, 6)
+  CASE(1, 1, 6) CASE(2, 1, 6) CASE(1, 2, 6) CASE(2, 2, 6) CASE(1, 4, 6) CASE(2, 4, 6)
+  CASE(1, 1, 8) CASE(2, 1, 8) CASE(1, 2, 8) CASE(2, 2, 8) CASE(1, 4, 8) CASE(2, 4, 8)
+  CASE(1, 1, 3) CASE(2, 1, 3) CASE(1, 2, 3) CASE(2, 2, 3) CASE(1, 4, 3) CASE(2, 4, 3)
   TORCH_CHECK(false, "moe_gemm: unsupported mode / m tiles / stages");
 }
 """
 
+MOE_CUDA_SRC = MOE_HOST_SRC.replace("#include <ATen/cuda/CUDAContext.h>\n", "#include <ATen/cuda/CUDAContext.h>\n" + MOE_DEVICE_SRC, 1)
+
 MOE_CUDA_CPP = """
 void moe_gemm(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
               torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
-              torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t m_chunks, int64_t grid);
+              torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid);
 """
 
 _MOE_MODULE = []
@@ -322,10 +363,10 @@ def repack_expert_weights(packed, sf, pair_gate_up):
 
 
 def scales_supported(sf):
-    """The scale bit trick (exponent add) is exact only for normal E4M3 scales: exponent
-    field 1..15. Zero or subnormal scales would decode wrong, so those weights keep Marlin."""
-    b = sf.view(torch.uint8) & 0x7F
-    return bool(((b >> 3) > 0).all())
+    """The scale decode (PRMT + IMAD exponent add) is exact for non-negative normal E4M3
+    scales: sign 0, exponent field 1..15. Anything else keeps Marlin."""
+    b = sf.view(torch.uint8)
+    return bool(((b & 0x80) == 0).all() and ((b >> 3) > 0).all())
 
 
 # ---------------------------------------------------------------------------------------
@@ -334,11 +375,11 @@ def scales_supported(sf):
 
 @triton.jit
 def _route_compact_kernel(ids_ptr, local_start_ptr, row_route_ptr, pos_of_route_ptr, exp_start_ptr,
-                          active_ptr, n_active_ptr, P, NE: tl.constexpr, E: tl.constexpr, CHUNK: tl.constexpr):
+                          active_ptr, n_active_ptr, P, ROWS, NE: tl.constexpr, E: tl.constexpr, CHUNK: tl.constexpr):
     """One program per local expert e: places e's routes (in route order) at rows
     exp_start[e] .. exp_start[e+1]; row_route[row] = route p (= token * 8 + slot) and
     pos_of_route[p] = row (-1 for non-local routes, written by program 0). Program 0 also
-    writes exp_start [E + 1] and the active-expert list."""
+    writes exp_start [E + 1] and the list of non-empty chunks of ROWS rows, e | (chunk << 8)."""
     e = tl.program_id(0)
     experts = tl.arange(0, E)
     offs = tl.arange(0, CHUNK)
@@ -367,10 +408,11 @@ def _route_compact_kernel(ids_ptr, local_start_ptr, row_route_ptr, pos_of_route_
     if e == 0:
         tl.store(exp_start_ptr + experts, starts)
         tl.store(exp_start_ptr + E, tl.sum(counts, axis=0))
-        live = (counts > 0).to(tl.int32)
-        slot = tl.cumsum(live, axis=0) - 1
-        tl.store(active_ptr + slot, experts, mask=live > 0)
-        tl.store(n_active_ptr, tl.sum(live, axis=0))
+        nch = (counts + ROWS - 1) // ROWS
+        first = tl.cumsum(nch, axis=0) - nch
+        for j in range(0, tl.max(nch, axis=0)):
+            tl.store(active_ptr + first + j, experts | (j << 8), mask=j < nch)
+        tl.store(n_active_ptr, tl.sum(nch, axis=0))
 
 
 @triton.jit
@@ -413,10 +455,9 @@ def build_cuda_bank(weights, start=0, count=32):
     }
 
 
-def moe_cuda_forward(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8,
-                     stages=4):
-    """x [M, 4096] BF16, ids [M, 8] global expert ids, topk_weights [M, 8] FP32, local_start
-    int32 [1] (device) -> [M, 4096] BF16: this GPU's experts' weighted, normed sum."""
+def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4):
+    """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
+    buffers, for per-stage timing; moe_cuda_forward runs them in order."""
     mod = moe_cuda_module()
     x = x.contiguous()
     m, hidden = x.shape
@@ -429,20 +470,37 @@ def moe_cuda_forward(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1,
     row_route = torch.empty((p,), dtype=torch.int32, device=device)
     pos_of_route = torch.empty((p,), dtype=torch.int32, device=device)
     exp_start = torch.empty((count + 1,), dtype=torch.int32, device=device)
-    active = torch.empty((count,), dtype=torch.int32, device=device)
+    active = torch.empty((count + triton.cdiv(p, mt * 16),), dtype=torch.int32, device=device)
     n_active = torch.empty((1,), dtype=torch.int32, device=device)
-    _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p,
-                                    NE=256, E=count, CHUNK=256, num_warps=4)
-    rows = p  # upper bound on local rows
-    inter = torch.empty((rows, 4096), dtype=torch.bfloat16, device=device)
-    y = torch.empty((rows, 4096), dtype=torch.bfloat16, device=device)
-    m_chunks = triton.cdiv(min(m, rows), mt * 16)
-    grid = 132 * ctas_per_sm
-    # 64 work items per active expert per GEMM: 8 warps x (MODE 1: a gate/up pair, MODE 2: an n8 group).
-    mod.moe_gemm(1, mt, stages, x, row_route, bank["w13q"], bank["w13s"], bank["w13_gs"], active, n_active,
-                 exp_start, inter, 512 // 8, m_chunks, grid)
-    mod.moe_gemm(2, mt, stages, inter, row_route, bank["w2q"], bank["w2s"], bank["w2_gs"], active, n_active,
-                 exp_start, y, 512 // 8, m_chunks, grid)
+    inter = torch.empty((p, 4096), dtype=torch.bfloat16, device=device)
+    y = torch.empty((p, 4096), dtype=torch.bfloat16, device=device)
     out = torch.empty((m, hidden), dtype=x.dtype, device=device)
-    _post_norm_rows_kernel[(m,)](y, norm_w, topk_weights, pos_of_route, out, eps, TOPK=topk, H=hidden, num_warps=8)
+    grid = 132 * ctas_per_sm
+
+    def route():
+        _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, mt * 16,
+                                        NE=256, E=count, CHUNK=256, num_warps=4)
+
+    def gemm1():
+        # 64 work items per active expert per GEMM: 8 warps x (MODE 1: a gate/up pair, MODE 2: an n8 group).
+        mod.moe_gemm(1, mt, stages, x, row_route, bank["w13q"], bank["w13s"], bank["w13_gs"], active, n_active,
+                     exp_start, inter, 512 // 8, grid)
+
+    def gemm2():
+        mod.moe_gemm(2, mt, stages, inter, row_route, bank["w2q"], bank["w2s"], bank["w2_gs"], active, n_active,
+                     exp_start, y, 512 // 8, grid)
+
+    def post():
+        _post_norm_rows_kernel[(m,)](y, norm_w, topk_weights, pos_of_route, out, eps, TOPK=topk, H=hidden,
+                                     num_warps=8)
+
+    return (route, gemm1, gemm2, post), out
+
+
+def moe_cuda_forward(x, ids, topk_weights, local_start, bank, norm_w, eps, **kw):
+    """x [M, 4096] BF16, ids [M, 8] global expert ids, topk_weights [M, 8] FP32, local_start
+    int32 [1] (device) -> [M, 4096] BF16: this GPU's experts' weighted, normed sum."""
+    fns, out = moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, **kw)
+    for fn in fns:
+        fn()
     return out

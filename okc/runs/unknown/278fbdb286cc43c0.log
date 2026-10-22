@@ -1,0 +1,101 @@
+moe plan bs1   : ('fast', 8, True) 50.7 us (sglang 87.1 us)
+moe plan bs8   : ('fast', 8, False) 109.4 us (sglang 151.7 us)
+moe plan bs16  : ('fast', 8, False) 169.4 us (sglang 216.8 us)
+moe plan bs32  : ('fast', 16, False) 209.4 us (sglang 220.9 us)
+moe plan bs128 : ('fast', 16, False) 260.0 us (sglang 354.5 us)
+moe plan bs256 : ('fast', 16, False) 414.2 us (sglang 601.8 us)
+prepare: tuned in 6 s
+moe cuda: compiled in 34 s
+moe cuda: repacked in 0.1 s
+mt1s4|s|bs1 normal|ok 3.5e-03/0.01|60.8/82.7us x1.361 [1.34,1.37]
+stages mt1s4 bs1 normal: route 1.6 gemm1 33.3 (28% of 9) gemm2 19.8 (23% of 5) post 2.5 us (sum 57.2, dream 14, 2 experts)
+mt1s8|s|bs1 normal|ok 3.5e-03/0.01|44.8/82.3us x1.837 [1.82,1.85]
+stages mt1s8 bs1 normal: route 1.9 gemm1 22.2 (42% of 9) gemm2 14.9 (31% of 5) post 2.4 us (sum 41.5, dream 14, 2 experts)
+mt2s4|s|bs1 normal|ok 3.5e-03/0.01|68.6/82.5us x1.203 [1.19,1.21]
+stages mt2s4 bs1 normal: route 1.7 gemm1 35.8 (26% of 9) gemm2 25.7 (18% of 5) post 2.3 us (sum 65.5, dream 14, 2 experts)
+mt4s4|s|bs1 normal|ok 3.5e-03/0.01|87.6/82.0us x0.933 [0.93,0.94]
+stages mt4s4 bs1 normal: route 1.7 gemm1 46.2 (20% of 9) gemm2 34.2 (14% of 5) post 2.5 us (sum 84.5, dream 14, 2 experts)
+an vs sglang|s|bs1 normal|ok 0.0e+00/1.00|46.6/82.1us x1.766 [1.75,1.78]
+mt1s4|s|bs8 normal|ok 3.5e-03/0.01|106.0/146.7us x1.387 [1.38,1.39]
+stages mt1s4 bs8 normal: route 1.8 gemm1 62.4 (60% of 37) gemm2 34.7 (54% of 19) post 3.5 us (sum 102.3, dream 56, 8 experts)
+mt1s8|s|bs8 normal|ok 3.5e-03/0.01|141.5/146.9us x1.040 [1.04,1.04]
+stages mt1s8 bs8 normal: route 1.9 gemm1 80.0 (47% of 37) gemm2 54.6 (34% of 19) post 3.3 us (sum 139.7, dream 56, 8 experts)
+mt2s4|s|bs8 normal|ok 3.5e-03/0.01|131.4/146.3us x1.112 [1.11,1.12]
+stages mt2s4 bs8 normal: route 2.0 gemm1 80.5 (46% of 37) gemm2 42.6 (44% of 19) post 3.5 us (sum 128.7, dream 56, 8 experts)
+mt4s4|s|bs8 normal|ok 3.5e-03/0.01|165.9/146.2us x0.882 [0.88,0.88]
+stages mt4s4 bs8 normal: route 1.8 gemm1 90.7 (41% of 37) gemm2 67.6 (28% of 19) post 3.5 us (sum 163.5, dream 56, 8 experts)
+an vs sglang|s|bs8 normal|ok 0.0e+00/1.00|105.1/147.1us x1.401 [1.40,1.41]
+mt1s4|s|bs16 normal|ok 3.4e-03/0.01|144.6/170.9us x1.183 [1.18,1.19]
+stages mt1s4 bs16 normal: route 1.9 gemm1 87.7 (53% of 46) gemm2 48.7 (48% of 23) post 3.3 us (sum 141.7, dream 70, 10 experts)
+mt1s8|s|bs16 normal|ok 3.4e-03/0.01|173.1/171.2us x0.993 [0.99,1.00]
+stages mt1s8 bs16 normal: route 1.7 gemm1 98.4 (47% of 46) gemm2 67.5 (34% of 23) post 3.2 us (sum 170.8, dream 70, 10 experts)
+mt2s4|s|bs16 normal|ok 3.4e-03/0.01|169.4/170.9us x1.010 [1.01,1.01]
+stages mt2s4 bs16 normal: route 1.9 gemm1 98.8 (47% of 46) gemm2 61.4 (38% of 23) post 3.2 us (sum 165.4, dream 70, 10 experts)
+mt4s4|s|bs16 normal|ok 3.4e-03/0.01|242.7/171.1us x0.705 [0.70,0.71]
+stages mt4s4 bs16 normal: route 1.5 gemm1 134.2 (35% of 46) gemm2 99.6 (23% of 23) post 3.3 us (sum 238.6, dream 70, 10 experts)
+an vs sglang|s|bs16 normal|ok 0.0e+00/1.00|125.2/171.1us x1.368 [1.36,1.37]
+mt1s4|s|bs32 normal|ok 3.4e-03/0.01|235.4/236.4us x1.004 [1.00,1.01]
+stages mt1s4 bs32 normal: route 1.6 gemm1 146.7 (57% of 84) gemm2 80.1 (52% of 42) post 4.8 us (sum 233.2, dream 126, 18 experts)
+mt1s8|s|bs32 normal|ok 3.4e-03/0.01|328.9/237.9us x0.723 [0.72,0.73]
+stages mt1s8 bs32 normal: route 1.8 gemm1 188.9 (44% of 84) gemm2 129.1 (32% of 42) post 4.9 us (sum 324.7, dream 126, 18 experts)
+mt2s4|s|bs32 normal|ok 3.4e-03/0.01|256.9/238.5us x0.928 [0.93,0.93]
+stages mt2s4 bs32 normal: route 1.4 gemm1 150.3 (56% of 84) gemm2 97.3 (43% of 42) post 4.7 us (sum 253.7, dream 126, 18 experts)
+mt4s4|s|bs32 normal|ok 3.4e-03/0.01|397.8/238.0us x0.599 [0.60,0.60]
+stages mt4s4 bs32 normal: route 1.7 gemm1 221.9 (38% of 84) gemm2 165.1 (25% of 42) post 4.8 us (sum 393.6, dream 126, 18 experts)
+an vs sglang|s|bs32 normal|ok 0.0e+00/1.00|228.7/238.8us x1.046 [1.04,1.05]
+mt1s4|s|bs128 normal|ok 3.4e-03/0.01|311.1/476.4us x1.531 [1.53,1.54]
+stages mt1s4 bs128 normal: route 5.3 gemm1 193.1 (58% of 112) gemm2 106.6 (52% of 56) post 4.3 us (sum 309.2, dream 167, 24 experts)
+mt1s8|s|bs128 normal|ok 3.4e-03/0.01|422.1/475.0us x1.127 [1.12,1.13]
+stages mt1s8 bs128 normal: route 5.3 gemm1 245.3 (45% of 112) gemm2 166.8 (33% of 56) post 4.8 us (sum 422.2, dream 167, 24 experts)
+mt2s4|s|bs128 normal|ok 3.4e-03/0.01|335.8/476.7us x1.420 [1.42,1.42]
+stages mt2s4 bs128 normal: route 5.3 gemm1 198.8 (56% of 112) gemm2 123.8 (45% of 56) post 4.5 us (sum 332.4, dream 167, 24 experts)
+mt4s4|s|bs128 normal|ok 3.4e-03/0.01|478.7/475.1us x0.993 [0.99,0.99]
+stages mt4s4 bs128 normal: route 5.2 gemm1 266.8 (42% of 112) gemm2 199.3 (28% of 56) post 4.3 us (sum 475.6, dream 167, 24 experts)
+an vs sglang|s|bs128 normal|ok 0.0e+00/1.00|295.1/474.4us x1.607 [1.61,1.61]
+mt1s4|s|bs256 normal|ok 3.4e-03/0.01|386.2/576.3us x1.492 [1.49,1.50]
+stages mt1s4 bs256 normal: route 9.9 gemm1 238.4 (45% of 107) gemm2 133.1 (40% of 53) post 5.5 us (sum 386.8, dream 160, 23 experts)
+mt1s8|s|bs256 normal|ok 3.4e-03/0.01|518.5/574.6us x1.107 [1.11,1.11]
+stages mt1s8 bs256 normal: route 9.8 gemm1 299.6 (36% of 107) gemm2 202.5 (26% of 53) post 5.8 us (sum 517.7, dream 160, 23 experts)
+mt2s4|s|bs256 normal|ok 3.4e-03/0.01|378.1/574.6us x1.519 [1.52,1.52]
+stages mt2s4 bs256 normal: route 9.2 gemm1 223.2 (48% of 107) gemm2 138.4 (39% of 53) post 5.2 us (sum 376.0, dream 160, 23 experts)
+mt4s4|s|bs256 normal|ok 3.4e-03/0.01|502.0/576.3us x1.149 [1.15,1.15]
+stages mt4s4 bs256 normal: route 9.6 gemm1 275.0 (39% of 107) gemm2 208.6 (26% of 53) post 5.6 us (sum 498.9, dream 160, 23 experts)
+an vs sglang|s|bs256 normal|ok 0.0e+00/1.00|386.7/577.3us x1.494 [1.49,1.50]
+mt1s4|t|bs128 skewed|ok 3.4e-03/0.01
+mt1s8|t|bs128 skewed|ok 3.4e-03/0.01
+mt2s4|t|bs128 skewed|ok 3.4e-03/0.01
+mt4s4|t|bs128 skewed|ok 3.4e-03/0.01
+mt1s4|t|bs257 normal|ok 3.4e-03/0.01
+mt1s8|t|bs257 normal|ok 3.4e-03/0.01
+mt2s4|t|bs257 normal|ok 3.4e-03/0.01
+mt4s4|t|bs257 normal|ok 3.4e-03/0.01
+mt1s4|t|bs33 normal|ok 3.4e-03/0.01
+mt1s8|t|bs33 normal|ok 3.4e-03/0.01
+mt2s4|t|bs33 normal|ok 3.4e-03/0.01
+mt4s4|t|bs33 normal|ok 3.4e-03/0.01
+sim mt1s4: 9 cases in 2 s
+sim scored: 6 cases, 0 wrong, speedup geomean 1.313, min 1.004 (bs32 normal)
+sim tests: 3 cases, 0 wrong
+sim mt1s8: 9 cases in 2 s
+sim scored: 6 cases, 0 wrong, speedup geomean 1.094, min 0.723 (bs32 normal)
+sim tests: 3 cases, 0 wrong
+sim mt2s4: 9 cases in 2 s
+sim scored: 6 cases, 0 wrong, speedup geomean 1.180, min 0.928 (bs32 normal)
+sim tests: 3 cases, 0 wrong
+sim mt4s4: 9 cases in 2 s
+sim scored: 6 cases, 0 wrong, speedup geomean 0.857, min 0.599 (bs32 normal)
+sim tests: 3 cases, 0 wrong
+sim plan vs sglang: 6 cases in 2 s
+sim scored: 6 cases, 0 wrong, speedup geomean 1.429, min 1.046 (bs32 normal)
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:10:58 78:78 SyncActivityProfilerHandler.cpp:46] profiler_stop

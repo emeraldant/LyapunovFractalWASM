@@ -84,6 +84,28 @@ Plan (v4), each with its predicted saving per MODE 2 iteration:
 Target ~100 instructions per 1024 weights (MODE 2), ~185 per 2048 (MODE 1): issue ceiling
 ~5.7-6.2 TB/s, so DRAM, not issue, binds.
 
+### v4 / v5 measured (runs b873639f, 640a6584; % of dream per GEMM)
+
+v4 = 8-op unpack layout (exhaustive search) + loop unrolled by stages; v5 = warp-specialized
+(producer warp, cp.async.bulk, full/empty mbarriers, no CTA barrier) + paired scale decode.
+SASS per 128-k chunk at MT 1: GEMM2 150 (v3) -> 112 (v4) -> 83 (v5); GEMM1 276 -> 197 -> 150.
+
+| bs | v5 ws mt1 4 st 4 CTA: GEMM1 / GEMM2 (% dream) | total | v4 total | Marlin plan |
+|---|---|---|---|---|
+| 1 | 24.4 (38%) / 16.0 (29%) | 47.8 | 52.5 | 45.8 |
+| 8 | 51.5 (72%) / 26.6 (70%) | 86.5 | 103.6 | 104.4 |
+| 16 | 68.7 (68%) / 41.5 (56%) | 117.8 | 130.8 | 124.9 |
+| 32 | 126.5 (66%) / 66.8 (63%) | 202.6 | 207.7 | 225.5 |
+| 128 | 163.1 (68%) / 88.0 (63%) | 263.4 | 267.8 | 293.1 |
+| 256 | 199.2 (54%) / 131.6 (41%) | 348.2 | 339.0 | 382.5 |
+
+Sim geomean vs SGLang: v5 1.564, v4 1.463, Marlin plan 1.434. Fewer instructions helped
+small/medium batches (bs 8: 59% -> 72%) but not bs 256 (still 41-54%), so at large batch the
+binding constraint is no longer issue. Open questions, to answer before the next change:
+- bs 256 has 23 experts and ~300 local routes: GEMM items with >1 chunk per expert re-read
+  the same weights (MT 1 = 16 rows); are those re-reads hitting L2 or DRAM?
+- bs 1 (2-3 experts, ~165 items on 132 SMs x 4 CTAs) is parallelism-bound: split K.
+
 ### Why v3 is still ~1.8x off the roofline
 
 Measured per-CTA chunk times (0.5-1.2 µs per 9.2 KB chunk) would need ~3.6 µs of DRAM

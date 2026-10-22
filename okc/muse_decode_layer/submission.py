@@ -721,9 +721,14 @@ def _align_local_kernel(ids_ptr, local_start_ptr, sorted_ptr, block_expert_ptr, 
                         E: tl.constexpr, BS: tl.constexpr, BS_P2: tl.constexpr, CHUNK: tl.constexpr,
                         BLOCKS_CHUNK: tl.constexpr):
     """Sort the P = tokens * top_k routes that land on local experts [local_start,
-    local_start + E) (mod NE; local_start is read from device memory) into Marlin's layout: each expert's routes (in route order) padded to a
-    multiple of BS with the sentinel P; block_expert[i] is block i's local expert (-1 past
-    the end); local_ids[p] is route p's local expert or -1."""
+    local_start + E) (mod NE; local_start is read from device memory) into Marlin's layout:
+    each expert's routes (in route order) padded to a multiple of BS with the sentinel P;
+    block_expert[i] is block i's local expert (-1 past the end); local_ids[p] is route p's
+    local expert or -1.
+
+    One program per local expert: each counts every expert's routes (for the padded
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
     experts = tl.arange(0, E)
     offs = tl.arange(0, CHUNK)
     local_start = tl.load(local_start_ptr)
@@ -731,39 +736,42 @@ def _align_local_kernel(ids_ptr, local_start_ptr, sorted_ptr, block_expert_ptr, 
     for c0 in range(0, P, CHUNK):
         p = c0 + offs
         loc = (tl.load(ids_ptr + p, mask=p < P, other=0) - local_start + NE) % NE
-        hit = ((loc[:, None] == experts[None, :]) & (p < P)[:, None]).to(tl.int32)
-        counts += tl.sum(hit, axis=0)
+        # Non-local routes and the chunk's tail land in bin E, which is dropped.
+        loc = tl.where((p < P) & (loc < E), loc, E)
+        counts += _bins(loc, E)
     padded = (counts + BS - 1) // BS * BS
     ends = tl.cumsum(padded, axis=0)
     starts = ends - padded
     total = tl.sum(padded, axis=0)
+    my_start = tl.sum(tl.where(experts == e, starts, 0), axis=0)
+    my_count = tl.sum(tl.where(experts == e, counts, 0), axis=0)
+    my_padded = tl.sum(tl.where(experts == e, padded, 0), axis=0)
 
-    running = tl.zeros((E,), tl.int32)
+    running = my_start
     for c0 in range(0, P, CHUNK):
         p = c0 + offs
         in_range = p < P
         loc = (tl.load(ids_ptr + p, mask=in_range, other=0) - local_start + NE) % NE
-        valid = (loc >= 0) & (loc < E) & in_range
-        hit = ((loc[:, None] == experts[None, :]) & valid[:, None]).to(tl.int32)
-        before = tl.cumsum(hit, axis=0) - hit  # earlier routes to the same expert in this chunk
-        pos = tl.sum((before + (starts + running)[None, :]) * hit, axis=1)
-        tl.store(sorted_ptr + pos, p, mask=valid)
-        tl.store(local_ids_ptr + p, tl.where(valid, loc, -1), mask=in_range)
-        running += tl.sum(hit, axis=0)
+        mine = (loc == e) & in_range
+        rank = tl.cumsum(mine.to(tl.int32), axis=0) - 1
+        tl.store(sorted_ptr + running + rank, p, mask=mine)
+        running += tl.sum(mine.to(tl.int32), axis=0)
+        if e == 0:
+            tl.store(local_ids_ptr + p, tl.where(loc < E, loc, -1), mask=in_range)
 
-    # Padding: each expert's slots [start + count, start + padded) get the sentinel.
-    j = tl.arange(0, BS_P2)  # BS may be 48: arange needs a power of two
-    pad_pos = (starts + counts)[:, None] + j[None, :]
-    tl.store(sorted_ptr + pad_pos, P, mask=j[None, :] < (padded - counts)[:, None])
-
+    # This expert's padding and its blocks' expert ids.
+    j = tl.arange(0, BS_P2)
+    tl.store(sorted_ptr + my_start + my_count + j, P, mask=j < my_padded - my_count)
     bo = tl.arange(0, BLOCKS_CHUNK)
-    for b0 in range(0, MAX_BLOCKS, BLOCKS_CHUNK):
+    for b0 in range(0, my_padded // BS, BLOCKS_CHUNK):
         blk = b0 + bo
-        first = blk * BS
-        e = tl.sum((ends[None, :] <= first[:, None]).to(tl.int32), axis=1)
-        e = tl.where(first < total, e, -1)
-        tl.store(block_expert_ptr + blk, e, mask=blk < MAX_BLOCKS)
-    tl.store(n_padded_ptr, total)
+        tl.store(block_expert_ptr + my_start // BS + blk, e, mask=blk < my_padded // BS)
+    if e == 0:
+        tl.store(n_padded_ptr, total)
+        # Blocks past the end.
+        for b0 in range(0, MAX_BLOCKS, BLOCKS_CHUNK):
+            blk = b0 + bo
+            tl.store(block_expert_ptr + blk, -1, mask=(blk < MAX_BLOCKS) & (blk * BS >= total))
 
 
 @triton.jit
@@ -826,10 +834,10 @@ def _moe_fast(x, ids, topk_weights, local_start, state, block_size_m, atomic):
     block_experts = torch.empty((max_blocks,), dtype=torch.int32, device=x.device)
     n_padded = torch.empty((1,), dtype=torch.int32, device=x.device)
     local_ids = torch.empty((num_tokens, TOP_K), dtype=torch.int32, device=x.device)
-    _align_local_kernel[(1,)](ids, local_start, sorted_ids, block_experts, n_padded, local_ids,
+    _align_local_kernel[(count,)](ids, local_start, sorted_ids, block_experts, n_padded, local_ids,
                               p, max_blocks, NE=N_EXPERTS, E=count, BS=block_size_m,
                               BS_P2=triton.next_power_of_2(block_size_m), CHUNK=ALIGN_CHUNK,
-                              BLOCKS_CHUNK=min(512, triton.next_power_of_2(max_blocks)), num_warps=8)
+                              BLOCKS_CHUNK=min(512, triton.next_power_of_2(max_blocks)), num_warps=4)
     y = _experts(x, bank, state, sorted_ids, block_experts, n_padded, local_ids, topk_weights,
                  block_size_m, atomic)
     out = torch.empty((num_tokens, hidden), dtype=x.dtype, device=x.device)

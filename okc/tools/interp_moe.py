@@ -32,7 +32,7 @@ for bs in (1, 4, 8, 16, 33, 128, 257):
         blocks = torch.full((max_blocks,), -7, dtype=torch.int32)
         n_pad = torch.zeros(1, dtype=torch.int32)
         local = torch.empty((bs, 8), dtype=torch.int32)
-        S._align_local_kernel[(1,)](ids, torch.zeros(1, dtype=torch.int32), sorted_ids, blocks, n_pad, local,
+        S._align_local_kernel[(32,)](ids, torch.zeros(1, dtype=torch.int32), sorted_ids, blocks, n_pad, local,
                                     p, max_blocks, NE=256, E=32, BS=bsm, BS_P2=1 << (bsm - 1).bit_length(), CHUNK=S.ALIGN_CHUNK,
                                     BLOCKS_CHUNK=min(512, 1 << (max_blocks - 1).bit_length()))
         flat = ids.flatten().long()

@@ -208,3 +208,27 @@ boards are wide open. "packed" adds lossless weight compression (below).
 | B 1 ctx 32768 q 16384 full | 16 | 2604.7 | 8248.99 | 3167 | 8340.7 | 9980.9 | 9980.9 | att 33% moe 28% dense 38% |  |
 | B 1 ctx 65536 q 16384 full | 16 | 2613.1 | 10448.01 | 3998 | 10564.2 | 11672.4 | 11672.4 | att 47% moe 22% dense 30% |  |
 
+
+## Measured on the judge's H200 (Oct 22)
+
+From check runs (okc/runs/; `python3 tools/analyze.py <run> --profiles`) and a probe run
+(tools/probes.py inside the MoE prepare, run 8433b3e3):
+
+| quantity | measured |
+|---|---|
+| clocks | SM 1980 MHz, memory 3201 MHz |
+| replay overhead the judge subtracts | ~4.1 µs per shape |
+| extra kernel inside a CUDA graph | +0.95-1.4 µs each |
+| contiguous reads, cold L2 | 0.74 TB/s at 1 MB, 2.3 at 8 MB, 3.4 at 38 MB, 3.6 at 75 MB, 3.9 at 340 MB, 4.06 at 690 MB |
+| random 128 B rows (paged KV, page 1) | 2.3 TB/s at 20 MB, 3.3 at 164 MB, 3.8 at 328 MB, 4.03 at 655 MB: no gather penalty |
+
+What SGLang's kernels achieve on the scored shapes:
+
+| kernel | shape | achieved |
+|---|---|---|
+| cuBLAS BF16 GEMV/GEMM | qkv_gate / pooler, m 1-32 | 2.6 / 3.2 TB/s |
+| Marlin W4A16 MoE (two GEMMs) | bs 1 / bs 256 | 2.2 / 1.9 TB/s |
+| FA3 decode, paged FP8 | B 16 / B 32 full layer | 1.66 / 1.33 TB/s |
+
+So the headroom is in memory efficiency: FA3's full layers run at a third of what random
+128 B gathers achieve, Marlin at about half of streaming.

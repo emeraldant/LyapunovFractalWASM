@@ -14,13 +14,13 @@ BW_PEAK = 4.8e12          # B/s HBM3e
 BF16_PEAK = 989e12        # dense BF16 tensor FLOP/s
 FP8_PEAK = 1979e12        # dense FP8 tensor FLOP/s
 # Assumed achievable rates (to calibrate).
-BW_STREAM = 4.3e12        # long contiguous reads, cold L2 (~90% of peak)
-BW_GATHER = 3.6e12        # one random 128 B row per key per cache (page size 1, ~75%)
+BW_STREAM = 4.06e12       # measured (probe run 8433b3e3): contiguous reads, cold L2, 690 MB
+BW_GATHER = 4.03e12       # measured: random 128 B rows, 655 MB -- no penalty vs streaming
 BF16_EFF = 700e12         # wgmma BF16 at realistic clocks/occupancy (~70%)
 FP8_EFF = 1300e12
 ALU = 132 * 64 * 1.83e9   # INT32/LOP3/shift lane-ops/s (15.5 T): dequant is integer work
 DEQUANT_OPS = 1.875       # INT ops per NVFP4 weight in Marlin's sequence (tools/exact.py)
-STAGE_US = 1.0            # per dependent kernel stage beyond the first: launch gap + ramp + tail
+STAGE_US = 1.0            # measured: +0.95-1.4 µs per extra kernel in a CUDA graph
                           # (the judge subtracts ~4 us of graph replay cost per shape)
 
 H, D_EXP, N_EXP, TOPK, LOCAL = 8192, 4096, 256, 8, 32

@@ -1,0 +1,62 @@
+  event bs8 s1dw abl 0 gemm1: 106.7 us (launch to end, eager, cold L2)
+  prof bs8 s1dw         full gemm1 (7 exp): 448 items on 132 SMs, span 45.3 us, 2.92 TB/s; slot use 64%; 90% done at 42.5 us (tail 2.8); starts 0.3/24.8/26.6 us (p50/p90/max); SM clock 1.769 GHz; item 17.9 us med, 24.1 p90; producer waits 69%; items/SM 4 max 3.4 mean
+  event bs8 s1dw abl 0 gemm2: 74.5 us (launch to end, eager, cold L2)
+  prof bs8 s1dw         full gemm2 (7 exp): 224 items on 132 SMs, span 24.6 us, 2.69 TB/s; slot use 57%; 90% done at 23.6 us (tail 1.0); starts 0.3/0.3/0.3 us (p50/p90/max); SM clock 1.749 GHz; item 16.4 us med, 18.7 p90; producer waits 75%; items/SM 2 max 1.7 mean
+  event bs8 s1dw abl 1 gemm1: 50.4 us (launch to end, eager, cold L2)
+  prof bs8 s1dw      no math gemm1 (7 exp): 448 items on 132 SMs, span 43.0 us, 3.07 TB/s; slot use 62%; 90% done at 40.7 us (tail 2.3); starts 0.0/25.9/26.1 us (p50/p90/max); SM clock 1.973 GHz; item 16.4 us med, 20.7 p90; producer waits 85%; items/SM 4 max 3.4 mean
+  event bs8 s1dw abl 1 gemm2: 37.7 us (launch to end, eager, cold L2)
+  prof bs8 s1dw      no math gemm2 (7 exp): 224 items on 132 SMs, span 21.8 us, 3.04 TB/s; slot use 56%; 90% done at 21.5 us (tail 0.3); starts 0.0/0.0/0.0 us (p50/p90/max); SM clock 1.972 GHz; item 14.8 us med, 15.9 p90; producer waits 90%; items/SM 2 max 1.7 mean
+  event bs8 s1dwsk2 abl 0 gemm1: 78.7 us (launch to end, eager, cold L2)
+  prof bs8 s1dwsk2         full gemm1 (7 exp): 640 items on 132 SMs, span 1792786813097006.5 us, 0.00 TB/s; slot use 0%; 90% done at 1792786813097001.5 us (tail 5.1); starts 1792786813096961.8/1792786813096988.8/1792786813097001.8 us (p50/p90/max); SM clock 1.775 GHz; item 7.9 us med, 20.7 p90; producer waits 83%; items/SM 189 max 4.8 mean
+  event bs8 s1dwsk2 abl 0 gemm2: 46.3 us (launch to end, eager, cold L2)
+  prof bs8 s1dwsk2         full gemm2 (7 exp): 224 items on 104 SMs, span 1792786813097778.2 us, 0.00 TB/s; slot use 0%; 90% done at 1792786813097777.0 us (tail 1.3); starts 0.0/1792786813097754.2/1792786813097754.2 us (p50/p90/max); SM clock 1.747 GHz; item 0.0 us med, 17.7 p90; producer waits 72%; items/SM 113 max 2.2 mean
+  event bs8 s1dwsk2 abl 1 gemm1: 51.8 us (launch to end, eager, cold L2)
+  prof bs8 s1dwsk2      no math gemm1 (7 exp): 640 items on 132 SMs, span 1792786813098685.5 us, 0.00 TB/s; slot use 0%; 90% done at 1792786813098684.0 us (tail 1.5); starts 1792786813098645.8/1792786813098670.5/1792786813098681.8 us (p50/p90/max); SM clock 1.982 GHz; item 6.7 us med, 21.5 p90; producer waits 95%; items/SM 189 max 4.8 mean
+  event bs8 s1dwsk2 abl 1 gemm2: 38.0 us (launch to end, eager, cold L2)
+  prof bs8 s1dwsk2      no math gemm2 (7 exp): 224 items on 104 SMs, span 1792786813099346.5 us, 0.00 TB/s; slot use 0%; 90% done at 1792786813099346.0 us (tail 0.5); starts 0.0/1792786813099325.0/1792786813099325.0 us (p50/p90/max); SM clock 1.984 GHz; item 0.0 us med, 16.3 p90; producer waits 89%; items/SM 113 max 2.2 mean
+  event bs32 s1dw abl 0 gemm1: 85.1 us (launch to end, eager, cold L2)
+  prof bs32 s1dw         full gemm1 (13 exp): 960 items on 132 SMs, span 77.6 us, 3.16 TB/s; slot use 79%; 90% done at 70.7 us (tail 6.9); starts 26.4/52.2/63.0 us (p50/p90/max); SM clock 1.760 GHz; item 17.4 us med, 22.3 p90; producer waits 50%; items/SM 8 max 7.3 mean
+  event bs32 s1dw abl 0 gemm2: 63.7 us (launch to end, eager, cold L2)
+  prof bs32 s1dw         full gemm2 (13 exp): 480 items on 132 SMs, span 43.8 us, 2.80 TB/s; slot use 66%; 90% done at 42.2 us (tail 1.5); starts 0.0/25.3/27.1 us (p50/p90/max); SM clock 1.769 GHz; item 16.4 us med, 22.0 p90; producer waits 67%; items/SM 4 max 3.6 mean
+  event bs32 s1dw abl 1 gemm1: 75.2 us (launch to end, eager, cold L2)
+  prof bs32 s1dw      no math gemm1 (13 exp): 960 items on 132 SMs, span 68.1 us, 3.60 TB/s; slot use 75%; 90% done at 65.0 us (tail 3.1); starts 26.1/53.8/58.9 us (p50/p90/max); SM clock 1.970 GHz; item 13.8 us med, 21.0 p90; producer waits 73%; items/SM 10 max 7.3 mean
+  event bs32 s1dw abl 1 gemm2: 54.7 us (launch to end, eager, cold L2)
+  prof bs32 s1dw      no math gemm2 (13 exp): 480 items on 132 SMs, span 37.1 us, 3.31 TB/s; slot use 71%; 90% done at 36.6 us (tail 0.5); starts 0.0/23.6/24.1 us (p50/p90/max); SM clock 1.970 GHz; item 14.8 us med, 20.2 p90; producer waits 80%; items/SM 4 max 3.6 mean
+  event bs32 s1dwsk2 abl 0 gemm1: 98.8 us (launch to end, eager, cold L2)
+  prof bs32 s1dwsk2         full gemm1 (13 exp): 1152 items on 132 SMs, span 1792786813104307.5 us, 0.00 TB/s; slot use 0%; 90% done at 1792786813104295.5 us (tail 12.0); starts 1792786813104225.8/1792786813104278.0/1792786813104303.0 us (p50/p90/max); SM clock 1.769 GHz; item 6.7 us med, 19.2 p90; producer waits 66%; items/SM 466 max 8.7 mean
+  event bs32 s1dwsk2 abl 0 gemm2: 61.5 us (launch to end, eager, cold L2)
+  prof bs32 s1dwsk2         full gemm2 (13 exp): 672 items on 132 SMs, span 1792786813105052.0 us, 0.00 TB/s; slot use 0%; 90% done at 1792786813105044.5 us (tail 7.4); starts 1792786813105004.5/1792786813105032.8/1792786813105048.0 us (p50/p90/max); SM clock 1.766 GHz; item 6.7 us med, 19.9 p90; producer waits 70%; items/SM 205 max 5.1 mean
+  event bs32 s1dwsk2 abl 1 gemm1: 87.7 us (launch to end, eager, cold L2)
+  prof bs32 s1dwsk2      no math gemm1 (13 exp): 1152 items on 132 SMs, span 1792786813106084.2 us, 0.00 TB/s; slot use 0%; 90% done at 1792786813106077.0 us (tail 7.4); starts 1792786813106008.2/1792786813106062.5/1792786813106081.2 us (p50/p90/max); SM clock 1.972 GHz; item 5.6 us med, 19.2 p90; producer waits 84%; items/SM 464 max 8.7 mean
+  event bs32 s1dwsk2 abl 1 gemm2: 56.5 us (launch to end, eager, cold L2)
+  prof bs32 s1dwsk2      no math gemm2 (13 exp): 672 items on 132 SMs, span 1792786813106835.2 us, 0.00 TB/s; slot use 0%; 90% done at 1792786813106831.8 us (tail 3.3); starts 1792786813106793.5/1792786813106821.5/1792786813106832.2 us (p50/p90/max); SM clock 1.977 GHz; item 6.4 us med, 19.7 p90; producer waits 89%; items/SM 207 max 5.1 mean
+routing bs8 seed 8950010: tokens per local expert [3, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+check s1dw bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal
+check s1dwsk2 bs8: rel diff vs v6 1.2e-04, row worst 2.1e-04, repeat equal
+routing bs32 seed 8950011: tokens per local expert [32, 32, 15, 4, 4, 3, 3, 2, 1, 1, 1, 1, 1]
+check s1dw bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal
+check s1dwsk2 bs32: rel diff vs v6 1.9e-04, row worst 5.5e-04, repeat equal
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 20:26:34 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

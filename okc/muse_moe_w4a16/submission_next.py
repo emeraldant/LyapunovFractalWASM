@@ -1084,12 +1084,46 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       }
     }
     // Producer (as v5): first item static, then the global counter; one end marker.
+    // flags & 64 (not stream K): the next item's metadata is fetched one dependent step per
+    // stage over the current item's last stages (claim -> active -> exp_start -> row_route),
+    // so each load has a stage time to land before use instead of four round trips at the
+    // item boundary with the ring draining. The claim stays late (PF_LEAD stages before the
+    // end), so dynamic balancing is unchanged.
+    constexpr int PF_LEAD = 5;
+    const bool pf = (flags & 64) && !sk;
+    int nx_raw = 0, nx_item = 0, nx_ch = 0, nx_es0 = 0, nx_es1 = 0, nx_src = 0, nx_step = 0;
+    auto pf_step = [&](int step) {
+      if (step == 0) {
+        if (lane == 0) nx_raw = atomicAdd(sched, 1);
+      } else if (step == 1) {
+        nx_item = (int)gridDim.x + __shfl_sync(0xffffffffu, nx_raw, 0);
+        if (nx_item < total) nx_ch = active[(nx_item / kparts) / n_blocks];
+      } else if (step == 2) {
+        if (nx_item < total) {
+          nx_es0 = exp_start[nx_ch & 255];
+          nx_es1 = exp_start[(nx_ch & 255) + 1];
+        }
+      } else if (nx_item < total) {
+        const int r0 = nx_es0 + (nx_ch >> 8) * MT * 8;
+        nx_src = 0;
+        if (lane < min(MT * 8, nx_es1 - r0)) nx_src = MODE == 1 ? row_route[r0 + lane] / 8 : r0 + lane;
+      }
+    };
     uint32_t f = 0;
     int u = s0;
     for (bool first = true;; first = false) {
       int item = blockIdx.x, kb = 0, ke = nch;
       bool done;
-      if (sk) {
+      bool have_nx = false;
+      if (pf && !first) {
+        for (; nx_step < 4; ++nx_step) pf_step(nx_step);   // finish what the item did not cover
+        nx_step = 0;
+        item = nx_item;
+        have_nx = true;
+        done = item >= total;
+        kb = (item % kparts) * nch;
+        ke = kb + nch;
+      } else if (sk) {
         done = u >= s1;
         if (!done) {
           item = u / NU;
@@ -1123,12 +1157,14 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       }
       const int it = sk ? item : item / kparts;
       const int nb = it % n_blocks;
-      const int ch = active[it / n_blocks];
+      const int ch = have_nx ? nx_ch : active[it / n_blocks];
       const int e = ch & 255, mc = ch >> 8;
-      const int row0 = exp_start[e] + mc * MT * 8;
-      const int live = min(MT * 8, exp_start[e + 1] - row0);
+      const int es0 = have_nx ? nx_es0 : exp_start[e], es1 = have_nx ? nx_es1 : exp_start[e + 1];
+      const int row0 = es0 + mc * MT * 8;
+      const int live = min(MT * 8, es1 - row0);
       int src = 0;
-      if (lane < live) src = MODE == 1 ? row_route[row0 + lane] / 8 : row0 + lane;
+      if (have_nx) src = nx_src;
+      else if (lane < live) src = MODE == 1 ? row_route[row0 + lane] / 8 : row0 + lane;
       const uint8_t* a_row = reinterpret_cast<const uint8_t*>(a_src + (size_t)src * KTOT);
       const uint8_t* w_blk = wq + ((size_t)e * n_blocks + nb) * NCHUNK * C::W_STAGE;
       const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * NCHUNK * C::S_STAGE;
@@ -1153,6 +1189,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
         }
         __syncwarp();
         if (!(abl & 6) && lane < live) bulk_g2s(sb + lane * C::A_ROW, a_row + kc * 256 * SUB, 256 * SUB, full);
+        if (pf && nx_step < 4 && kc >= ke - PF_LEAD) pf_step(nx_step++);
       }
       if (PROF && lane == 0) prof[prec * PSTR + 4] = pw;
     }
@@ -1937,6 +1974,9 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
 #define SPCASES(A_) SPCASE(1, 2, 4, A_) SPCASE(2, 2, 4, A_) SPCASE(1, 1, 4, A_) SPCASE(2, 1, 4, A_)
     SPCASES(0) SPCASES(1) SPCASES(2) SPCASES(3) SPCASES(4) SPCASES(12) SPCASES(20) SPCASES(28)
     SPCASE(1, 1, 8, 0) SPCASE(2, 1, 8, 0)
+#define SPCASE2(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == 200 + S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
+#define SPCASES2(A_) SPCASE2(1, 1, 4, A_) SPCASE2(2, 1, 4, A_)
+    SPCASES2(0) SPCASES2(1) SPCASES2(4) SPCASES2(12) SPCASES2(20) SPCASES2(28)
 #endif
     TORCH_CHECK(false, "moe_gemm_sab: no profiling build for this configuration (needs -DOKC_PROF)");
   }
@@ -2298,7 +2338,7 @@ def ws_layout(bank):
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
-                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2):
+                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -2360,6 +2400,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     kparts2 = kparts if kparts2 is None else kparts2
     split = sab and kparts > 1
     split2 = sab and kparts2 > 1
+    pf64 = 64 if mpf else 0   # v6 producer: next item's metadata fetched over the current item's last stages
     fuse1 = fuse and split and not sk   # GEMM1's split parts reduced by their last CTA (no reduction kernel)
     part1 = torch.empty((kparts, p, 8192), dtype=torch.float32, device=device) if split else no_part
     part2 = torch.empty((kparts2, p, 4096), dtype=torch.float32, device=device) if split2 else no_part
@@ -2379,10 +2420,10 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
             if dualsab:
                 mod.moe_gemm_sab(1, mt2, stages_big, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"],
                                  active2, n_active2, exp_start, inter, 64, 132 * ctas2, prof[0], sched[4:6], abl, 1,
-                                 no_part, 32, no_u8, no_u8, no_i32)
+                                 no_part, 32 | pf64, no_u8, no_u8, no_i32)
             mod.moe_gemm_sab(1, mt, stages, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
                              n_active[0:1], exp_start, inter, 64, grid, prof[0], sched[0:2], abl, kparts, part1,
-                             int(sk) | (4 if l2pf else 0) | (8 if fuse1 else 0) | (16 if (dualv8 or dualsab) else 0),
+                             int(sk) | (4 if l2pf else 0) | (8 if fuse1 else 0) | (16 if (dualv8 or dualsab) else 0) | pf64,
                              bank["w2q_sab"] if l2pf else no_u8,
                              bank["w2s_sab"] if l2pf else no_u8, bank["cnt"] if fuse1 else no_i32)
             if split and not fuse1:
@@ -2407,10 +2448,10 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
             if dualsab:
                 mod.moe_gemm_sab(2, mt2, stages_big, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"],
                                  active2, n_active2, exp_start, y, 32, 132 * ctas2, prof[1], sched[6:8], abl, 1, no_part,
-                                 32, no_u8, no_u8, no_i32)
+                                 32 | pf64, no_u8, no_u8, no_i32)
             mod.moe_gemm_sab(2, mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
                              n_active[0:1], exp_start, y, 32, grid, prof[1], sched[2:4], abl, kparts2, part2,
-                             int(sk) | (2 if pdl else 0) | (16 if (dualv8 or dualsab) else 0), no_u8, no_u8, no_i32)
+                             int(sk) | (2 if pdl else 0) | (16 if (dualv8 or dualsab) else 0) | pf64, no_u8, no_u8, no_i32)
             return
         g2(2, mt, stages, inter, row_route, bank["w2q" + sfx], bank["w2s" + sfx], bank["w2_gs"], active, n_active,
              exp_start, y, 512 // 8, grid)
@@ -2448,6 +2489,11 @@ CUDA_CONFIGS = {
                                                                  # on s2q as its PDL co-runner (bs 256)
     "s1dw2fp": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True),   # bs 1: K split 2,
                                                                  # parts reduced in GEMM1, GEMM2 a PDL dependent
+    # mpf: the v6 producer fetches the next item's metadata over the current item's last stages
+    "s1dwpf": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, mpf=True),
+    "s2wpf": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, mpf=True),
+    "s2qpf": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, mpf=True),
+    "s1k4pf": dict(mt=1, stages=4, ctas_per_sm=4, sab=True, kparts=4, mpf=True),
     "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens
     "t4": dict(mt=4, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA, 32 tokens (2 CTAs/SM)
     "v8": dict(mt=8, stages=504, ctas_per_sm=2, wg=True),        # v7, 64-row chunks, wgmma width per chunk

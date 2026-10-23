@@ -416,3 +416,12 @@ s1dw ablations (profiling build, cold L2, synthetic weights, judge-like routing)
   Note the stage time (60.1) vs the in-kernel item span (45.1): ~15 us sits outside the items
   (launch, first fill, exit) - probe moe_skprof_attn times the launches with events beside the
   span, for s1dw and s1dwsk2, full and memory-only.
+- Profiled sk (run after ff6e0fea): sk's records are not comparable (item layout), and the eager
+  event times carry Python launch gaps (useless); but memory-only sk 51.8 vs s1dw 50.4 us eager:
+  balancing does not help even without math, and producers wait on the ring 69-95% of the time.
+  Suspect: the item boundary. The producer resolves claim -> active -> exp_start -> row_route (four
+  dependent global round trips, several us under load) before issuing the new item's first copy,
+  with only 4 stages (~4 us) buffered; sk adds boundaries. Fix (flag 64, option mpf, configs *pf):
+  fetch one step of the next item's chain per stage over the current item's last PF_LEAD = 5
+  stages, claim kept late so balancing is unchanged. Compiles (sm_90a), registers unchanged.
+  A/B probe moe_pf_attn.

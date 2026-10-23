@@ -144,6 +144,8 @@ def _prof_report(tag, buf, n_items, bytes_total, grid, clk_ghz=1.98):
     prod_wait = float(pw.sum() / cyc.sum())                             # producer blocked on free stages
     per_sm = torch.bincount(sm.long(), minlength=132)
     t_mma = r[:, 7]
+    ok = (dur > 0) & (cyc > 0)
+    clk = float(cyc[ok].sum() / dur[ok].sum()) if bool(ok.any()) else 0.0     # SM GHz: clock64 / globaltimer
     st = torch.sort(torch.minimum(t0, p0) - start).values / 1e3                # item start times, us
     starts = (f" starts {float(st[int(0.5 * (n_items - 1))]):.1f}/{float(st[int(0.9 * (n_items - 1))]):.1f}"
               f"/{float(st[-1]):.1f} us (p50/p90/max);")
@@ -157,7 +159,7 @@ def _prof_report(tag, buf, n_items, bytes_total, grid, clk_ghz=1.98):
         waits += ";"
     print(f"  prof {tag}: {n_items} items on {int((per_sm > 0).sum())} SMs, span {span / 1e3:.1f} us,"
           f" {bytes_total / span / 1e3:.2f} TB/s; slot use {100 * busy:.0f}%; 90% done at {t90 / 1e3:.1f} us"
-          f" (tail {(span - t90) / 1e3:.1f});{starts} item {float(dur.median()) / 1e3:.1f} us med,"
+          f" (tail {(span - t90) / 1e3:.1f});{starts} SM clock {clk:.3f} GHz; item {float(dur.median()) / 1e3:.1f} us med,"
           f" {float(dur.quantile(0.9)) / 1e3:.1f} p90;{waits} producer waits {100 * prod_wait:.0f}%; items/SM {int(per_sm.max())} max {float(per_sm[per_sm > 0].float().mean()):.1f} mean",
           flush=True)
 

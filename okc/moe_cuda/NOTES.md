@@ -335,3 +335,7 @@ one wave) but loses at bs 16 (2 warps per scheduler on far more items).
   252 / 240.5 us vs v8 249 / 270 / 251.5 (-3..-7%); loses at bs 64-128 (config s2qv16).
 - decode_layer: the CUDA expert path bundled with its own gate (configs s1k4 s1dw s2w s2q v8
   s2qv16), tested inside a prefill-board host (same layer weights) via exec of the submission.
+- In-kernel SM clock (clock64 / globaltimer per item, run dfe780fd): 1.70-1.79 GHz under our MoE
+  GEMMs at bs 8 / 32 / 256, full and math-only alike (1.76 typical; 1.70 in bs 256 GEMM2), not
+  the 1.98 spec (matches Guild post #12, power cap). Static instruction counts converted at
+  1.98 GHz were ~11% optimistic; µs-based conclusions unchanged.

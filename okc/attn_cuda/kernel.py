@@ -1186,6 +1186,39 @@ __device__ __forceinline__ uint64_t att_desc128(uint32_t addr) {
   return (uint64_t)((addr & 0x3FFFF) >> 4) | ((uint64_t)1 << 16) | ((uint64_t)(1024 >> 4) << 32) | (1ull << 62);
 }
 
+// Partials of attn_vwg_kernel, row-major: acc [slot][2 heads][64 rows][64 d], ml [slot][2][64][2].
+// The merge gives each of 256 threads one (head, row, half of d): 8 x 16 B loads per partial,
+// the next partial's loads issued before the current one's math.
+__device__ __forceinline__ void att_merge_h(const float* ws_acc, const float* ws_ml, size_t slot0, int count, int h,
+                                            int row, int half, float& M, float& Lsum, float o[32]) {
+  for (int k = 0; k < count; ++k) {
+    const size_t slot = slot0 + k;
+    const float2 ml = __ldcg(reinterpret_cast<const float2*>(ws_ml) + (slot * 2 + h) * 64 + row);
+    const float4* wa = reinterpret_cast<const float4*>(ws_acc + ((slot * 2 + h) * 64 + row) * 64 + 32 * half);
+    float4 cur[8];
+#pragma unroll
+    for (int i = 0; i < 8; ++i) cur[i] = __ldcg(wa + i);
+    const float mn = fmaxf(M, ml.x);
+    const float ms = mn == -ATT_INF ? 0.f : mn;
+    const float fa = ex2(M - ms), fb = ex2(ml.x - ms);
+    M = mn;
+    Lsum = Lsum * fa + ml.y * fb;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+      o[4 * i] = o[4 * i] * fa + cur[i].x * fb; o[4 * i + 1] = o[4 * i + 1] * fa + cur[i].y * fb;
+      o[4 * i + 2] = o[4 * i + 2] * fa + cur[i].z * fb; o[4 * i + 3] = o[4 * i + 3] * fa + cur[i].w * fb;
+    }
+  }
+}
+
+__device__ __forceinline__ void att_store_partial_h(float* ws_acc, float* ws_ml, size_t slot, int h, int row, int half,
+                                                    float M, float Lsum, const float o[32]) {
+  float4* wa = reinterpret_cast<float4*>(ws_acc + ((slot * 2 + h) * 64 + row) * 64 + 32 * half);
+#pragma unroll
+  for (int i = 0; i < 8; ++i) wa[i] = make_float4(o[4 * i], o[4 * i + 1], o[4 * i + 2], o[4 * i + 3]);
+  if (half == 0) reinterpret_cast<float2*>(ws_ml)[(slot * 2 + h) * 64 + row] = make_float2(M, Lsum);
+}
+
 template <int STAGES>
 __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
   extern __shared__ uint8_t smem_raw[];
@@ -1194,6 +1227,7 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
   __shared__ int s_nseg, s_last;
   __shared__ int s_pg[8][ATT_TILE];
   __shared__ __align__(16) float s_alpha[2][64];
+  __shared__ float s_ss[256];
 
   const int tid = threadIdx.x, lane = tid & 31;
   const int hw = tid >> 7, wt = tid & 127, w = wt >> 5;   // warpgroup = KV head of the pair; warp in it
@@ -1369,14 +1403,16 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
       for (int c = 0; c < 4; ++c) qa[hf][c] = att_e4m3x4(x[4 * c], x[4 * c + 1], x[4 * c + 2], x[4 * c + 3]);
       m_r[hf] = -ATT_INF; l_r[hf] = 0.f;
     }
-#pragma unroll
-    for (int i = 0; i < 32; ++i) o[i] = 0.f;
   };
+#pragma unroll
+  for (int i = 0; i < 32; ++i) o[i] = 0.f;   // zeroed again after each partial is stored
   if (nseg > 0) prep_q(s_sb[0]);
 
   // One 64-key tile for this warpgroup's head. mode 0: cached keys (nvalid valid; wpos >= 0: the
   // window's lower edge applies, wpos = position of key 0); mode 1: the block's own keys.
+  int tcount = 0;   // phase stamps 44 + 4 i .. (QK done, softmax done, PV issued, PV done) of tiles i < 4
   auto tile = [&](uint32_t st, const uint8_t* stg, int nvalid, int mode, int wpos, bool masked) {
+    const int tci = tcount++;
     float sacc[32];
 #pragma unroll
     for (int i = 0; i < 32; ++i) sacc[i] = 0.f;
@@ -1386,6 +1422,7 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
     wg_e4m3_64(sacc, qa[0][2], qa[1][2], qa[0][3], qa[1][3], dk + ((uint64_t)(64 * hw + 32) >> 4));
     asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
     asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+    if (tci < 4) ATT_STAMP(44 + 4 * tci);
     // softmax on rows ra (e = 0, 1) and rb (e = 2, 3); key of sacc[4 jj + e] = 8 jj + 2 t + (e & 1)
     float al[2];
 #pragma unroll
@@ -1433,6 +1470,7 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
       *reinterpret_cast<uint32_t*>(pbuf_g + (ra + 8) * 128 + co) = pack_h2(sacc[4 * jj + 2], sacc[4 * jj + 3]);
     }
     if (t == 0) { s_alpha[hw][ra] = al[0]; s_alpha[hw][ra + 8] = al[1]; }
+    if (tci < 4) ATT_STAMP(45 + 4 * tci);
     asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
     asm volatile("bar.sync %0, 128;\n" :: "r"(1 + hw) : "memory");
     // rescale O^T: column (row) 8 jj + 2 t (+1)
@@ -1463,7 +1501,9 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
 #pragma unroll
     for (int kk = 0; kk < 4; ++kk) wg_f16_64(o, va[kk][0], va[kk][1], va[kk][2], va[kk][3], dp + ((uint64_t)(32 * kk) >> 4));
     asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+    if (tci < 4) ATT_STAMP(46 + 4 * tci);
     asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+    if (tci < 4) ATT_STAMP(47 + 4 * tci);
     asm volatile("bar.sync %0, 128;\n" :: "r"(1 + hw) : "memory");   // P / alpha reused by the next tile
   };
 
@@ -1557,12 +1597,14 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
       // partial (slot cta + b): acc [slot][h][d][row], d = 8 g + w (rows g) / 8 g + 4 + w (g + 8)
       const size_t slot = (size_t)pair * (p.n_ctas + B) + cta + b;
       {
-        float* wa = p.ws_acc + (slot * 2 + hw) * 4096;
+        float* wa = p.ws_acc + (slot * 2 + hw) * 4096;   // [row][d]
 #pragma unroll
         for (int jj = 0; jj < 8; ++jj) {
           const int rr = 8 * jj + 2 * t;
-          *reinterpret_cast<float2*>(wa + (8 * g + w) * 64 + rr) = make_float2(o[4 * jj], o[4 * jj + 1]);
-          *reinterpret_cast<float2*>(wa + (8 * g + 4 + w) * 64 + rr) = make_float2(o[4 * jj + 2], o[4 * jj + 3]);
+          wa[rr * 64 + 8 * g + w] = o[4 * jj];
+          wa[(rr + 1) * 64 + 8 * g + w] = o[4 * jj + 1];
+          wa[rr * 64 + 8 * g + 4 + w] = o[4 * jj + 2];
+          wa[(rr + 1) * 64 + 8 * g + 4 + w] = o[4 * jj + 3];
         }
 #pragma unroll
         for (int hf = 0; hf < 2; ++hf) {
@@ -1571,6 +1613,8 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
           l += __shfl_xor_sync(0xffffffffu, l, 2);
           if (t == 0) reinterpret_cast<float2*>(p.ws_ml)[(slot * 2 + hw) * 64 + 16 * w + 8 * hf + g] = make_float2(m_r[hf], l);
         }
+#pragma unroll
+        for (int i = 0; i < 32; ++i) o[i] = 0.f;
       }
       __threadfence();
       __syncthreads();
@@ -1592,17 +1636,14 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
       }
       __syncthreads();
       ATT_STAMP(41);
-      const int h = (tid >> 6) & 1, row = tid & 63;
-      const bool mt = tid < 128;
+      const int h = tid >> 7, half = (tid >> 6) & 1, row = tid & 63;
       if (s_last == 1) {
         __threadfence();
-        if (mt) {
-          float M = -ATT_INF, Ls = 0.f, oo[64];
+        float M = -ATT_INF, Ls = 0.f, oo[32];
 #pragma unroll
-          for (int d = 0; d < 64; ++d) oo[d] = 0.f;
-          att_merge_v(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + gi * ATT_GROUP + b, gs, h, row, M, Ls, oo);
-          att_store_partial_v(p.ws2_acc, p.ws2_ml, g_slot0 + gi, h, row, M, Ls, oo);
-        }
+        for (int d = 0; d < 32; ++d) oo[d] = 0.f;
+        att_merge_h(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + gi * ATT_GROUP + b, gs, h, row, half, M, Ls, oo);
+        att_store_partial_h(p.ws2_acc, p.ws2_ml, g_slot0 + gi, h, row, half, M, Ls, oo);
         __threadfence();
         __syncthreads();
         if (tid == 0) {
@@ -1612,27 +1653,34 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
         }
         __syncthreads();
       }
-      if (s_last >= 2 && mt) {
+      if (s_last >= 2) {
         __threadfence();
-        float M = -ATT_INF, Ls = 0.f, oo[64];
-#pragma unroll
-        for (int d = 0; d < 64; ++d) oo[d] = 0.f;
-        if (s_last == 2) att_merge_v(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + b, c, h, row, M, Ls, oo);
-        else att_merge_v(p.ws2_acc, p.ws2_ml, g_slot0, ng, h, row, M, Ls, oo);
-        const int jt = row >> 3, qh = (2 * pair + h) * 8 + (row & 7);
+        const int qh = (2 * pair + h) * 8 + (row & 7), jt = row >> 3;
+        const size_t tok = (size_t)b * L + jt;
+        uint4 gw[4];
         if (jt < L) {
-          const float sc = v_scale / Ls;
-          float ss = 0.f;
+          const uint4* gp = reinterpret_cast<const uint4*>(p.qkv + tok * W + (HQ + 2 * HKV) * 64 + qh * 64 + 32 * half);
 #pragma unroll
-          for (int d = 0; d < 64; ++d) { oo[d] *= sc; ss += oo[d] * oo[d]; }
-          const float inv = rsqrtf(ss / 64.f + p.eps);
-          const size_t tok = (size_t)b * L + jt;
-          const uint4* gp = reinterpret_cast<const uint4*>(p.qkv + tok * W + (HQ + 2 * HKV) * 64 + qh * 64);
-          uint4* op = reinterpret_cast<uint4*>(p.out + tok * HQ * 64 + qh * 64);
+          for (int q = 0; q < 4; ++q) gw[q] = gp[q];
+        }
+        float M = -ATT_INF, Ls = 0.f, oo[32];
 #pragma unroll
-          for (int q = 0; q < 8; ++q) {
-            const uint4 gw = gp[q];
-            const __nv_bfloat162* gh = reinterpret_cast<const __nv_bfloat162*>(&gw);
+        for (int d = 0; d < 32; ++d) oo[d] = 0.f;
+        if (s_last == 2) att_merge_h(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + b, c, h, row, half, M, Ls, oo);
+        else att_merge_h(p.ws2_acc, p.ws2_ml, g_slot0, ng, h, row, half, M, Ls, oo);
+        const float sc = v_scale / Ls;
+        float ss = 0.f;
+#pragma unroll
+        for (int d = 0; d < 32; ++d) { oo[d] *= sc; ss += oo[d] * oo[d]; }
+        s_ss[tid] = ss;
+        __syncthreads();
+        ss += s_ss[tid ^ 64];
+        const float inv = rsqrtf(ss / 64.f + p.eps);
+        if (jt < L) {
+          uint4* op = reinterpret_cast<uint4*>(p.out + tok * HQ * 64 + qh * 64 + 32 * half);
+#pragma unroll
+          for (int q = 0; q < 4; ++q) {
+            const __nv_bfloat162* gh = reinterpret_cast<const __nv_bfloat162*>(&gw[q]);
             uint4 ow;
             __nv_bfloat162* oh = reinterpret_cast<__nv_bfloat162*>(&ow);
 #pragma unroll

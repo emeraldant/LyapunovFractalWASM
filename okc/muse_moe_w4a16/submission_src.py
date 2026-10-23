@@ -15,7 +15,8 @@ post-expert norm in eager PyTorch (about ten kernels). Here:
 Plus our own NVFP4 expert GEMMs (okc/moe_cuda/kernel.py, bundled below): a warp-specialized
 kernel streaming each touched expert's weights once (producer warp with bulk copies, 8 or 16
 consumer warps decoding E2M1 at 8 instructions per 32-bit word straight into mma.sync
-fragments), with in-CTA split K for batches too small to fill the SMs.
+fragments; v6 makes the decoded weights the A operand and the tokens B, so the activation
+tile costs a quarter of the shared-memory bandwidth).
 
 prepare() times, per batch-size bucket, SGLang's path against these over Marlin's block
 sizes (and its atomic-add mode) and the CUDA kernel's configurations, with CUDA graph replays
@@ -289,9 +290,9 @@ def _run(plan, data, state):
 # @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULE moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_cuda_stages moe_cuda_forward
 
 CUDA_CONFIGS = {
-    "k1": dict(mt=1, stages=4, ctas_per_sm=4, ws=True, ks=1),   # 4 CTAs x 8 consumer warps per SM
-    "k2": dict(mt=1, stages=8, ctas_per_sm=1, ws=True, ks=2),   # split K: for too few items to fill the SMs
-    "m2": dict(mt=2, stages=4, ctas_per_sm=4, ws=True, ks=1),   # 32-row items: one decode feeds two tiles
+    "k1": dict(mt=1, stages=4, ctas_per_sm=4, ws=True, ks=1),    # v5: 16 token rows as the A operand
+    "s1": dict(mt=1, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB, 8 tokens per item
+    "s2": dict(mt=2, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB, 16 tokens per item
 }
 CUDA_MARGIN = 0.98   # a CUDA plan must take <= 98% of the incumbent's time on both timing routings
 

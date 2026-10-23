@@ -673,6 +673,237 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
     }
   }
 }
+
+// ---------------------------------------------------------------------------------------
+// v6: swap-AB. The roofline has a shared-memory term (128 B/clk/SM): in v5 every warp
+// ldmatrix-read the same 16-row activation tile, 4 B of smem per weight, which capped GEMM2
+// at ~3.2 TB/s. Here the decoded weights are the MMA's A operand (16 n-rows x 16 k, straight
+// from registers: a warp's two n8 groups are rows r and r + 8), and the tokens are B (8 per
+// group, one ldmatrix.x4 per two k16 steps): 1 B of activation smem per weight, half the HMMAs.
+// GEMM1's group pair is (gate, up), so C rows r / r + 8 are gate / up of the same column n.
+// Producer, pipeline and scheduling as v5; 16 weight groups (slots) per CTA in both GEMMs:
+// weights [expert][n block][chunk][slot 16][lane][16 B], scales [...][slot 16][row 8][step 8].
+
+template <int MT>
+struct SabCfg {
+  static constexpr int A_ROW = 272;
+  static constexpr int A_STAGE = MT * 8 * A_ROW;
+  static constexpr int W_STAGE = 16 * 512;
+  static constexpr int S_STAGE = 16 * 64;
+  static constexpr int STAGE = A_STAGE + W_STAGE + S_STAGE;
+};
+
+template <int MODE, int MT, int STAGES, bool PROF>
+__global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
+    const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
+    const uint8_t* __restrict__ wq, const uint8_t* __restrict__ ws, const float* __restrict__ gs,
+    const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
+    const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out, int n_blocks,
+    long long* __restrict__ prof, int* __restrict__ sched) {
+  using C = SabCfg<MT>;
+  constexpr int NCHUNK = KTOT / 128;
+  static_assert(NCHUNK % STAGES == 0 && MT * 8 <= 32, "stages divide chunks; <= 32 token rows");
+  extern __shared__ __align__(128) uint8_t smem[];
+  const uint32_t base = (uint32_t)__cvta_generic_to_shared(smem);
+  const uint32_t bar_full = base + STAGES * C::STAGE, bar_empty = bar_full + 8 * STAGES;
+  volatile int* hdr = reinterpret_cast<volatile int*>(smem + STAGES * (C::STAGE + 16));
+  const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
+  if (tid == 0) {
+    for (int s = 0; s < STAGES; ++s) {
+      mbar_init(bar_full + 8 * s, 1);
+      mbar_init(bar_empty + 8 * s, 256);
+    }
+    asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
+  }
+  __syncthreads();
+  const int total = *n_active_ptr * n_blocks;
+
+  if (warp == 8) {
+    // Producer (as v5): first item static, then the global counter; one end marker.
+    uint32_t f = 0;
+    for (bool first = true;; first = false) {
+      int item = blockIdx.x;
+      if (!first) {
+        if (lane == 0) item = (int)gridDim.x + atomicAdd(sched, 1);
+        item = __shfl_sync(0xffffffffu, item, 0);
+      }
+      if (item >= total) {
+        const uint32_t st = f % STAGES;
+        if (f >= STAGES) mbar_wait(bar_empty + 8 * st, ((f / STAGES) - 1) & 1);
+        if (lane == 0) {
+          hdr[st] = -1;
+          mbar_arrive(bar_full + 8 * st);
+          if (atomicAdd(sched + 1, 1) == (int)gridDim.x - 1) {
+            atomicExch(sched, 0);
+            atomicExch(sched + 1, 0);
+          }
+        }
+        return;
+      }
+      const int nb = item % n_blocks;
+      const int ch = active[item / n_blocks];
+      const int e = ch & 255, mc = ch >> 8;
+      const int row0 = exp_start[e] + mc * MT * 8;
+      const int live = min(MT * 8, exp_start[e + 1] - row0);
+      int src = 0;
+      if (lane < live) src = MODE == 1 ? row_route[row0 + lane] / 8 : row0 + lane;
+      const uint8_t* a_row = reinterpret_cast<const uint8_t*>(a_src + (size_t)src * KTOT);
+      const uint8_t* w_blk = wq + ((size_t)e * n_blocks + nb) * NCHUNK * C::W_STAGE;
+      const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * NCHUNK * C::S_STAGE;
+      const uint32_t tx = live * 256 + C::W_STAGE + C::S_STAGE;
+      long long pw = 0;
+      if (PROF && lane == 0) prof[item * 8 + 6] = gtimer();
+      for (int kc = 0; kc < NCHUNK; ++kc, ++f) {
+        const uint32_t st = f % STAGES;
+        long long c0 = PROF ? clock64() : 0;
+        if (f >= STAGES) mbar_wait(bar_empty + 8 * st, ((f / STAGES) - 1) & 1);
+        if (PROF) pw += clock64() - c0;
+        const uint32_t sb = base + st * C::STAGE, full = bar_full + 8 * st;
+        if (lane == 0) {
+          hdr[st] = item;
+          mbar_expect_tx(full, tx);
+          bulk_g2s(sb + C::A_STAGE, w_blk + (size_t)kc * C::W_STAGE, C::W_STAGE, full);
+          bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s_blk + (size_t)kc * C::S_STAGE, C::S_STAGE, full);
+        }
+        __syncwarp();
+        if (lane < live) bulk_g2s(sb + lane * C::A_ROW, a_row + kc * 256, 256, full);
+      }
+      if (PROF && lane == 0) prof[item * 8 + 4] = pw;
+    }
+  }
+
+  // Consumers: warp w owns slots 2w (A rows 0-7) and 2w + 1 (rows 8-15).
+  const int r = lane / 4, c = (lane % 4) * 2;
+  // ldmatrix.x4 for k16 steps 2w', 2w'+1: lanes 0-7 / 8-15 / 16-23 / 24-31 address matrices
+  // (step 2w', k 0-7), (2w', k 8-15), (2w'+1, k 0-7), (2w'+1, k 8-15) of token rows 0-7.
+  uint32_t ldb[4];
+#pragma unroll
+  for (int w = 0; w < 4; ++w) ldb[w] = base + (lane % 8) * C::A_ROW + (4 * w + lane / 8) * 16;
+  const uint32_t w_src = base + C::A_STAGE + ((warp * 2) * 32 + lane) * 16;
+  const uint32_t s_src = base + C::A_STAGE + C::W_STAGE + (warp * 2) * 64 + r * 8;
+  uint32_t f = 0;
+  for (;;) {
+    mbar_wait(bar_full, (f / STAGES) & 1);
+    const int item = hdr[0];
+    if (item < 0) break;
+    const int nb = item % n_blocks;
+    const int ch = active[item / n_blocks];
+    const int e = ch & 255, mc = ch >> 8;
+    const int row0 = exp_start[e] + mc * MT * 8;
+    const int rows_e = exp_start[e + 1] - row0;
+    const int groups = min(MT, (rows_e + 7) / 8);
+    const float gsc = gs[e] * 256.0f;
+    long long ct0 = 0;
+    if (PROF && warp == 0) {
+      ct0 = clock64();
+      if (lane == 0) prof[item * 8 + 1] = gtimer();
+    }
+    // acc[x][t]: token group t, k16 steps of parity x (two chains per group).
+    float acc[2][MT][4];
+#pragma unroll
+    for (int x = 0; x < 2; ++x)
+#pragma unroll
+      for (int t = 0; t < MT; ++t)
+#pragma unroll
+        for (int i = 0; i < 4; ++i) acc[x][t][i] = 0.f;
+
+    auto chunks = [&](auto tt) {
+      constexpr int T = decltype(tt)::value;
+#pragma unroll 1
+      for (int kc0 = 0; kc0 < NCHUNK; kc0 += STAGES, f += STAGES) {
+        const uint32_t parity = (f / STAGES) & 1;
+#pragma unroll
+        for (int st = 0; st < STAGES; ++st) {
+          mbar_wait(bar_full + 8 * st, parity);
+          uint4 wv[2];
+          uint2 sv[2];
+#pragma unroll
+          for (int j = 0; j < 2; ++j) {
+            asm volatile("ld.shared.v4.u32 {%0,%1,%2,%3}, [%4];\n"
+                         : "=r"(wv[j].x), "=r"(wv[j].y), "=r"(wv[j].z), "=r"(wv[j].w)
+                         : "r"(w_src + st * C::STAGE + j * 512));
+            asm volatile("ld.shared.v2.u32 {%0,%1}, [%2];\n" : "=r"(sv[j].x), "=r"(sv[j].y)
+                         : "r"(s_src + st * C::STAGE + j * 64));
+          }
+#pragma unroll
+          for (int w = 0; w < 4; ++w) {
+            uint32_t v[2][4];
+#pragma unroll
+            for (int j = 0; j < 2; ++j) unpack8(w == 0 ? wv[j].x : w == 1 ? wv[j].y : w == 2 ? wv[j].z : wv[j].w, v[j]);
+            uint32_t b[T][4];
+#pragma unroll
+            for (int t = 0; t < T; ++t)
+              asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+                           : "=r"(b[t][0]), "=r"(b[t][1]), "=r"(b[t][2]), "=r"(b[t][3])
+                           : "r"(ldb[w] + st * C::STAGE + t * 8 * C::A_ROW));
+#pragma unroll
+            for (int half = 0; half < 2; ++half) {
+              const int step = 2 * w + half;
+              uint32_t a[4];
+#pragma unroll
+              for (int j = 0; j < 2; ++j) {
+                const uint32_t sw = w < 2 ? sv[j].x : sv[j].y;
+                const uint32_t sp = half == 0 ? scale_even(sw) : scale_odd(sw);
+                if ((step % 4) < 2) {
+                  a[j] = mul2h<0>(v[j][2 * half], sp);
+                  a[2 + j] = mul2h<0>(v[j][2 * half + 1], sp);
+                } else {
+                  a[j] = mul2h<1>(v[j][2 * half], sp);
+                  a[2 + j] = mul2h<1>(v[j][2 * half + 1], sp);
+                }
+              }
+#pragma unroll
+              for (int t = 0; t < T; ++t) mma16816(acc[half][t], a, b[t][2 * half], b[t][2 * half + 1]);
+            }
+          }
+          mbar_arrive(bar_empty + 8 * st);
+        }
+      }
+    };
+    if (MT > 1 && __any_sync(0xffffffffu, groups > 1)) {
+      chunks(IntC<MT>{});
+    } else {
+      chunks(IntC<1>{});
+    }
+
+    // Epilogue. Lane holds C[n = r][tokens 2c, 2c+1] (c0, c1) and C[n = r + 8][...] (c2, c3)
+    // per token group; one shuffle with lane ^ 4 (column r ^ 1) pairs adjacent columns so
+    // each lane stores one bf16x2: even r -> token 2c at (r, r+1), odd r -> token 2c+1 at (r-1, r).
+#pragma unroll
+    for (int t = 0; t < MT; ++t) {
+      if (t >= groups) continue;
+      float y[2][2];   // [row block 0 / 1 (MODE 2), or gate*up (MODE 1, block 0)][token 2c / 2c+1]
+#pragma unroll
+      for (int i = 0; i < 2; ++i) {
+        const float lo = (acc[0][t][i] + acc[1][t][i]) * gsc, hi = (acc[0][t][2 + i] + acc[1][t][2 + i]) * gsc;
+        if (MODE == 1) {
+          y[0][i] = lo / (1.f + __expf(-lo)) * hi;
+        } else {
+          y[0][i] = lo;
+          y[1][i] = hi;
+        }
+      }
+      const bool odd = r & 1;
+      const int tok = row0 + t * 8 + c + (odd ? 1 : 0);
+#pragma unroll
+      for (int blk = 0; blk < (MODE == 1 ? 1 : 2); ++blk) {
+        const float mine_keep = odd ? y[blk][1] : y[blk][0];
+        const float give = odd ? y[blk][0] : y[blk][1];
+        const float got = __shfl_xor_sync(0xffffffffu, give, 4);
+        const int n = MODE == 1 ? 8 * (nb * 8 + warp) + (r & ~1) : 8 * (nb * 16 + 2 * warp + blk) + (r & ~1);
+        if (tok < row0 + rows_e) {
+          __nv_bfloat162 pr = odd ? __floats2bfloat162_rn(got, mine_keep) : __floats2bfloat162_rn(mine_keep, got);
+          *reinterpret_cast<__nv_bfloat162*>(out + (size_t)tok * KTOT + n) = pr;
+        }
+      }
+    }
+    if (PROF && warp == 0 && lane == 0) {
+      prof[item * 8 + 0] = smid();
+      prof[item * 8 + 2] = gtimer();
+      prof[item * 8 + 5] = clock64() - ct0;
+    }
+  }
+}
 """
 
 MOE_HOST_SRC = r"""
@@ -747,6 +978,43 @@ void moe_gemm_ws(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, 
   TORCH_CHECK(false, "moe_gemm_ws: unsupported mode / m tiles / stages");
 }
 
+template <int MODE, int MT, int STAGES, bool PROF>
+void launch_sab(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
+                torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
+                int n_blocks, int grid, long long* prof, int* sched) {
+  size_t smem = (size_t)STAGES * (SabCfg<MT>::STAGE + 32);
+  auto k = moe_gemm_sab_kernel<MODE, MT, STAGES, PROF>;
+  cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+  int per_sm = 0, sms = 0, dev = 0;
+  cudaGetDevice(&dev);
+  cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(&per_sm, k, 288, smem);
+  grid = std::min(grid, std::max(1, per_sm) * sms);
+  k<<<grid, 288, smem, at::cuda::getCurrentCUDAStream()>>>(
+      reinterpret_cast<const __nv_bfloat16*>(a_src.data_ptr()), row_route.data_ptr<int32_t>(),
+      wq.data_ptr<uint8_t>(), ws.data_ptr<uint8_t>(), gs.data_ptr<float>(),
+      active.data_ptr<int32_t>(), n_active.data_ptr<int32_t>(), exp_start.data_ptr<int32_t>(),
+      reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks, prof, sched);
+}
+
+void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
+                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
+                  torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
+                  torch::Tensor sched) {
+  int* sp = sched.data_ptr<int32_t>();
+  long long* pp = prof.numel() ? reinterpret_cast<long long*>(prof.data_ptr<int64_t>()) : nullptr;
+  if (pp) {
+#ifdef OKC_PROF
+#define SPCASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch_sab<M_, T_, S_, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
+    SPCASE(1, 1, 4) SPCASE(2, 1, 4) SPCASE(1, 2, 4) SPCASE(2, 2, 4)
+#endif
+    TORCH_CHECK(false, "moe_gemm_sab: no profiling build for this configuration (needs -DOKC_PROF)");
+  }
+#define SCASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch_sab<M_, T_, S_, false>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp); return; }
+  SCASE(1, 1, 4) SCASE(2, 1, 4) SCASE(1, 2, 4) SCASE(2, 2, 4) SCASE(1, 4, 4) SCASE(2, 4, 4)
+  TORCH_CHECK(false, "moe_gemm_sab: unsupported mode / token groups / stages");
+}
+
 void moe_gemm(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
               torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
               torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid) {
@@ -760,6 +1028,10 @@ void moe_gemm(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, tor
 MOE_CUDA_SRC = MOE_HOST_SRC.replace("#include <ATen/cuda/CUDAContext.h>\n", "#include <ATen/cuda/CUDAContext.h>\n" + MOE_DEVICE_SRC, 1)
 
 MOE_CUDA_CPP = """
+void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
+                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
+                  torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
+                  torch::Tensor sched);
 void moe_gemm_ws(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                  torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, int64_t ks,
@@ -781,7 +1053,7 @@ def moe_cuda_module(prof=False):
         from torch.utils.cpp_extension import load_inline
         _MOE_MODULE[prof] = load_inline(
             name="okc_moe_gemm_prof" if prof else "okc_moe_gemm", cpp_sources=MOE_CUDA_CPP, cuda_sources=MOE_CUDA_SRC,
-            functions=["moe_gemm", "moe_gemm_ws"],
+            functions=["moe_gemm", "moe_gemm_ws", "moe_gemm_sab"],
             extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"] + (["-DOKC_PROF"] if prof else []),
             verbose=False)
     return _MOE_MODULE[prof]
@@ -945,13 +1217,18 @@ def ws_layout(bank):
         e, g = q.shape[:2]
         bank[name + "q_ws"] = q.view(e, g // gpc, gpc, 32, 32, 4).permute(0, 1, 3, 2, 4, 5).contiguous().view(torch.uint8)
         bank[name + "s_ws"] = s.view(e, g // gpc, gpc, 32, 8, 8).permute(0, 1, 3, 2, 4, 5).contiguous()
+    # v6 (swap-AB): 16 slots per CTA in GEMM2 as well.
+    q, s = bank["w2q"], bank["w2s"]
+    e, g = q.shape[:2]
+    bank["w2q_sab"] = q.view(e, g // 16, 16, 32, 32, 4).permute(0, 1, 3, 2, 4, 5).contiguous().view(torch.uint8)
+    bank["w2s_sab"] = s.view(e, g // 16, 16, 32, 8, 8).permute(0, 1, 3, 2, 4, 5).contiguous()
     # Work counters of the two GEMMs' dynamic schedulers (each launch leaves them at zero).
     bank["sched"] = torch.zeros(4, dtype=torch.int32, device=q.device)
     return bank
 
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
-                    ws=False, ks=1, prof=None, abl=0):
+                    ws=False, ks=1, prof=None, abl=0, sab=False):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order."""
     mod = moe_cuda_module(prof is not None)
@@ -974,7 +1251,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     grid = 132 * ctas_per_sm
 
     def route():
-        _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, mt * 16,
+        _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, rows_per_chunk,
                                         NE=256, E=count, CHUNK=256, num_warps=4)
 
     # prof: None, or (prof1, prof2) int64 buffers [max items * 8] for the profiling build.
@@ -984,14 +1261,23 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     gemm_ws = lambda which: (lambda *a: mod.moe_gemm_ws(*a, ks, prof[which], abl, sched[2 * which:2 * which + 2]))
     g1 = gemm_ws(0) if ws else mod.moe_gemm
     g2 = gemm_ws(1) if ws else mod.moe_gemm
+    rows_per_chunk = 8 * mt if sab else 16 * mt
     sfx = "_ws" if ws else ""
 
     def gemm1():
+        if sab:   # 64 n blocks (GEMM1: 8 gate/up pairs per CTA), 32 for GEMM2 (16 n8 groups per CTA)
+            mod.moe_gemm_sab(1, mt, stages, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
+                             n_active, exp_start, inter, 64, grid, prof[0], sched[0:2])
+            return
         # 64 work items per active expert per GEMM: 8 warps x (MODE 1: a gate/up pair, MODE 2: an n8 group).
         g1(1, mt, stages, x, row_route, bank["w13q" + sfx], bank["w13s" + sfx], bank["w13_gs"], active, n_active,
              exp_start, inter, 512 // 8, grid)
 
     def gemm2():
+        if sab:
+            mod.moe_gemm_sab(2, mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
+                             n_active, exp_start, y, 32, grid, prof[1], sched[2:4])
+            return
         g2(2, mt, stages, inter, row_route, bank["w2q" + sfx], bank["w2s" + sfx], bank["w2_gs"], active, n_active,
              exp_start, y, 512 // 8, grid)
 

@@ -1,0 +1,38 @@
+moe cuda: ready in 38 s
+moe bs1 ('cuda', 'k1'): not faster (56.4/50.5 us, 70.2/58.3 us)
+moe bs1 ('cuda', 's1'): not faster (49.8/48.4 us, 64.4/55.7 us)
+moe bs1 ('cuda', 's2'): not faster (51.6/50.6 us, 65.9/58.2 us)
+moe plan bs1   : ('fast', 8, True) 51.0 us (sglang 87.6 us)
+moe bs8 ('cuda', 'k1'): not faster (96.5/109.7 us, 120.8/120.6 us)
+moe bs8 ('cuda', 's1'): adopted over ('fast', 8, False) 94.1/110.2 us, 114.1/120.4 us
+moe bs8 ('cuda', 's2'): not faster (100.5/94.0 us, 109.2/114.3 us)
+moe plan bs8   : ('cuda', 's1') 94.1 us (sglang 152.0 us)
+moe bs16 ('cuda', 'k1'): adopted over ('fast', 8, False) 132.3/139.6 us, 140.7/149.7 us
+moe bs16 ('cuda', 's1'): not faster (130.1/132.4 us, 133.7/140.8 us)
+moe bs16 ('cuda', 's2'): adopted over ('cuda', 'k1') 118.8/133.0 us, 121.6/141.6 us
+moe plan bs16  : ('cuda', 's2') 118.8 us (sglang 184.8 us)
+moe bs32 ('cuda', 'k1'): adopted over ('fast', 8, False) 183.2/211.3 us, 144.6/180.3 us
+moe bs32 ('cuda', 's1'): adopted over ('cuda', 'k1') 167.5/183.5 us, 141.0/144.1 us
+moe bs32 ('cuda', 's2'): not faster (163.1/166.2 us, 140.0/141.3 us)
+moe plan bs32  : ('cuda', 's1') 167.5 us (sglang 232.4 us)
+moe bs128 ('cuda', 'k1'): adopted over ('fast', 16, False) 311.9/353.7 us, 317.3/365.4 us
+moe bs128 ('cuda', 's1'): not faster (306.2/313.9 us, 315.9/316.9 us)
+moe bs128 ('cuda', 's2'): adopted over ('cuda', 'k1') 282.5/311.3 us, 286.4/317.7 us
+moe plan bs128 : ('cuda', 's2') 282.5 us (sglang 519.6 us)
+moe bs256 ('cuda', 'k1'): adopted over ('fast', 16, False) 363.3/401.8 us, 404.4/457.3 us
+moe bs256 ('cuda', 's1'): not faster (364.2/361.4 us, 447.7/402.9 us)
+moe bs256 ('cuda', 's2'): adopted over ('cuda', 'k1') 335.4/362.9 us, 393.5/404.2 us
+moe plan bs256 : ('cuda', 's2') 335.4 us (sglang 615.5 us)
+prepare: tuned in 46 s
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:19:36 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop

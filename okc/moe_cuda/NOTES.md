@@ -48,6 +48,20 @@ ran 2x slow (invalid data). Ablations are now compile-time instantiations in a s
 module (-DOKC_PROF), and `tools/sass.py moe_ws prof` checks the profiling build's main loop
 equals production's before any profile is trusted.
 
+### v6 swap-AB measured (runs 26eb50a3, c4a3842d)
+
+Weights = A (16 n-rows from registers, a warp's two n8 groups), tokens = B (8 per group,
+ldmatrix.x4 per two k16 steps); GEMM1's pair is (gate, up) so silu*up stays in-lane; the
+epilogue pairs columns with one __shfl_xor. SASS: 551 instructions per 4 chunks for 2048
+weights per warp in both GEMMs (GEMM2 was 1024). Gate: correct and repeatable on all 19
+shapes; s2 (16 tokens/item) fails only skewed bs 32 (x0.86, not scored).
+Judge check c4a3842d: **1.617** (bs 1 1.65 Marlin, 8 1.57, 16 1.68, 32 1.38, 128 1.78, 256 1.67).
+
+Why not 2x: at 16 tokens each of the 8 warps still reads the same B fragments (4 KB per warp
+per chunk). bs 256 GEMM1 bounds: smem 140 us, HBM 112 us, issue 85 us, measured 222 us:
+smem and HBM are co-limiting. Next structural step: wgmma (a warpgroup's tensor core reads
+the token tile from smem once: 4x fewer activation reads), as Humming / fractalyze do.
+
 ## Hopper facts used (per SM sub-partition = SMSP, per clock)
 
 | pipe | warp instructions / clk | what runs there |

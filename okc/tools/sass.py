@@ -197,6 +197,34 @@ def moe_ws(args):
             report(body, "", f"(per {int(m.group(4)) // int(m.group(5))} chunks x {ngw * 1024} weights per warp)")
 
 
+def moe_sab(args):
+    """v6 (swap-AB) instantiations: registers, spills and each HMMA loop's pipe mix."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "moe_cuda"))
+    import kernel as K
+    prof = "true" if "prof" in args else "false"
+    insts = [(1, 1, 4), (2, 1, 4), (1, 2, 4), (2, 2, 4)]
+    names = [f"moe_gemm_sab_kernel<{m}, {t}, {s}, {prof}>" for m, t, s in insts]
+    src = NVRTC_PRELUDE + K.MOE_DEVICE_SRC.replace("#include <stdint.h>", "") + "\n" + "\n".join(
+        f"template __global__ void moe_gemm_sab_kernel<{m}, {t}, {s}, {prof}>("
+        "const __nv_bfloat16*, const int32_t*, const uint8_t*, const uint8_t*, "
+        "const float*, const int32_t*, const int32_t*, const int32_t*, "
+        "__nv_bfloat16*, int, long long*, int*);" for m, t, s in insts)
+    log, sass = compile_sass(nvrtc_ptx(src, names))
+    for line in log.splitlines():
+        if "Used" in line or "spill" in line:
+            print(line.strip())
+    for fname, lines in split_functions(sass).items():
+        if "sab_kernel" not in fname:
+            continue
+        instrs = parse(lines)
+        m = re.search(r"ILi(\d)ELi(\d)ELi(\d)ELb", fname)
+        print(f"\n== SAB MODE {m.group(1)} token groups {m.group(2)} STAGES {m.group(3)}: {len(instrs)} instructions")
+        for body in hmma_loops(instrs):
+            n_hmma = sum(op.startswith("HMMA") for _, op, _ in body)
+            print(f"  -- loop with {n_hmma} HMMA")
+            report(body, "", f"(per {m.group(3)} chunks x 2048 weights per warp)")
+
+
 def moe(args):
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "moe_cuda"))
     import kernel as K
@@ -224,4 +252,4 @@ def moe(args):
 
 
 if __name__ == "__main__":
-    {"moe": moe, "moe_ws": moe_ws}[sys.argv[1]](sys.argv[2:])
+    {"moe": moe, "moe_ws": moe_ws, "moe_sab": moe_sab}[sys.argv[1]](sys.argv[2:])

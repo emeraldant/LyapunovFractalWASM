@@ -1,0 +1,116 @@
+moe cuda: ready in 38 s
+moe bs1 ('cuda', 'k1'): not faster (56.4/50.8 us, 69.4/58.0 us)
+moe bs1 ('cuda', 'k2'): not faster (46.4/50.8 us, 75.0/58.0 us)
+moe bs1 ('cuda', 'm2'): not faster (56.6/51.0 us, 70.3/58.4 us)
+moe plan bs1   : ('fast', 8, True) 51.3 us (sglang 87.5 us)
+moe bs8 ('cuda', 'k1'): not faster (95.6/108.8 us, 120.6/120.7 us)
+moe bs8 ('cuda', 'k2'): not faster (139.3/109.9 us, 170.4/120.5 us)
+moe bs8 ('cuda', 'm2'): adopted over ('fast', 8, False) 104.0/109.9 us, 117.2/120.7 us
+moe plan bs8   : ('cuda', 'm2') 104.0 us (sglang 151.3 us)
+moe bs16 ('cuda', 'k1'): adopted over ('fast', 8, False) 132.3/139.6 us, 140.3/149.4 us
+moe bs16 ('cuda', 'k2'): not faster (203.4/132.2 us, 224.8/141.1 us)
+moe bs16 ('cuda', 'm2'): not faster (133.6/132.4 us, 140.2/140.0 us)
+moe plan bs16  : ('cuda', 'k1') 132.3 us (sglang 184.5 us)
+moe bs32 ('cuda', 'k1'): adopted over ('fast', 8, False) 181.1/209.1 us, 143.4/179.2 us
+moe bs32 ('cuda', 'k2'): not faster (304.7/181.2 us, 257.4/143.2 us)
+moe bs32 ('cuda', 'm2'): not faster (190.4/181.8 us, 167.5/143.4 us)
+moe plan bs32  : ('cuda', 'k1') 181.1 us (sglang 229.3 us)
+moe bs128 ('cuda', 'k1'): adopted over ('fast', 16, False) 309.2/353.1 us, 314.7/364.0 us
+moe bs128 ('cuda', 'k2'): not faster (617.9/308.9 us, 672.4/311.8 us)
+moe bs128 ('cuda', 'm2'): not faster (307.3/308.8 us, 297.7/313.8 us)
+moe plan bs128 : ('cuda', 'k1') 309.2 us (sglang 511.4 us)
+moe bs256 ('cuda', 'k1'): adopted over ('fast', 16, False) 358.3/398.3 us, 398.9/451.4 us
+moe bs256 ('cuda', 'k2'): not faster (785.8/357.5 us, 925.8/398.9 us)
+moe bs256 ('cuda', 'm2'): not faster (356.3/358.5 us, 385.5/399.7 us)
+moe plan bs256 : ('cuda', 'k1') 358.3 us (sglang 608.6 us)
+prepare: tuned in 46 s
+  prof bs16 sab1         full gemm1 (14 exp): 896 items on 132 SMs, span 75.8 us, 3.49 TB/s; slot use 79%; 90% done at 70.1 us (tail 5.6); item 38.4 us med, 53.1 p90; producer waits 54%; items/SM 7 max 6.8 mean
+  prof bs16 sab1         full gemm2 (14 exp): 448 items on 132 SMs, span 45.6 us, 2.90 TB/s; slot use 64%; 90% done at 41.2 us (tail 4.4); item 33.8 us med, 38.7 p90; producer waits 65%; items/SM 4 max 3.4 mean
+  prof bs16 sab2         full gemm1 (14 exp): 896 items on 132 SMs, span 79.4 us, 3.33 TB/s; slot use 59%; 90% done at 72.7 us (tail 6.7); item 28.4 us med, 36.4 p90; producer waits 49%; items/SM 8 max 6.8 mean
+  prof bs16 sab2         full gemm2 (14 exp): 448 items on 132 SMs, span 53.8 us, 2.46 TB/s; slot use 46%; 90% done at 46.1 us (tail 7.7); item 30.2 us med, 33.5 p90; producer waits 59%; items/SM 5 max 3.4 mean
+  prof bs256 sab1         full gemm1 (24 exp): 3776 items on 132 SMs, span 263.2 us, 1.72 TB/s; slot use 91%; 90% done at 247.8 us (tail 15.4); item 30.7 us med, 47.6 p90; producer waits 21%; items/SM 29 max 28.6 mean
+  prof bs256 sab1         full gemm2 (24 exp): 1888 items on 132 SMs, span 141.1 us, 1.61 TB/s; slot use 84%; 90% done at 128.0 us (tail 13.1); item 30.7 us med, 48.9 p90; producer waits 23%; items/SM 15 max 14.3 mean
+  prof bs256 sab2         full gemm1 (24 exp): 2304 items on 132 SMs, span 221.7 us, 2.04 TB/s; slot use 66%; 90% done at 204.3 us (tail 17.4); item 34.6 us med, 43.2 p90; producer waits 17%; items/SM 19 max 17.5 mean
+  prof bs256 sab2         full gemm2 (24 exp): 1152 items on 132 SMs, span 119.0 us, 1.90 TB/s; slot use 61%; 90% done at 108.5 us (tail 10.5); item 33.3 us med, 44.0 p90; producer waits 19%; items/SM 10 max 8.7 mean
+moe cuda: compiled in 0 s
+k1|s bs1|ok 3.3e-03 w3.3e-03|50.9 vs plan 46.0us x0.904 [0.90,0.91] vs sglang x1.62
+sab1|s bs1|ok 3.3e-03 w3.3e-03|46.0 vs plan 45.5us x0.993 [0.99,1.00] vs sglang x1.78
+sab2|s bs1|ok 3.3e-03 w3.3e-03|46.4 vs plan 45.8us x0.992 [0.98,1.00] vs sglang x1.78
+k1|s bs8|ok 3.3e-03 w3.4e-03|112.9 vs plan 108.1us x0.958 [0.95,0.97] vs sglang x1.38
+sab1|s bs8|ok 3.3e-03 w3.4e-03|101.2 vs plan 108.2us x1.068 [1.04,1.07] vs sglang x1.54
+sab2|s bs8|ok 3.3e-03 w3.4e-03|102.5 vs plan 108.3us x1.058 [1.05,1.07] vs sglang x1.52
+k1|s bs16|ok 3.4e-03 w3.5e-03|95.8 vs plan 95.3us x0.995 [0.99,1.00] vs sglang x1.56
+sab1|s bs16|ok 3.4e-03 w3.5e-03|90.1 vs plan 95.4us x1.059 [1.05,1.06] vs sglang x1.67
+sab2|s bs16|ok 3.4e-03 w3.5e-03|94.4 vs plan 95.5us x1.007 [1.00,1.02] vs sglang x1.58
+k1|s bs32|ok 3.4e-03 w3.5e-03|160.0 vs plan 161.3us x1.008 [1.00,1.03] vs sglang x1.24
+sab1|s bs32|ok 3.4e-03 w3.5e-03|151.5 vs plan 160.4us x1.062 [1.06,1.08] vs sglang x1.30
+sab2|s bs32|ok 3.4e-03 w3.5e-03|146.1 vs plan 161.2us x1.112 [1.09,1.13] vs sglang x1.36
+k1|s bs128|ok 3.4e-03 w3.5e-03|248.3 vs plan 247.7us x0.997 [0.99,1.00] vs sglang x1.67
+sab1|s bs128|ok 3.4e-03 w3.5e-03|254.6 vs plan 248.0us x0.972 [0.97,0.98] vs sglang x1.63
+sab2|s bs128|ok 3.4e-03 w3.5e-03|235.0 vs plan 247.6us x1.055 [1.05,1.06] vs sglang x1.77
+k1|s bs256|ok 3.4e-03 w3.6e-03|354.6 vs plan 353.7us x1.000 [1.00,1.00] vs sglang x1.75
+sab1|s bs256|ok 3.4e-03 w3.6e-03|374.9 vs plan 355.3us x0.943 [0.94,0.95] vs sglang x1.65
+sab2|s bs256|ok 3.4e-03 w3.6e-03|334.1 vs plan 353.9us x1.056 [1.05,1.06] vs sglang x1.85
+k1|n bs2|ok 3.4e-03 w3.4e-03|85.7 vs plan 80.0us x0.933 [0.92,0.95] vs sglang x1.39
+sab1|n bs2|ok 3.4e-03 w3.4e-03|83.6 vs plan 80.3us x0.960 [0.96,0.98] vs sglang x1.43
+sab2|n bs2|ok 3.4e-03 w3.4e-03|78.5 vs plan 79.9us x1.017 [1.01,1.03] vs sglang x1.52
+k1|n bs5|ok 3.3e-03 w3.4e-03|84.4 vs plan 78.8us x0.934 [0.93,0.94] vs sglang x1.50
+sab1|n bs5|ok 3.3e-03 w3.4e-03|82.4 vs plan 78.9us x0.958 [0.95,0.97] vs sglang x1.54
+sab2|n bs5|ok 3.3e-03 w3.4e-03|77.2 vs plan 78.8us x1.024 [1.01,1.04] vs sglang x1.64
+k1|n bs12|ok 3.4e-03 w3.5e-03|121.0 vs plan 120.4us x0.996 [0.99,1.00] vs sglang x1.47
+sab1|n bs12|ok 3.4e-03 w3.5e-03|117.1 vs plan 120.2us x1.026 [1.02,1.04] vs sglang x1.51
+sab2|n bs12|ok 3.4e-03 w3.5e-03|108.1 vs plan 120.8us x1.117 [1.11,1.12] vs sglang x1.64
+k1|n bs24|ok 3.4e-03 w3.5e-03|159.6 vs plan 157.8us x0.994 [0.99,1.00] vs sglang x1.48
+sab1|n bs24|ok 3.4e-03 w3.5e-03|138.2 vs plan 158.9us x1.148 [1.14,1.16] vs sglang x1.71
+sab2|n bs24|ok 3.4e-03 w3.5e-03|142.0 vs plan 159.2us x1.122 [1.12,1.13] vs sglang x1.67
+k1|n bs48|ok 3.4e-03 w3.5e-03|176.9 vs plan 179.2us x1.013 [0.98,1.03] vs sglang x1.25
+sab1|n bs48|ok 3.4e-03 w3.5e-03|165.7 vs plan 177.3us x1.065 [1.06,1.08] vs sglang x1.31
+sab2|n bs48|ok 3.4e-03 w3.5e-03|154.9 vs plan 178.8us x1.147 [1.13,1.17] vs sglang x1.41
+k1|n bs64|ok 3.4e-03 w3.5e-03|210.5 vs plan 212.4us x1.008 [1.00,1.01] vs sglang x1.55
+sab1|n bs64|ok 3.4e-03 w3.5e-03|188.1 vs plan 213.2us x1.133 [1.13,1.14] vs sglang x1.74
+sab2|n bs64|ok 3.4e-03 w3.5e-03|184.1 vs plan 213.0us x1.155 [1.15,1.16] vs sglang x1.77
+k1|n bs96|ok 3.4e-03 w3.5e-03|253.0 vs plan 253.7us x1.004 [1.00,1.01] vs sglang x1.42
+sab1|n bs96|ok 3.4e-03 w3.5e-03|218.6 vs plan 253.4us x1.160 [1.16,1.17] vs sglang x1.64
+sab2|n bs96|ok 3.4e-03 w3.5e-03|219.4 vs plan 250.8us x1.142 [1.14,1.16] vs sglang x1.61
+k1|n bs200|ok 3.4e-03 w3.5e-03|436.2 vs plan 435.1us x0.999 [0.99,1.00] vs sglang x1.56
+sab1|n bs200|ok 3.4e-03 w3.5e-03|470.5 vs plan 438.1us x0.932 [0.93,0.94] vs sglang x1.45
+sab2|n bs200|ok 3.4e-03 w3.5e-03|406.9 vs plan 436.0us x1.072 [1.07,1.07] vs sglang x1.67
+k1|n bs8 skew|ok 3.4e-03 w3.5e-03|71.5 vs plan 71.9us x1.004 [1.00,1.02] vs sglang x1.50
+sab1|n bs8 skew|ok 3.4e-03 w3.5e-03|65.9 vs plan 71.9us x1.082 [1.08,1.10] vs sglang x1.61
+sab2|n bs8 skew|ok 3.4e-03 w3.5e-03|66.6 vs plan 71.8us x1.078 [1.07,1.09] vs sglang x1.61
+k1|n bs32 skew|ok 3.4e-03 w3.4e-03|98.8 vs plan 99.0us x1.000 [0.99,1.01] vs sglang x1.10
+sab1|n bs32 skew|ok 3.4e-03 w3.4e-03|120.9 vs plan 98.8us x0.818 [0.82,0.82] vs sglang x0.90
+sab2|n bs32 skew|ok 3.4e-03 w3.4e-03|115.4 vs plan 98.9us x0.857 [0.85,0.86] vs sglang x0.94
+k1|n bs256 skew|ok 3.4e-03 w3.5e-03|418.6 vs plan 418.0us x0.999 [1.00,1.00] vs sglang x0.70
+sab1|n bs256 skew|ok 3.4e-03 w3.5e-03|532.5 vs plan 416.7us x0.783 [0.78,0.78] vs sglang x0.55
+sab2|n bs256 skew|ok 3.4e-03 w3.5e-03|419.1 vs plan 417.1us x0.995 [0.99,1.00] vs sglang x0.70
+k1|t bs3|ok 3.4e-03 w3.4e-03|82.4 vs plan 76.0us x0.920 [0.91,0.93] vs sglang x1.35
+sab1|t bs3|ok 3.4e-03 w3.4e-03|70.3 vs plan 75.6us x1.073 [1.06,1.08] vs sglang x1.58
+sab2|t bs3|ok 3.4e-03 w3.4e-03|66.5 vs plan 75.8us x1.139 [1.13,1.16] vs sglang x1.67
+k1|t bs33|ok 3.4e-03 w3.5e-03|219.2 vs plan 217.1us x0.994 [0.99,1.01] vs sglang x1.23
+sab1|t bs33|ok 3.4e-03 w3.5e-03|179.0 vs plan 215.5us x1.206 [1.20,1.22] vs sglang x1.50
+sab2|t bs33|ok 3.4e-03 w3.5e-03|181.3 vs plan 216.3us x1.195 [1.18,1.20] vs sglang x1.48
+k1|t bs257|ok 3.4e-03 w3.6e-03|354.4 vs plan 672.8us x1.902 [1.89,1.91] vs sglang x1.90
+sab1|t bs257|ok 3.4e-03 w3.6e-03|389.6 vs plan 671.9us x1.725 [1.72,1.73] vs sglang x1.72
+sab2|t bs257|ok 3.4e-03 w3.6e-03|327.7 vs plan 672.5us x2.051 [2.05,2.06] vs sglang x2.05
+k1|t bs1 skew|ok 3.3e-03 w3.3e-03|65.9 vs plan 66.9us x1.015 [1.01,1.02] vs sglang x1.51
+sab1|t bs1 skew|ok 3.3e-03 w3.3e-03|62.3 vs plan 66.2us x1.068 [1.05,1.08] vs sglang x1.59
+sab2|t bs1 skew|ok 3.3e-03 w3.3e-03|62.8 vs plan 66.7us x1.066 [1.05,1.08] vs sglang x1.59
+k1|t bs128 skew|ok 3.4e-03 w3.5e-03|253.4 vs plan 253.0us x0.998 [1.00,1.00] vs sglang x0.83
+sab1|t bs128 skew|ok 3.4e-03 w3.5e-03|307.9 vs plan 253.2us x0.821 [0.81,0.83] vs sglang x0.68
+sab2|t bs128 skew|ok 3.4e-03 w3.5e-03|251.0 vs plan 253.3us x1.009 [1.01,1.01] vs sglang x0.83
+GATE k1: FAIL | vs sglang scored 1.527 other 1.323 | wrong [] unstable [] regress ['s bs1 x0.90', 's bs8 x0.96', 'n bs2 x0.93', 'n bs5 x0.93', 't bs3 x0.92']
+GATE sab1: FAIL | vs sglang scored 1.587 other 1.340 | wrong [] unstable [] regress ['s bs128 x0.97', 's bs256 x0.94', 'n bs5 x0.96', 'n bs200 x0.93', 'n bs32 skew x0.82', 'n bs256 skew x0.78', 't bs128 skew x0.82']
+GATE sab2: FAIL | vs sglang scored 1.636 other 1.436 | wrong [] unstable [] regress ['n bs32 skew x0.86']
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:15:17 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

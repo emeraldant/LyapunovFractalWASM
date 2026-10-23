@@ -174,7 +174,7 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
         ne = int(torch.unique(ids[ids < 32]).numel())
         for name, kw in cfgs.items():
             for abl in abls:
-                maxi = (32 + bs * 8 // (16 * kw["mt"]) + 1) * 64
+                maxi = (32 + bs * 8 // ((8 if kw.get("sab") else 16) * kw["mt"]) + 1) * 64
                 prof = (torch.zeros(maxi * 8, dtype=torch.int64, device="cuda"),
                         torch.zeros(maxi * 8, dtype=torch.int64, device="cuda"))
                 fns, _ = moe_cuda_stages(data["hidden_states"], ids, data["topk_weights"], ls, bank, state["norm_w"],

@@ -40,7 +40,7 @@ ATTN_DEVICE_SRC = r"""
 struct AttnParams {
   const __nv_bfloat16* qkv; const float* inv_freq; const int32_t* seq_lens; const int32_t* page_table;
   const int64_t* cache_loc; uint8_t* k_cache; uint8_t* v_cache; const float* k_scale; const float* v_scale;
-  __nv_bfloat16* out; float* ws_acc; float* ws_ml; float* ws2_acc; float* ws2_ml; int32_t* counters;
+  __nv_bfloat16* out; float* ws_acc; float* ws_ml; float* ws2_acc; float* ws2_ml; int32_t* counters; long long* prof;
   int qkv_w, pt_stride, B, HQ, HKV, page_shift, window, rope, n_ctas, max_groups;
   float qk_factor, sm_scale_log2, eps;
 };
@@ -93,6 +93,12 @@ __device__ __forceinline__ int att_cta_of(long long u, long long T, int n) {
 
 #define ATT_GROUP 16
 
+// Optional phase stamps (sim only): prof[cta][k] = clock64 at event k (62: globaltimer at the end,
+// 63: at the start).
+#define ATT_STAMP(k) do { if (p.prof != nullptr && threadIdx.x == 0) \
+  p.prof[((size_t)blockIdx.y * gridDim.x + blockIdx.x) * 64 + (k)] = clock64(); } while (0)
+__device__ __forceinline__ long long att_gtime() { long long t; asm volatile("mov.u64 %0, %globaltimer;" : "=l"(t)); return t; }
+
 // Merges `count` partials (m, l, acc) at slots slot0 .. slot0 + count - 1 for this thread's
 // (head h, row r, 8 d values from 8 dc): loads four partials ahead of their merges.
 __device__ __forceinline__ void att_merge(const float* ws_acc, const float* ws_ml, size_t slot0, int count, int h,
@@ -143,6 +149,8 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   const int g = lane >> 2, t = lane & 3;
   const int pair = blockIdx.y;
   const int B = p.B, HKV = p.HKV, HQ = p.HQ;
+  if (p.prof != nullptr && tid == 0) p.prof[((size_t)blockIdx.y * gridDim.x + blockIdx.x) * 64 + 63] = att_gtime();
+  ATT_STAMP(0);
 
   // Lengths: each request's attended cached keys n_b (its window) and the prefix of v_b = n_b + 1.
   if (warp == 0) {
@@ -167,6 +175,7 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   const long long T = s_pref[B];
   const int N = (int)min((long long)p.n_ctas, T);
   const int cta = blockIdx.x;
+  ATT_STAMP(1);
   if (cta >= N) return;
   const long long r0 = T * cta / N, r1 = T * (cta + 1) / N;
 
@@ -186,6 +195,7 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
     s_nseg = ns;
   }
   __syncthreads();
+  ATT_STAMP(2);
   const int nseg = s_nseg;
   int ntiles = 0;
   for (int s = 0; s < nseg; ++s) ntiles += s_stiles[s];
@@ -266,6 +276,7 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   load_page(ix_s, ix_k, ps0); advance(ix_s, ix_k);
   load_page(ix_s, ix_k, ps1); advance(ix_s, ix_k);
 
+  ATT_STAMP(3);
   const float k_scale = *p.k_scale, v_scale = *p.v_scale;
   const float c_log2 = p.sm_scale_log2 * k_scale;
 
@@ -276,6 +287,7 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   auto step = [&](int j, PageSet& ps) {
     cp_wait<STAGES - 2>();
     __syncthreads();
+    if (j < 16) ATT_STAMP(4 + 2 * j);
     issue(is_s, is_k, ps, (j + STAGES - 1) % STAGES); advance(is_s, is_k);
     load_page(ix_s, ix_k, ps); advance(ix_s, ix_k);
 
@@ -385,7 +397,9 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
       }
     }
 
+    if (j < 16) ATT_STAMP(5 + 2 * j);
     if (ck == s_stiles[cs] - 1) {
+      ATT_STAMP(40);
       // ---- end of this request's share: the new token, then this CTA's partial ----
       if (s_snew[cs] && warp == 0) {
         const __nv_bfloat16* kn = reinterpret_cast<const __nv_bfloat16*>(st + 16384 + 2048);
@@ -527,6 +541,7 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
         s_last = mode;
       }
       __syncthreads();
+      ATT_STAMP(41);
       const int h = tid >> 6, r = (tid >> 3) & 7, dc = tid & 7;
       if (s_last == 1) {
         __threadfence();
@@ -569,6 +584,7 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
         *reinterpret_cast<uint4*>(p.out + (size_t)b * HQ * 64 + qh * 64 + 8 * dc) = ow;
       }
       __syncthreads();
+      ATT_STAMP(42);
       ++cs; ck = 0;
     } else {
       ++ck;
@@ -579,6 +595,8 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
     if (j + 1 < ntiles) step(j + 1, ps1);
   }
   cp_wait<0>();
+  ATT_STAMP(61);
+  if (p.prof != nullptr && tid == 0) p.prof[((size_t)blockIdx.y * gridDim.x + blockIdx.x) * 64 + 62] = att_gtime();
 }
 """
 
@@ -597,7 +615,7 @@ static void launch_dec(const AttnParams& p, int grid_x, int grid_y) {
 void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens, torch::Tensor page_table,
               torch::Tensor cache_loc, torch::Tensor k_cache, torch::Tensor v_cache, torch::Tensor k_scale,
               torch::Tensor v_scale, torch::Tensor out, torch::Tensor ws_acc, torch::Tensor ws_ml,
-              torch::Tensor ws2_acc, torch::Tensor ws2_ml, torch::Tensor counters, int64_t max_groups, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
+              torch::Tensor ws2_acc, torch::Tensor ws2_ml, torch::Tensor counters, torch::Tensor prof, int64_t max_groups, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
               int64_t rope, double qk_factor, double sm_scale_log2, double eps, int64_t n_ctas, int64_t stages) {
   AttnParams p;
   p.qkv = reinterpret_cast<const __nv_bfloat16*>(qkv.data_ptr());
@@ -616,6 +634,7 @@ void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens,
   p.ws2_ml = ws2_ml.data_ptr<float>();
   p.counters = counters.data_ptr<int32_t>();
   p.max_groups = (int)max_groups;
+  p.prof = prof.numel() > 0 ? reinterpret_cast<long long*>(prof.data_ptr()) : nullptr;
   p.qkv_w = (int)qkv.size(-1);
   p.pt_stride = (int)page_table.stride(0);
   p.B = (int)B; p.HQ = (int)HQ; p.HKV = (int)HKV; p.page_shift = (int)page_shift; p.window = (int)window;
@@ -637,12 +656,20 @@ ATTN_CUDA_CPP = """
 void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens, torch::Tensor page_table,
               torch::Tensor cache_loc, torch::Tensor k_cache, torch::Tensor v_cache, torch::Tensor k_scale,
               torch::Tensor v_scale, torch::Tensor out, torch::Tensor ws_acc, torch::Tensor ws_ml,
-              torch::Tensor ws2_acc, torch::Tensor ws2_ml, torch::Tensor counters, int64_t max_groups, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
+              torch::Tensor ws2_acc, torch::Tensor ws2_ml, torch::Tensor counters, torch::Tensor prof, int64_t max_groups, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
               int64_t rope, double qk_factor, double sm_scale_log2, double eps, int64_t n_ctas, int64_t stages);
 """
 
 _ATTN_MODULES = {}
 _ATTN_COUNTERS = {}
+_ATTN_EMPTY = {}
+
+
+def _no_prof(device):
+    t = _ATTN_EMPTY.get(device)
+    if t is None:
+        t = _ATTN_EMPTY[device] = torch.empty(0, dtype=torch.int64, device=device)
+    return t
 
 
 def attn_cuda_module():
@@ -662,7 +689,7 @@ def attn_cuda_supported(cfg, page_table):
             and page & (page - 1) == 0)
 
 
-def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=256):
+def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=256, prof=None):
     """qkv [B, W] bf16 -> [B, Hq * 64] bf16; writes the new cache entries. n_ctas: CTAs per
     KV-head pair at most (fewer when the batch has fewer than min_keys keys per CTA)."""
     batch = cfg["batch"]
@@ -688,7 +715,7 @@ def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=25
     out = torch.empty((batch, hq * 64), dtype=torch.bfloat16, device=device)
     attn_cuda_module().attn_dec(
         qkv, inv_freq, data["seq_lens"], page_table, data["cache_loc"], data["k_cache"], data["v_cache"],
-        data["k_scale"], data["v_scale"], out, ws_acc, ws_ml, ws2_acc, ws2_ml, counters, max_groups, batch, hq, hkv, page.bit_length() - 1,
+        data["k_scale"], data["v_scale"], out, ws_acc, ws_ml, ws2_acc, ws2_ml, counters, prof if prof is not None else _no_prof(device), max_groups, batch, hq, hkv, page.bit_length() - 1,
         window, int(bool(cfg["rope_theta"])), cfg["qk_scale_factor"], cfg["sm_scale"] * 1.4426950408889634, 1e-5,
         n, stages)
     return out

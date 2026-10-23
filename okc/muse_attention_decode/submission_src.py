@@ -585,17 +585,17 @@ def _sglang_attention(data):
 # ---------------------------------------------------------------------------------------
 # v4: CUDA, one launch per decode step (okc/attn_cuda/kernel.py, bundled below).
 
-# @bundle attn_cuda/kernel.py ATTN_DEVICE_SRC ATTN_HOST_SRC ATTN_CUDA_SRC ATTN_CUDA_CPP _ATTN_MODULES _ATTN_COUNTERS attn_cuda_module attn_cuda_supported attn_cuda_decode
+# @bundle attn_cuda/kernel.py ATTN_DEVICE_SRC ATTN_HOST_SRC ATTN_CUDA_SRC ATTN_CUDA_CPP _ATTN_MODULES _ATTN_COUNTERS _ATTN_EMPTY _no_prof attn_cuda_module attn_cuda_supported attn_cuda_decode
 
 
-def _attn_v4(data, n_ctas=264, stages=4, min_keys=256):
+def _attn_v4(data, n_ctas=396, stages=3, min_keys=256, prof=None):
     cfg = data["config"]
     batch = cfg["batch"]
     qkv = data["qkv"].reshape(batch, -1)
     if not qkv.is_contiguous():
         qkv = qkv.contiguous()
     inv_freq = _inv_freq(cfg["rope_theta"], cfg["head_dim"], qkv.device)
-    out = attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=n_ctas, stages=stages, min_keys=min_keys)
+    out = attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=n_ctas, stages=stages, min_keys=min_keys, prof=prof)
     return out.view(batch, 1, -1)
 
 

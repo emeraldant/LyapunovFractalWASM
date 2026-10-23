@@ -12,7 +12,7 @@ import triton.language as tl
 
 # @bundle muse_moe_w4a16/reference.py D_HIDDEN D_EXPERT N_EXPERTS ROUTED_PER_TOKEN LOCAL POPULARITY generate_input
 # @bundle muse_moe_w4a16/nvfp4.py outlier_channels
-# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULE moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_cuda_stages moe_cuda_forward
+# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULE moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _gather_rows_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_cuda_stages moe_cuda_forward
 # @bundle sim/harness.py SimBench rel_l2 row_worst SimReport
 
 # Every shape the judge can plausibly draw near, not just the scored ones: a kernel that wins
@@ -131,8 +131,9 @@ def run_moe_cuda_sim(weights, state, variants=None, budget_s=300.0, seed=9_100_0
 
 def _prof_report(tag, buf, n_items, bytes_total, grid, clk_ghz=1.98):
     """One line from a profiling-build launch: where the GEMM's time went."""
-    r = buf[: n_items * 8].view(n_items, 8).cpu().double()
+    r = buf[: n_items * 12].view(n_items, 12).cpu().double()
     sm, t0, t1, cw, pw, cyc, p0 = (r[:, i] for i in range(7))
+    t_dec, t_iss = r[:, 8], r[:, 9]
     start, end = float(torch.minimum(t0, p0).min()), float(t1.max())
     span = end - start                                                  # ns
     dur = t1 - t0
@@ -142,15 +143,24 @@ def _prof_report(tag, buf, n_items, bytes_total, grid, clk_ghz=1.98):
     cons_wait = float(cw.sum() / cyc.sum())                             # consumer warp 0 starved for data
     prod_wait = float(pw.sum() / cyc.sum())                             # producer blocked on free stages
     per_sm = torch.bincount(sm.long(), minlength=132)
+    t_mma = r[:, 7]
+    waits = ""
+    if float(t_mma.sum()) > 0 or float(cw.sum()) > 0:   # timed build: warp 0's split of its item time
+        waits = (f" warp time: data wait {100 * float(cw.sum() / cyc.sum()):.0f}%, tensor wait"
+                 f" {100 * float(t_mma.sum() / cyc.sum()):.0f}%, rest {100 * float(1 - (cw.sum() + t_mma.sum()) / cyc.sum()):.0f}%")
+        if float(t_dec.sum()) > 0:
+            waits += (f" (decode {100 * float(t_dec.sum() / cyc.sum()):.0f}%, fence+issue"
+                      f" {100 * float(t_iss.sum() / cyc.sum()):.0f}%)")
+        waits += ";"
     print(f"  prof {tag}: {n_items} items on {int((per_sm > 0).sum())} SMs, span {span / 1e3:.1f} us,"
           f" {bytes_total / span / 1e3:.2f} TB/s; slot use {100 * busy:.0f}%; 90% done at {t90 / 1e3:.1f} us"
           f" (tail {(span - t90) / 1e3:.1f}); item {float(dur.median()) / 1e3:.1f} us med,"
-          f" {float(dur.quantile(0.9)) / 1e3:.1f} p90; producer waits {100 * prod_wait:.0f}%; items/SM {int(per_sm.max())} max {float(per_sm[per_sm > 0].float().mean()):.1f} mean",
+          f" {float(dur.quantile(0.9)) / 1e3:.1f} p90;{waits} producer waits {100 * prod_wait:.0f}%; items/SM {int(per_sm.max())} max {float(per_sm[per_sm > 0].float().mean()):.1f} mean",
           flush=True)
 
 
 ABLATIONS = {0: "full", 1: "no math", 2: "no act rows", 3: "weights only", 4: "math only",
-             12: "decode only", 20: "mma only", 28: "loop only"}
+             12: "decode only", 20: "mma only", 28: "loop only", 32: "timed", 36: "timed math", 96: "timed fine"}
 
 
 def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 256), abls=(0, 1, 2, 3, 4)):
@@ -175,10 +185,10 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
         for name, kw in cfgs.items():
             for abl in abls:
                 maxi = (32 + bs * 8 // ((8 if kw.get("sab") else 16) * kw["mt"]) + 1) * 64
-                prof = (torch.zeros(maxi * 8, dtype=torch.int64, device="cuda"),
-                        torch.zeros(maxi * 8, dtype=torch.int64, device="cuda"))
+                prof = (torch.zeros(maxi * 12, dtype=torch.int64, device="cuda"),
+                        torch.zeros(maxi * 12, dtype=torch.int64, device="cuda"))
                 fns, _ = moe_cuda_stages(data["hidden_states"], ids, data["topk_weights"], ls, bank, state["norm_w"],
-                                         POST_NORM_EPS, prof=prof, abl=abl, **kw)
+                                         _SIM_EPS, prof=prof, abl=abl, **kw)
                 for fn in fns:
                     fn()
                 fns[0]()
@@ -188,13 +198,13 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
                     flush.zero_()
                     fn()
                     torch.cuda.synchronize()
-                    n_items = int((prof[g].view(-1, 8)[:, 2] > 0).sum())
+                    n_items = int((prof[g].view(-1, 12)[:, 2] > 0).sum())
                     grid = 132 * (4 if kw["ks"] == 1 else 1)
                     _prof_report(f"bs{bs} {name} {ABLATIONS[abl]:>12} gemm{g + 1} ({ne} exp)", prof[g], n_items,
                                  nbytes, grid)
 
 
-POST_NORM_EPS = globals().get("POST_NORM_EPS", 1e-8)
+_SIM_EPS = globals().get("POST_NORM_EPS", 1e-8)   # the MoE host defines POST_NORM_EPS; other hosts do not
 
 
 def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7):
@@ -217,6 +227,26 @@ def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7):
     weights["w13_sf"] = torch.stack([scales(2 * I, H // 16) for _ in range(E)])
     weights["w2_sf"] = torch.stack([scales(H, I // 16) for _ in range(E)])
     state = {"norm_w": torch.ones(H, dtype=torch.bfloat16, device="cuda")}
-    run_moe_profile(weights, state, cfgs=cfgs, sizes=sizes, abls=abls)
+    if abls:
+        run_moe_profile(weights, state, cfgs=cfgs, sizes=sizes, abls=abls)
+    # Correctness without the MoE host: every config's forward output against the gate-verified
+    # v6 configuration (s2) on the same routing, and bitwise repeatability.
+    bank = state.get("cuda_bank")
+    if bank is None:
+        bank = build_cuda_bank(weights)
+        ws_layout(bank)
+    ls = torch.zeros(1, dtype=torch.int32, device="cuda")
+    for i, bs in enumerate(sizes):
+        data = generate_input(bs=bs, sharding="ep8", seed=8_800_000 + i, device="cuda")
+        args = (data["hidden_states"], data["topk_ids"], data["topk_weights"], ls, bank, state["norm_w"], _SIM_EPS)
+        ref = moe_cuda_forward(*args, mt=2, stages=4, ctas_per_sm=4, sab=True)
+        for name, kw in cfgs.items():
+            kw = {k: v for k, v in kw.items() if k != "abl"}
+            out = moe_cuda_forward(*args, **kw)
+            again = moe_cuda_forward(*args, **kw)
+            torch.cuda.synchronize()
+            print(f"check {name} bs{bs}: rel diff vs v6 {rel_l2(out, ref):.1e}, row worst {row_worst(out, ref):.1e},"
+                  f" repeat {'equal' if torch.equal(out, again) else 'DIFFERENT'}", flush=True)
+
     del weights
     torch.cuda.empty_cache()

@@ -287,14 +287,14 @@ def _run(plan, data, state):
 # ---------------------------------------------------------------------------------------
 # Our CUDA expert GEMMs (okc/moe_cuda/kernel.py)
 
-# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULE moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_cuda_stages moe_cuda_forward
+# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULE moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _gather_rows_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_cuda_stages moe_cuda_forward
 
 CUDA_CONFIGS = {
-    "k1": dict(mt=1, stages=4, ctas_per_sm=4, ws=True, ks=1),    # v5: 16 token rows as the A operand
-    "s1": dict(mt=1, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB, 8 tokens per item
-    "s2": dict(mt=2, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB, 16 tokens per item
+    "s1": dict(mt=1, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB (mma.sync), 8 tokens per item
+    "s2": dict(mt=2, stages=4, ctas_per_sm=4, sab=True),         # v6, 16 tokens per item
     "s1d": dict(mt=1, stages=8, ctas_per_sm=2, sab=True),        # v6, deeper pipeline: few items per SM
-    "w2": dict(mt=2, stages=4, ctas_per_sm=4, wg=True),          # v7 wgmma, 16 tokens: large batches
+    "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens
+    "t4": dict(mt=4, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA, 32 tokens (2 CTAs/SM)
 }
 CUDA_MARGIN = 0.98   # a CUDA plan must take <= 98% of the incumbent's time on both timing routings
 

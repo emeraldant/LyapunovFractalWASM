@@ -610,9 +610,10 @@ struct WsCfg {
 // split K, group g taking stages g, g + KS, ...; at the end of an item the partial
 // accumulators meet in shared memory and group 0 runs the epilogue.
 // PROF (profiling build only; production code is the PROF = false instantiation): per item,
-// prof[item * 8 + ...] = {smid, start ns, end ns (global timer), consumer warp 0's cycles
+// prof[item * PSTR + ...] = {smid, start ns, end ns (global timer), consumer warp 0's cycles
 // waiting on "full" (not measured: it perturbs the hot loop; read the ablations instead),
 // producer's cycles waiting on "empty", item cycles (warp 0), producer start ns, 0}.
+#define PSTR 12   // profiling record: int64 fields per item
 __device__ __forceinline__ long long gtimer() {
   long long t;
   asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
@@ -706,7 +707,7 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
       const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * NCHUNK * C::S_STAGE;
       const uint32_t tx = (abl & 4) ? 0u : ((abl & 2) ? 0u : live * 256) + C::W_STAGE + C::S_STAGE;
       long long pw = 0;
-      if (PROF && lane == 0) prof[item * 8 + 6] = gtimer();
+      if (PROF && lane == 0) prof[item * PSTR + 6] = gtimer();
       for (int kc = 0; kc < NCHUNK; ++kc, ++f) {
         const uint32_t st = f % STAGES;
         if (PROF) {
@@ -734,7 +735,7 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
           }
         }
       }
-      if (PROF && lane == 0) prof[item * 8 + 4] = pw;
+      if (PROF && lane == 0) prof[item * PSTR + 4] = pw;
     }
   }
 
@@ -767,7 +768,7 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
     long long cw = 0, ct0 = 0;
     if (PROF && warp == 0) {
       ct0 = clock64();
-      if (lane == 0) prof[item * 8 + 1] = gtimer();
+      if (lane == 0) prof[item * PSTR + 1] = gtimer();
     }
     constexpr int NACC = MT == 1 ? 2 : 1;
     float acc[NACC][MT][NGW][4];
@@ -931,10 +932,10 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
       }
     }
     if (PROF && warp == 0 && lane == 0) {
-      prof[item * 8 + 0] = smid();
-      prof[item * 8 + 2] = gtimer();
-      prof[item * 8 + 3] = cw;
-      prof[item * 8 + 5] = clock64() - ct0;
+      prof[item * PSTR + 0] = smid();
+      prof[item * PSTR + 2] = gtimer();
+      prof[item * PSTR + 3] = cw;
+      prof[item * PSTR + 5] = clock64() - ct0;
     }
   }
 }
@@ -958,13 +959,14 @@ struct SabCfg {
   static constexpr int STAGE = A_STAGE + W_STAGE + S_STAGE;
 };
 
-template <int MODE, int MT, int STAGES, bool PROF>
+template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0>
 __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
     const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
     const uint8_t* __restrict__ wq, const uint8_t* __restrict__ ws, const float* __restrict__ gs,
     const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
     const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out, int n_blocks,
     long long* __restrict__ prof, int* __restrict__ sched) {
+  constexpr int abl = PROF ? ABL : 0;   // ablation bits as moe_gemm_ws_kernel's
   using C = SabCfg<MT>;
   constexpr int NCHUNK = KTOT / 128;
   static_assert(NCHUNK % STAGES == 0 && MT * 8 <= 32, "stages divide chunks; <= 32 token rows");
@@ -1015,9 +1017,9 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       const uint8_t* a_row = reinterpret_cast<const uint8_t*>(a_src + (size_t)src * KTOT);
       const uint8_t* w_blk = wq + ((size_t)e * n_blocks + nb) * NCHUNK * C::W_STAGE;
       const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * NCHUNK * C::S_STAGE;
-      const uint32_t tx = live * 256 + C::W_STAGE + C::S_STAGE;
+      const uint32_t tx = (abl & 4) ? 0u : ((abl & 2) ? 0u : live * 256) + C::W_STAGE + C::S_STAGE;
       long long pw = 0;
-      if (PROF && lane == 0) prof[item * 8 + 6] = gtimer();
+      if (PROF && lane == 0) prof[item * PSTR + 6] = gtimer();
       for (int kc = 0; kc < NCHUNK; ++kc, ++f) {
         const uint32_t st = f % STAGES;
         long long c0 = PROF ? clock64() : 0;
@@ -1027,13 +1029,15 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
         if (lane == 0) {
           hdr[st] = item;
           mbar_expect_tx(full, tx);
-          bulk_g2s(sb + C::A_STAGE, w_blk + (size_t)kc * C::W_STAGE, C::W_STAGE, full);
-          bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s_blk + (size_t)kc * C::S_STAGE, C::S_STAGE, full);
+          if (!(abl & 4)) {
+            bulk_g2s(sb + C::A_STAGE, w_blk + (size_t)kc * C::W_STAGE, C::W_STAGE, full);
+            bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s_blk + (size_t)kc * C::S_STAGE, C::S_STAGE, full);
+          }
         }
         __syncwarp();
-        if (lane < live) bulk_g2s(sb + lane * C::A_ROW, a_row + kc * 256, 256, full);
+        if (!(abl & 6) && lane < live) bulk_g2s(sb + lane * C::A_ROW, a_row + kc * 256, 256, full);
       }
-      if (PROF && lane == 0) prof[item * 8 + 4] = pw;
+      if (PROF && lane == 0) prof[item * PSTR + 4] = pw;
     }
   }
 
@@ -1061,7 +1065,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
     long long ct0 = 0;
     if (PROF && warp == 0) {
       ct0 = clock64();
-      if (lane == 0) prof[item * 8 + 1] = gtimer();
+      if (lane == 0) prof[item * PSTR + 1] = gtimer();
     }
     // acc[x][t]: token group t, k16 steps of parity x (two chains per group).
     float acc[2][MT][4];
@@ -1080,6 +1084,10 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
 #pragma unroll
         for (int st = 0; st < STAGES; ++st) {
           mbar_wait(bar_full + 8 * st, parity);
+          if (abl & 1) {
+            mbar_arrive(bar_empty + 8 * st);
+            continue;
+          }
           uint4 wv[2];
           uint2 sv[2];
 #pragma unroll
@@ -1109,7 +1117,10 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
               for (int j = 0; j < 2; ++j) {
                 const uint32_t sw = w < 2 ? sv[j].x : sv[j].y;
                 const uint32_t sp = half == 0 ? scale_even(sw) : scale_odd(sw);
-                if ((step % 4) < 2) {
+                if (abl & 16) {
+                  a[j] = v[j][0] ^ wv[j].x;
+                  a[2 + j] = wv[j].y;
+                } else if ((step % 4) < 2) {
                   a[j] = mul2h<0>(v[j][2 * half], sp);
                   a[2 + j] = mul2h<0>(v[j][2 * half + 1], sp);
                 } else {
@@ -1118,7 +1129,13 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
                 }
               }
 #pragma unroll
-              for (int t = 0; t < T; ++t) mma16816(acc[half][t], a, b[t][2 * half], b[t][2 * half + 1]);
+              for (int t = 0; t < T; ++t) {
+                if (abl & 8) {
+                  acc[half][t][0] += __int_as_float((a[0] ^ a[3] ^ b[t][2 * half]) & 0x3f800000u);
+                } else {
+                  mma16816(acc[half][t], a, b[t][2 * half], b[t][2 * half + 1]);
+                }
+              }
             }
           }
           mbar_arrive(bar_empty + 8 * st);
@@ -1163,9 +1180,9 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       }
     }
     if (PROF && warp == 0 && lane == 0) {
-      prof[item * 8 + 0] = smid();
-      prof[item * 8 + 2] = gtimer();
-      prof[item * 8 + 5] = clock64() - ct0;
+      prof[item * PSTR + 0] = smid();
+      prof[item * PSTR + 2] = gtimer();
+      prof[item * PSTR + 5] = clock64() - ct0;
     }
   }
 }
@@ -1180,6 +1197,17 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
 // [k segment (8 k)][8-token block][8 rows][16 B]; descriptor LBO = K-direction stride, SBO =
 // 8-token-block stride (probe). The producer fills it with 16-byte cp.async (zero-filled past
 // the item's rows) completing on the stage's full barrier (cp.async.mbarrier.arrive.noinc).
+
+// A CUtensorMap's 128 bytes, passed by value (__grid_constant__) to TMA kernels; device code
+// only takes its address (so it compiles without cuda.h).
+struct alignas(64) TmapBlob {
+  unsigned long long v[16];
+};
+
+__device__ __forceinline__ void tma_2d(uint32_t dst, const TmapBlob* map, int c0, int c1, uint32_t bar) {
+  asm volatile("cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [%0], [%1, {%2, %3}], [%4];\n"
+               :: "r"(dst), "l"(reinterpret_cast<uint64_t>(map)), "r"(c0), "r"(c1), "r"(bar) : "memory");
+}
 
 template <int N>
 struct WgCfg {
@@ -1221,24 +1249,35 @@ __device__ __forceinline__ void wgmma_rs<32>(float* d, const uint32_t* a, uint64
                : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "l"(desc));
 }
 
-template <int MODE, int N, int STAGES, bool PROF>
-__global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
+// W0 (occupancy variant): one A buffer, each half chunk's wgmmas waited at once (tensor waits
+// are 1-2% of warp time, timed profile 4c3d61e9), so the kernel fits 4 CTAs (8 consumer warps
+// per SM sub-partition) instead of 3: decode latency is hidden by more warps, not by overlap.
+// BIG: one wgmma batch per chunk (8 k16 steps, one warpgroup meeting per chunk instead of
+// two: the fine-timed profile 222d366f put fence + issue at 34-38% of warp time).
+// TMA: the token tile arrives by TMA (GEMM2: one 64 x N box per 64-k slab; GEMM1: one row box
+// per token and slab, rows being gathered) in the 128-byte-swizzled K-major layout wgmma
+// reads natively, instead of 16 B cp.async per token and segment: the producer issued 512
+// cp.async per chunk at N = 32 and was the bottleneck (ablation 06bbc21a: -98 us at bs 256).
+template <int MODE, int N, int STAGES, bool PROF, int ABL = 0, bool W0 = false, bool BIG = false, bool TMA = false>
+__global__ void __launch_bounds__(288, N >= 32 ? 2 : W0 && !BIG ? 4 : 3) moe_gemm_wg_kernel(
     const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
     const uint8_t* __restrict__ wq, const uint8_t* __restrict__ ws, const float* __restrict__ gs,
     const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
     const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out, int n_blocks,
-    long long* __restrict__ prof, int* __restrict__ sched) {
+    long long* __restrict__ prof, int* __restrict__ sched, const __grid_constant__ TmapBlob tmap) {
+  constexpr int abl = PROF ? ABL : 0;   // ablation bits as moe_gemm_ws_kernel's
   using C = WgCfg<N>;
+  constexpr bool SINGLE = W0 || BIG;   // one A buffer; each batch waited at once
   constexpr int NCHUNK = KTOT / 128;
   static_assert(NCHUNK % STAGES == 0 && (N == 8 || N == 16 || N == 32), "stages / tokens");
-  extern __shared__ __align__(128) uint8_t smem[];
+  extern __shared__ __align__(1024) uint8_t smem[];   // 1 KB: the 128 B swizzle's atom
   const uint32_t base = (uint32_t)__cvta_generic_to_shared(smem);
   const uint32_t bar_full = base + STAGES * C::STAGE, bar_empty = bar_full + 8 * STAGES;
   volatile int* hdr = reinterpret_cast<volatile int*>(smem + STAGES * (C::STAGE + 16));
   const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
   if (tid == 0) {
     for (int s = 0; s < STAGES; ++s) {
-      mbar_init(bar_full + 8 * s, 33);    // lane 0's expect_tx arrive + 32 lanes' cp.async arrives
+      mbar_init(bar_full + 8 * s, TMA ? 1 : 33);    // lane 0's expect_tx arrive (+ 32 lanes' cp.async arrives)
       mbar_init(bar_empty + 8 * s, 256);
     }
     asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
@@ -1261,7 +1300,7 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
         if (f >= STAGES) mbar_wait(bar_empty + 8 * st, ((f / STAGES) - 1) & 1);
         if (lane == 0) hdr[st] = -1;
         __syncwarp();
-        mbar_arrive(bar_full + 8 * st);
+        if (!TMA) mbar_arrive(bar_full + 8 * st);
         if (lane == 0) {
           mbar_arrive(bar_full + 8 * st);
           if (atomicAdd(sched + 1, 1) == (int)gridDim.x - 1) {
@@ -1285,7 +1324,7 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
       const uint8_t* w_blk = wq + ((size_t)e * n_blocks + nb) * NCHUNK * C::W_STAGE;
       const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * NCHUNK * C::S_STAGE;
       long long pw = 0;
-      if (PROF && lane == 0) prof[item * 8 + 6] = gtimer();
+      if (PROF && lane == 0) prof[item * PSTR + 6] = gtimer();
       for (int kc = 0; kc < NCHUNK; ++kc, ++f) {
         const uint32_t st = f % STAGES;
         long long c0 = PROF ? clock64() : 0;
@@ -1294,9 +1333,25 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
         const uint32_t sb = base + st * C::STAGE, full = bar_full + 8 * st;
         if (lane == 0) {
           hdr[st] = item;
-          mbar_expect_tx(full, C::W_STAGE + C::S_STAGE);
-          bulk_g2s(sb + C::A_STAGE, w_blk + (size_t)kc * C::W_STAGE, C::W_STAGE, full);
-          bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s_blk + (size_t)kc * C::S_STAGE, C::S_STAGE, full);
+          const uint32_t act_tx = !TMA || (abl & 6) ? 0 : N * 256;
+          mbar_expect_tx(full, (abl & 4) ? 0 : C::W_STAGE + C::S_STAGE + act_tx);
+          if (!(abl & 4)) {
+            bulk_g2s(sb + C::A_STAGE, w_blk + (size_t)kc * C::W_STAGE, C::W_STAGE, full);
+            bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s_blk + (size_t)kc * C::S_STAGE, C::S_STAGE, full);
+          }
+        }
+        if (TMA) {
+          __syncwarp();   // lane 0's expect_tx precedes the boxes' complete_tx
+          if (!(abl & 6)) {
+#pragma unroll
+            for (int slab = 0; slab < 2; ++slab) {
+              const uint32_t dst = sb + slab * (N * 128);
+              // GEMM1's token rows were gathered in expert order beforehand (gather_rows), so
+              // both GEMMs load rows row0 .. row0 + N - 1 as one box per slab.
+              if (lane == 0) tma_2d(dst, &tmap, kc * 128 + slab * 64, row0, full);
+            }
+          }
+          continue;
         }
 #pragma unroll
         for (int i = 0; i < N / 2; ++i) {
@@ -1304,11 +1359,12 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
           const uint32_t dst = sb + seg * C::KSTRIDE + (n / 8) * 128 + (n % 8) * 16;
           const bool ok = src_row[i] >= 0;
           const uint8_t* src = reinterpret_cast<const uint8_t*>(a_src + (size_t)(ok ? src_row[i] : 0) * KTOT) + kc * 256 + seg * 16;
-          asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" :: "r"(dst), "l"(src), "r"(ok ? 16u : 0u));
+          if (!(abl & 6))
+            asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" :: "r"(dst), "l"(src), "r"(ok ? 16u : 0u));
         }
         asm volatile("cp.async.mbarrier.arrive.noinc.shared::cta.b64 [%0];\n" :: "r"(full) : "memory");
       }
-      if (PROF && lane == 0) prof[item * 8 + 4] = pw;
+      if (PROF && lane == 0) prof[item * PSTR + 4] = pw;
     }
   }
 
@@ -1327,24 +1383,38 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
     const int row0 = exp_start[e] + mc * N;
     const int rows_e = exp_start[e + 1] - row0;
     const float gsc = gs[e] * 256.0f;
-    long long ct0 = 0;
+    // abl & 32: cycles waiting for data / tensor core; abl & 64 also: decode (stage data ready
+    // -> A fragments built) and issue (wgmma.fence .. commit: includes the warpgroup's meeting)
+    long long ct0 = 0, t_full = 0, t_mma = 0, t_dec = 0, t_iss = 0, tm = 0;
     if (PROF && warp == 0) {
       ct0 = clock64();
-      if (lane == 0) prof[item * 8 + 1] = gtimer();
+      if (lane == 0) prof[item * PSTR + 1] = gtimer();
     }
     float d[N / 2];
 #pragma unroll
     for (int i = 0; i < N / 2; ++i) d[i] = 0.f;
     // A fragments, double-buffered by half chunk (4 k16 steps): the tensor core runs one
     // half's wgmmas while the warp decodes the next.
-    uint32_t afr[2][4][4];
+    uint32_t afr[SINGLE ? 1 : 2][BIG ? 8 : 4][4];
 #pragma unroll 1
     for (int kc0 = 0; kc0 < NCHUNK; kc0 += STAGES, f += STAGES) {
       const uint32_t parity = (f / STAGES) & 1;
 #pragma unroll
       for (int st = 0; st < STAGES; ++st) {
-        mbar_wait(bar_full + 8 * st, parity);
-        asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");   // cp.async (generic) -> wgmma (async)
+        if (abl & 32) {
+          const long long t0 = clock64();
+          mbar_wait(bar_full + 8 * st, parity);
+          t_full += clock64() - t0;
+        } else {
+          mbar_wait(bar_full + 8 * st, parity);
+        }
+        if (abl & 64) tm = clock64();
+        if (abl & 1) {
+          // no math: release this stage at once (and nothing is ever released late)
+          mbar_arrive(bar_empty + 8 * st);
+          continue;
+        }
+        if (!TMA) asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");   // cp.async (generic) -> wgmma (async)
         uint4 wv[2];
         uint2 sv[2];
 #pragma unroll
@@ -1355,7 +1425,10 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
           asm volatile("ld.shared.v2.u32 {%0,%1}, [%2];\n" : "=r"(sv[j].x), "=r"(sv[j].y)
                        : "r"(s_src + st * C::STAGE + j * 64));
         }
-        const uint64_t desc0 = wg_desc(base + st * C::STAGE, C::KSTRIDE, 128);
+        // no swizzle: core matrices, K stride in LBO; TMA: 128 B swizzle K-major, 8-row groups
+        // 1024 B apart (SBO), 64-k slabs N * 128 B apart, k16 steps 32 B apart within a slab.
+        const uint64_t desc0 = TMA ? (wg_desc(base + st * C::STAGE, 16, 1024) | (1ull << 62))
+                                   : wg_desc(base + st * C::STAGE, C::KSTRIDE, 128);
 #pragma unroll
         for (int hc = 0; hc < 2; ++hc) {          // half chunk: words 2hc, 2hc+1 = steps 4hc .. 4hc+3
 #pragma unroll
@@ -1367,12 +1440,15 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
 #pragma unroll
             for (int half = 0; half < 2; ++half) {
               const int step = 2 * w + half;
-              uint32_t* a = afr[hc][2 * ww + half];
+              uint32_t* a = afr[SINGLE ? 0 : hc][(BIG ? 4 * hc : 0) + 2 * ww + half];
 #pragma unroll
               for (int j = 0; j < 2; ++j) {
                 const uint32_t sw = w < 2 ? sv[j].x : sv[j].y;
                 const uint32_t sp = half == 0 ? scale_even(sw) : scale_odd(sw);
-                if ((step % 4) < 2) {
+                if (abl & 16) {
+                  a[j] = v[j][0] ^ wv[j].x;
+                  a[2 + j] = wv[j].y;
+                } else if ((step % 4) < 2) {
                   a[j] = mul2h<0>(v[j][2 * half], sp);
                   a[2 + j] = mul2h<0>(v[j][2 * half + 1], sp);
                 } else {
@@ -1382,25 +1458,53 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
               }
             }
           }
+          if (BIG && hc == 0) continue;   // decode the second half before the one batch
+          long long ti = 0;
+          if (abl & 64) {
+            ti = clock64();
+            t_dec += ti - tm;
+          }
           asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory");
 #pragma unroll
-          for (int i = 0; i < 4; ++i) {
-            const int step = 4 * hc + i;
-            wgmma_rs<N>(d, afr[hc][i], desc0 + ((uint64_t)(2 * step * C::KSTRIDE) >> 4));
+          for (int i = 0; i < (BIG ? 8 : 4); ++i) {
+            const int step = BIG ? i : 4 * hc + i;
+            uint32_t* a = afr[SINGLE ? 0 : hc][i];
+            if (abl & 8) {
+              d[0] += __int_as_float((a[0] ^ a[3]) & 0x3f800000u);
+            } else {
+              const uint32_t off = TMA ? (step / 4) * (N * 128) + (step % 4) * 32 : 2 * step * C::KSTRIDE;
+              wgmma_rs<N>(d, a, desc0 + ((uint64_t)off >> 4));
+            }
           }
           asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+          if (abl & 64) t_iss += clock64() - ti;
           // <= 1 group in flight: the other half's A buffer (and, after half 1, this stage's
           // token tile once the next wait completes) are free again.
-          asm volatile("wgmma.wait_group.sync.aligned 1;\n" ::: "memory");
+          if (abl & 32) {
+            const long long t0 = clock64();
+            if (SINGLE) asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+            else asm volatile("wgmma.wait_group.sync.aligned 1;\n" ::: "memory");
+            t_mma += clock64() - t0;
+            if (abl & 64) tm = clock64();
+          } else if (SINGLE) {
+            asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+          } else {
+            asm volatile("wgmma.wait_group.sync.aligned 1;\n" ::: "memory");
+          }
         }
         // This stage's first half is done (waited above); its second half may still read the
         // token tile: release the stage after the next half's wait, i.e. one stage late.
+        if (abl & 1) continue;
+        if (SINGLE) {
+          mbar_arrive(bar_empty + 8 * st);   // all of this stage's wgmmas are complete
+          continue;
+        }
         if (st > 0) mbar_arrive(bar_empty + 8 * (st - 1));
         else if (kc0 > 0) mbar_arrive(bar_empty + 8 * (STAGES - 1));
       }
     }
     asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
-    mbar_arrive(bar_empty + 8 * (STAGES - 1));
+    if (!(abl & 1) && !SINGLE) mbar_arrive(bar_empty + 8 * (STAGES - 1));
 
     // Epilogue (v6's): d[4t + i] = C[n = r / r + 8][token 8t + c + i]; pair columns by shuffle.
 #pragma unroll
@@ -1432,9 +1536,15 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
       }
     }
     if (PROF && warp == 0 && lane == 0) {
-      prof[item * 8 + 0] = smid();
-      prof[item * 8 + 2] = gtimer();
-      prof[item * 8 + 5] = clock64() - ct0;
+      prof[item * PSTR + 0] = smid();
+      prof[item * PSTR + 2] = gtimer();
+      prof[item * PSTR + 5] = clock64() - ct0;
+      if (abl & 32) {
+        prof[item * PSTR + 3] = t_full;
+        prof[item * PSTR + 7] = t_mma;
+        prof[item * PSTR + 8] = t_dec;
+        prof[item * PSTR + 9] = t_iss;
+      }
     }
   }
 }
@@ -1445,6 +1555,41 @@ MOE_HOST_SRC = r"""
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <algorithm>
+#include <cuda.h>
+#include <cudaTypedefs.h>
+
+// cuTensorMapEncodeTiled through the runtime's driver entry point (no -lcuda needed).
+static PFN_cuTensorMapEncodeTiled_v12000 tmap_encoder() {
+  static PFN_cuTensorMapEncodeTiled_v12000 fn = nullptr;
+  if (!fn) {
+    void* p = nullptr;
+#if CUDART_VERSION >= 12050
+    cudaDriverEntryPointQueryResult q;
+    cudaGetDriverEntryPoint("cuTensorMapEncodeTiled", &p, cudaEnableDefault, &q);
+#else
+    cudaGetDriverEntryPoint("cuTensorMapEncodeTiled", &p, cudaEnableDefault);
+#endif
+    fn = reinterpret_cast<PFN_cuTensorMapEncodeTiled_v12000>(p);
+  }
+  return fn;
+}
+
+// [rows, 4096] bf16 activations, boxes of 64 k x box_rows rows, 128-byte swizzle.
+static TmapBlob act_tmap(const torch::Tensor& a, int box_rows) {
+  CUtensorMap m;
+  cuuint64_t dims[2] = {4096, (cuuint64_t)a.size(0)};
+  cuuint64_t strides[1] = {4096 * 2};
+  cuuint32_t box[2] = {64, (cuuint32_t)box_rows};
+  cuuint32_t elem[2] = {1, 1};
+  CUresult r = tmap_encoder()(&m, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 2, a.data_ptr(), dims, strides, box, elem,
+                              CU_TENSOR_MAP_INTERLEAVE_NONE, CU_TENSOR_MAP_SWIZZLE_128B,
+                              CU_TENSOR_MAP_L2_PROMOTION_L2_128B, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+  TORCH_CHECK(r == CUDA_SUCCESS, "cuTensorMapEncodeTiled failed: ", (int)r);
+  TmapBlob b;
+  static_assert(sizeof(CUtensorMap) == sizeof(TmapBlob), "tensor map size");
+  memcpy(&b, &m, sizeof(b));
+  return b;
+}
 
 template <int MODE, int MT, int STAGES>
 void launch(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
@@ -1513,12 +1658,12 @@ void moe_gemm_ws(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, 
   TORCH_CHECK(false, "moe_gemm_ws: unsupported mode / m tiles / stages");
 }
 
-template <int MODE, int MT, int STAGES, bool PROF>
+template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0>
 void launch_sab(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
                 torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
                 int n_blocks, int grid, long long* prof, int* sched) {
   size_t smem = (size_t)STAGES * (SabCfg<MT>::STAGE + 32);
-  auto k = moe_gemm_sab_kernel<MODE, MT, STAGES, PROF>;
+  auto k = moe_gemm_sab_kernel<MODE, MT, STAGES, PROF, ABL>;
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   int per_sm = 0, sms = 0, dev = 0;
   cudaGetDevice(&dev);
@@ -1535,13 +1680,15 @@ void launch_sab(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, 
 void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                   torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                   torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
-                  torch::Tensor sched) {
+                  torch::Tensor sched, int64_t abl) {
   int* sp = sched.data_ptr<int32_t>();
   long long* pp = prof.numel() ? reinterpret_cast<long long*>(prof.data_ptr<int64_t>()) : nullptr;
   if (pp) {
 #ifdef OKC_PROF
-#define SPCASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch_sab<M_, T_, S_, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
-    SPCASE(1, 1, 4) SPCASE(2, 1, 4) SPCASE(1, 2, 4) SPCASE(2, 2, 4)
+#define SPCASE(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
+#define SPCASES(A_) SPCASE(1, 2, 4, A_) SPCASE(2, 2, 4, A_)
+    SPCASES(0) SPCASES(3) SPCASES(4) SPCASES(12) SPCASES(20) SPCASES(28)
+    SPCASE(1, 1, 4, 0) SPCASE(2, 1, 4, 0) SPCASE(1, 1, 8, 0) SPCASE(2, 1, 8, 0)
 #endif
     TORCH_CHECK(false, "moe_gemm_sab: no profiling build for this configuration (needs -DOKC_PROF)");
   }
@@ -1550,12 +1697,14 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
   TORCH_CHECK(false, "moe_gemm_sab: unsupported mode / token groups / stages");
 }
 
-template <int MODE, int N, int STAGES, bool PROF>
+template <int MODE, int N, int STAGES, bool PROF, int ABL = 0, bool W0 = false, bool BIG = false, bool TMA = false>
 void launch_wg(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
                torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
                int n_blocks, int grid, long long* prof, int* sched) {
-  size_t smem = (size_t)STAGES * (WgCfg<N>::STAGE + 32);
-  auto k = moe_gemm_wg_kernel<MODE, N, STAGES, PROF>;
+  size_t smem = (size_t)STAGES * (WgCfg<N>::STAGE + 32) + 1024;   // + alignment slack
+  auto k = moe_gemm_wg_kernel<MODE, N, STAGES, PROF, ABL, W0, BIG, TMA>;
+  TmapBlob tm{};
+  if (TMA) tm = act_tmap(a_src, N);
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   int per_sm = 0, sms = 0, dev = 0;
   cudaGetDevice(&dev);
@@ -1566,24 +1715,46 @@ void launch_wg(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, t
       reinterpret_cast<const __nv_bfloat16*>(a_src.data_ptr()), row_route.data_ptr<int32_t>(),
       wq.data_ptr<uint8_t>(), ws.data_ptr<uint8_t>(), gs.data_ptr<float>(),
       active.data_ptr<int32_t>(), n_active.data_ptr<int32_t>(), exp_start.data_ptr<int32_t>(),
-      reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks, prof, sched);
+      reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks, prof, sched, tm);
 }
 
 void moe_gemm_wg(int64_t mode, int64_t n_tok, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                  torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
-                 torch::Tensor sched) {
+                 torch::Tensor sched, int64_t abl) {
   int* sp = sched.data_ptr<int32_t>();
   long long* pp = prof.numel() ? reinterpret_cast<long long*>(prof.data_ptr<int64_t>()) : nullptr;
   if (pp) {
 #ifdef OKC_PROF
-#define GPCASE(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == S_) { launch_wg<M_, N_, S_, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
-    GPCASE(1, 16, 4) GPCASE(2, 16, 4)
+#define GPCASE(M_, N_, S_, A_) if (mode == M_ && n_tok == N_ && stages == S_ && abl == A_) { launch_wg<M_, N_, S_, true, A_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
+#define GPCASES(A_) GPCASE(1, 16, 4, A_) GPCASE(2, 16, 4, A_)
+    GPCASES(0) GPCASES(3) GPCASES(4) GPCASES(12) GPCASES(20) GPCASES(28) GPCASES(32) GPCASES(96)
+#define GPCASE0(M_, N_, S_, A_) if (mode == M_ && n_tok == N_ && stages == 100 + S_ && abl == A_) { launch_wg<M_, N_, S_, true, A_, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
+    GPCASE0(1, 16, 4, 0) GPCASE0(2, 16, 4, 0) GPCASE0(1, 16, 4, 32) GPCASE0(2, 16, 4, 32) GPCASE0(1, 16, 4, 96) GPCASE0(2, 16, 4, 96)
+#define GPCASEB(M_, N_, S_, A_) if (mode == M_ && n_tok == N_ && stages == 200 + S_ && abl == A_) { launch_wg<M_, N_, S_, true, A_, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
+    GPCASEB(1, 16, 4, 0) GPCASEB(2, 16, 4, 0) GPCASEB(1, 16, 4, 96) GPCASEB(2, 16, 4, 96)
+    GPCASEB(1, 32, 4, 0) GPCASEB(2, 32, 4, 0) GPCASEB(1, 32, 4, 96) GPCASEB(2, 32, 4, 96)
+    GPCASE(1, 32, 4, 0) GPCASE(2, 32, 4, 0) GPCASE(1, 32, 4, 96) GPCASE(2, 32, 4, 96)
+    GPCASE(1, 32, 4, 2) GPCASE(2, 32, 4, 2) GPCASE(1, 32, 4, 3) GPCASE(2, 32, 4, 3)
+    GPCASE0(1, 16, 4, 2) GPCASE0(2, 16, 4, 2) GPCASE0(1, 16, 4, 3) GPCASE0(2, 16, 4, 3)
+#define GPCASET(M_, N_, S_, A_) if (mode == M_ && n_tok == N_ && stages == 300 + S_ && abl == A_) { launch_wg<M_, N_, S_, true, A_, N_ <= 16, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
+    GPCASET(1, 16, 4, 0) GPCASET(2, 16, 4, 0) GPCASET(1, 32, 4, 0) GPCASET(2, 32, 4, 0)
+    GPCASET(1, 16, 4, 96) GPCASET(2, 16, 4, 96) GPCASET(1, 32, 4, 96) GPCASET(2, 32, 4, 96)
 #endif
     TORCH_CHECK(false, "moe_gemm_wg: no profiling build for this configuration (needs -DOKC_PROF)");
   }
 #define GCASE(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == S_) { launch_wg<M_, N_, S_, false>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp); return; }
   GCASE(1, 8, 4) GCASE(2, 8, 4) GCASE(1, 16, 4) GCASE(2, 16, 4) GCASE(1, 8, 8) GCASE(2, 8, 8) GCASE(1, 16, 8) GCASE(2, 16, 8)
+  // stages + 100: the W0 (single A buffer, 4 CTAs/SM) variant with that many stages.
+#define GCASE0(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == 100 + S_) { launch_wg<M_, N_, S_, false, 0, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp); return; }
+  GCASE0(1, 8, 4) GCASE0(2, 8, 4) GCASE0(1, 16, 4) GCASE0(2, 16, 4)
+  // stages + 200: BIG (one wgmma batch per chunk).
+#define GCASEB(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == 200 + S_) { launch_wg<M_, N_, S_, false, 0, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp); return; }
+  GCASEB(1, 8, 4) GCASEB(2, 8, 4) GCASEB(1, 16, 4) GCASEB(2, 16, 4) GCASEB(1, 32, 4) GCASEB(2, 32, 4)
+  GCASE(1, 32, 4) GCASE(2, 32, 4)
+  // stages + 300: TMA token tiles (N = 16: the W0 4-CTA form; N = 32: double-buffered, 2 CTAs)
+#define GCASET(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == 300 + S_) { launch_wg<M_, N_, S_, false, 0, N_ <= 16, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp); return; }
+  GCASET(1, 8, 4) GCASET(2, 8, 4) GCASET(1, 16, 4) GCASET(2, 16, 4) GCASET(1, 32, 4) GCASET(2, 32, 4)
   TORCH_CHECK(false, "moe_gemm_wg: unsupported mode / tokens / stages");
 }
 
@@ -1605,11 +1776,11 @@ MOE_CUDA_CPP = """
 void moe_gemm_wg(int64_t mode, int64_t n_tok, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                  torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
-                 torch::Tensor sched);
+                 torch::Tensor sched, int64_t abl);
 void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                   torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                   torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
-                  torch::Tensor sched);
+                  torch::Tensor sched, int64_t abl);
 void moe_gemm_ws(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                  torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, int64_t ks,
@@ -1742,6 +1913,19 @@ def _route_compact_kernel(ids_ptr, local_start_ptr, row_route_ptr, pos_of_route_
 
 
 @triton.jit
+def _gather_rows_kernel(x_ptr, row_route_ptr, exp_start_ptr, out_ptr, E: tl.constexpr, ROWS: tl.constexpr,
+                        H: tl.constexpr):
+    """out[r] = x[row_route[r] // 8] for the local rows r < exp_start[E] (expert order), so
+    GEMM1's token tile is contiguous rows, loadable by one TMA box."""
+    rows = tl.program_id(0) * ROWS + tl.arange(0, ROWS)
+    live = rows < tl.load(exp_start_ptr + E)
+    src = tl.load(row_route_ptr + rows, mask=live, other=0) // 8
+    cols = tl.arange(0, H)
+    v = tl.load(x_ptr + src.to(tl.int64)[:, None] * H + cols[None, :], mask=live[:, None], other=0.0)
+    tl.store(out_ptr + rows.to(tl.int64)[:, None] * H + cols[None, :], v, mask=live[:, None])
+
+
+@triton.jit
 def _post_norm_rows_kernel(y_ptr, w_ptr, s_ptr, pos_ptr, out_ptr, eps, TOPK: tl.constexpr, H: tl.constexpr):
     """out[t] = sum over slots k with a local row of s[t, k] * RMSNorm(y[row] * w)."""
     t = tl.program_id(0)
@@ -1818,9 +2002,14 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     out = torch.empty((m, hidden), dtype=x.dtype, device=device)
     grid = 132 * ctas_per_sm
 
+    tma = wg and stages >= 300
+    xs = torch.empty((p, 4096), dtype=torch.bfloat16, device=device) if tma else x
+
     def route():
         _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, rows_per_chunk,
                                         NE=256, E=count, CHUNK=256, num_warps=4)
+        if tma:
+            _gather_rows_kernel[(triton.cdiv(p, 4),)](x, row_route, exp_start, xs, E=count, ROWS=4, H=4096, num_warps=4)
 
     # prof: None, or (prof1, prof2) int64 buffers [max items * 8] for the profiling build.
     no_prof = torch.empty((0,), dtype=torch.int64, device=device)
@@ -1834,12 +2023,12 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
 
     def gemm1():
         if wg:    # v7: mt = 8-token groups per item (N = 8 mt)
-            mod.moe_gemm_wg(1, 8 * mt, stages, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
-                            n_active, exp_start, inter, 64, grid, prof[0], sched[0:2])
+            mod.moe_gemm_wg(1, 8 * mt, stages, xs, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
+                            n_active, exp_start, inter, 64, grid, prof[0], sched[0:2], abl)
             return
         if sab:   # 64 n blocks (GEMM1: 8 gate/up pairs per CTA), 32 for GEMM2 (16 n8 groups per CTA)
             mod.moe_gemm_sab(1, mt, stages, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
-                             n_active, exp_start, inter, 64, grid, prof[0], sched[0:2])
+                             n_active, exp_start, inter, 64, grid, prof[0], sched[0:2], abl)
             return
         # 64 work items per active expert per GEMM: 8 warps x (MODE 1: a gate/up pair, MODE 2: an n8 group).
         g1(1, mt, stages, x, row_route, bank["w13q" + sfx], bank["w13s" + sfx], bank["w13_gs"], active, n_active,
@@ -1848,11 +2037,11 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     def gemm2():
         if wg:
             mod.moe_gemm_wg(2, 8 * mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
-                            n_active, exp_start, y, 32, grid, prof[1], sched[2:4])
+                            n_active, exp_start, y, 32, grid, prof[1], sched[2:4], abl)
             return
         if sab:
             mod.moe_gemm_sab(2, mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
-                             n_active, exp_start, y, 32, grid, prof[1], sched[2:4])
+                             n_active, exp_start, y, 32, grid, prof[1], sched[2:4], abl)
             return
         g2(2, mt, stages, inter, row_route, bank["w2q" + sfx], bank["w2s" + sfx], bank["w2_gs"], active, n_active,
              exp_start, y, 512 // 8, grid)
@@ -1875,9 +2064,11 @@ def moe_cuda_forward(x, ids, topk_weights, local_start, bank, norm_w, eps, **kw)
 
 
 CUDA_CONFIGS = {
-    "k1": dict(mt=1, stages=4, ctas_per_sm=4, ws=True, ks=1),    # v5: 16 token rows as the A operand
-    "s1": dict(mt=1, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB, 8 tokens per item
-    "s2": dict(mt=2, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB, 16 tokens per item
+    "s1": dict(mt=1, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB (mma.sync), 8 tokens per item
+    "s2": dict(mt=2, stages=4, ctas_per_sm=4, sab=True),         # v6, 16 tokens per item
+    "s1d": dict(mt=1, stages=8, ctas_per_sm=2, sab=True),        # v6, deeper pipeline: few items per SM
+    "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens
+    "t4": dict(mt=4, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA, 32 tokens (2 CTAs/SM)
 }
 CUDA_MARGIN = 0.98   # a CUDA plan must take <= 98% of the incumbent's time on both timing routings
 
@@ -2053,6 +2244,9 @@ D_HIDDEN = 4096
 
 
 D_EXPERT = 4096
+
+
+N_EXPERTS = 256
 
 
 ROUTED_PER_TOKEN = 8
@@ -2434,9 +2628,10 @@ struct WsCfg {
 // split K, group g taking stages g, g + KS, ...; at the end of an item the partial
 // accumulators meet in shared memory and group 0 runs the epilogue.
 // PROF (profiling build only; production code is the PROF = false instantiation): per item,
-// prof[item * 8 + ...] = {smid, start ns, end ns (global timer), consumer warp 0's cycles
+// prof[item * PSTR + ...] = {smid, start ns, end ns (global timer), consumer warp 0's cycles
 // waiting on "full" (not measured: it perturbs the hot loop; read the ablations instead),
 // producer's cycles waiting on "empty", item cycles (warp 0), producer start ns, 0}.
+#define PSTR 12   // profiling record: int64 fields per item
 __device__ __forceinline__ long long gtimer() {
   long long t;
   asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
@@ -2530,7 +2725,7 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
       const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * NCHUNK * C::S_STAGE;
       const uint32_t tx = (abl & 4) ? 0u : ((abl & 2) ? 0u : live * 256) + C::W_STAGE + C::S_STAGE;
       long long pw = 0;
-      if (PROF && lane == 0) prof[item * 8 + 6] = gtimer();
+      if (PROF && lane == 0) prof[item * PSTR + 6] = gtimer();
       for (int kc = 0; kc < NCHUNK; ++kc, ++f) {
         const uint32_t st = f % STAGES;
         if (PROF) {
@@ -2558,7 +2753,7 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
           }
         }
       }
-      if (PROF && lane == 0) prof[item * 8 + 4] = pw;
+      if (PROF && lane == 0) prof[item * PSTR + 4] = pw;
     }
   }
 
@@ -2591,7 +2786,7 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
     long long cw = 0, ct0 = 0;
     if (PROF && warp == 0) {
       ct0 = clock64();
-      if (lane == 0) prof[item * 8 + 1] = gtimer();
+      if (lane == 0) prof[item * PSTR + 1] = gtimer();
     }
     constexpr int NACC = MT == 1 ? 2 : 1;
     float acc[NACC][MT][NGW][4];
@@ -2755,10 +2950,10 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
       }
     }
     if (PROF && warp == 0 && lane == 0) {
-      prof[item * 8 + 0] = smid();
-      prof[item * 8 + 2] = gtimer();
-      prof[item * 8 + 3] = cw;
-      prof[item * 8 + 5] = clock64() - ct0;
+      prof[item * PSTR + 0] = smid();
+      prof[item * PSTR + 2] = gtimer();
+      prof[item * PSTR + 3] = cw;
+      prof[item * PSTR + 5] = clock64() - ct0;
     }
   }
 }
@@ -2782,13 +2977,14 @@ struct SabCfg {
   static constexpr int STAGE = A_STAGE + W_STAGE + S_STAGE;
 };
 
-template <int MODE, int MT, int STAGES, bool PROF>
+template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0>
 __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
     const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
     const uint8_t* __restrict__ wq, const uint8_t* __restrict__ ws, const float* __restrict__ gs,
     const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
     const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out, int n_blocks,
     long long* __restrict__ prof, int* __restrict__ sched) {
+  constexpr int abl = PROF ? ABL : 0;   // ablation bits as moe_gemm_ws_kernel's
   using C = SabCfg<MT>;
   constexpr int NCHUNK = KTOT / 128;
   static_assert(NCHUNK % STAGES == 0 && MT * 8 <= 32, "stages divide chunks; <= 32 token rows");
@@ -2839,9 +3035,9 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       const uint8_t* a_row = reinterpret_cast<const uint8_t*>(a_src + (size_t)src * KTOT);
       const uint8_t* w_blk = wq + ((size_t)e * n_blocks + nb) * NCHUNK * C::W_STAGE;
       const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * NCHUNK * C::S_STAGE;
-      const uint32_t tx = live * 256 + C::W_STAGE + C::S_STAGE;
+      const uint32_t tx = (abl & 4) ? 0u : ((abl & 2) ? 0u : live * 256) + C::W_STAGE + C::S_STAGE;
       long long pw = 0;
-      if (PROF && lane == 0) prof[item * 8 + 6] = gtimer();
+      if (PROF && lane == 0) prof[item * PSTR + 6] = gtimer();
       for (int kc = 0; kc < NCHUNK; ++kc, ++f) {
         const uint32_t st = f % STAGES;
         long long c0 = PROF ? clock64() : 0;
@@ -2851,13 +3047,15 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
         if (lane == 0) {
           hdr[st] = item;
           mbar_expect_tx(full, tx);
-          bulk_g2s(sb + C::A_STAGE, w_blk + (size_t)kc * C::W_STAGE, C::W_STAGE, full);
-          bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s_blk + (size_t)kc * C::S_STAGE, C::S_STAGE, full);
+          if (!(abl & 4)) {
+            bulk_g2s(sb + C::A_STAGE, w_blk + (size_t)kc * C::W_STAGE, C::W_STAGE, full);
+            bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s_blk + (size_t)kc * C::S_STAGE, C::S_STAGE, full);
+          }
         }
         __syncwarp();
-        if (lane < live) bulk_g2s(sb + lane * C::A_ROW, a_row + kc * 256, 256, full);
+        if (!(abl & 6) && lane < live) bulk_g2s(sb + lane * C::A_ROW, a_row + kc * 256, 256, full);
       }
-      if (PROF && lane == 0) prof[item * 8 + 4] = pw;
+      if (PROF && lane == 0) prof[item * PSTR + 4] = pw;
     }
   }
 
@@ -2885,7 +3083,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
     long long ct0 = 0;
     if (PROF && warp == 0) {
       ct0 = clock64();
-      if (lane == 0) prof[item * 8 + 1] = gtimer();
+      if (lane == 0) prof[item * PSTR + 1] = gtimer();
     }
     // acc[x][t]: token group t, k16 steps of parity x (two chains per group).
     float acc[2][MT][4];
@@ -2904,6 +3102,10 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
 #pragma unroll
         for (int st = 0; st < STAGES; ++st) {
           mbar_wait(bar_full + 8 * st, parity);
+          if (abl & 1) {
+            mbar_arrive(bar_empty + 8 * st);
+            continue;
+          }
           uint4 wv[2];
           uint2 sv[2];
 #pragma unroll
@@ -2933,7 +3135,10 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
               for (int j = 0; j < 2; ++j) {
                 const uint32_t sw = w < 2 ? sv[j].x : sv[j].y;
                 const uint32_t sp = half == 0 ? scale_even(sw) : scale_odd(sw);
-                if ((step % 4) < 2) {
+                if (abl & 16) {
+                  a[j] = v[j][0] ^ wv[j].x;
+                  a[2 + j] = wv[j].y;
+                } else if ((step % 4) < 2) {
                   a[j] = mul2h<0>(v[j][2 * half], sp);
                   a[2 + j] = mul2h<0>(v[j][2 * half + 1], sp);
                 } else {
@@ -2942,7 +3147,13 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
                 }
               }
 #pragma unroll
-              for (int t = 0; t < T; ++t) mma16816(acc[half][t], a, b[t][2 * half], b[t][2 * half + 1]);
+              for (int t = 0; t < T; ++t) {
+                if (abl & 8) {
+                  acc[half][t][0] += __int_as_float((a[0] ^ a[3] ^ b[t][2 * half]) & 0x3f800000u);
+                } else {
+                  mma16816(acc[half][t], a, b[t][2 * half], b[t][2 * half + 1]);
+                }
+              }
             }
           }
           mbar_arrive(bar_empty + 8 * st);
@@ -2987,9 +3198,9 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       }
     }
     if (PROF && warp == 0 && lane == 0) {
-      prof[item * 8 + 0] = smid();
-      prof[item * 8 + 2] = gtimer();
-      prof[item * 8 + 5] = clock64() - ct0;
+      prof[item * PSTR + 0] = smid();
+      prof[item * PSTR + 2] = gtimer();
+      prof[item * PSTR + 5] = clock64() - ct0;
     }
   }
 }
@@ -3004,6 +3215,17 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
 // [k segment (8 k)][8-token block][8 rows][16 B]; descriptor LBO = K-direction stride, SBO =
 // 8-token-block stride (probe). The producer fills it with 16-byte cp.async (zero-filled past
 // the item's rows) completing on the stage's full barrier (cp.async.mbarrier.arrive.noinc).
+
+// A CUtensorMap's 128 bytes, passed by value (__grid_constant__) to TMA kernels; device code
+// only takes its address (so it compiles without cuda.h).
+struct alignas(64) TmapBlob {
+  unsigned long long v[16];
+};
+
+__device__ __forceinline__ void tma_2d(uint32_t dst, const TmapBlob* map, int c0, int c1, uint32_t bar) {
+  asm volatile("cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [%0], [%1, {%2, %3}], [%4];\n"
+               :: "r"(dst), "l"(reinterpret_cast<uint64_t>(map)), "r"(c0), "r"(c1), "r"(bar) : "memory");
+}
 
 template <int N>
 struct WgCfg {
@@ -3045,24 +3267,35 @@ __device__ __forceinline__ void wgmma_rs<32>(float* d, const uint32_t* a, uint64
                : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "l"(desc));
 }
 
-template <int MODE, int N, int STAGES, bool PROF>
-__global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
+// W0 (occupancy variant): one A buffer, each half chunk's wgmmas waited at once (tensor waits
+// are 1-2% of warp time, timed profile 4c3d61e9), so the kernel fits 4 CTAs (8 consumer warps
+// per SM sub-partition) instead of 3: decode latency is hidden by more warps, not by overlap.
+// BIG: one wgmma batch per chunk (8 k16 steps, one warpgroup meeting per chunk instead of
+// two: the fine-timed profile 222d366f put fence + issue at 34-38% of warp time).
+// TMA: the token tile arrives by TMA (GEMM2: one 64 x N box per 64-k slab; GEMM1: one row box
+// per token and slab, rows being gathered) in the 128-byte-swizzled K-major layout wgmma
+// reads natively, instead of 16 B cp.async per token and segment: the producer issued 512
+// cp.async per chunk at N = 32 and was the bottleneck (ablation 06bbc21a: -98 us at bs 256).
+template <int MODE, int N, int STAGES, bool PROF, int ABL = 0, bool W0 = false, bool BIG = false, bool TMA = false>
+__global__ void __launch_bounds__(288, N >= 32 ? 2 : W0 && !BIG ? 4 : 3) moe_gemm_wg_kernel(
     const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
     const uint8_t* __restrict__ wq, const uint8_t* __restrict__ ws, const float* __restrict__ gs,
     const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
     const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out, int n_blocks,
-    long long* __restrict__ prof, int* __restrict__ sched) {
+    long long* __restrict__ prof, int* __restrict__ sched, const __grid_constant__ TmapBlob tmap) {
+  constexpr int abl = PROF ? ABL : 0;   // ablation bits as moe_gemm_ws_kernel's
   using C = WgCfg<N>;
+  constexpr bool SINGLE = W0 || BIG;   // one A buffer; each batch waited at once
   constexpr int NCHUNK = KTOT / 128;
   static_assert(NCHUNK % STAGES == 0 && (N == 8 || N == 16 || N == 32), "stages / tokens");
-  extern __shared__ __align__(128) uint8_t smem[];
+  extern __shared__ __align__(1024) uint8_t smem[];   // 1 KB: the 128 B swizzle's atom
   const uint32_t base = (uint32_t)__cvta_generic_to_shared(smem);
   const uint32_t bar_full = base + STAGES * C::STAGE, bar_empty = bar_full + 8 * STAGES;
   volatile int* hdr = reinterpret_cast<volatile int*>(smem + STAGES * (C::STAGE + 16));
   const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
   if (tid == 0) {
     for (int s = 0; s < STAGES; ++s) {
-      mbar_init(bar_full + 8 * s, 33);    // lane 0's expect_tx arrive + 32 lanes' cp.async arrives
+      mbar_init(bar_full + 8 * s, TMA ? 1 : 33);    // lane 0's expect_tx arrive (+ 32 lanes' cp.async arrives)
       mbar_init(bar_empty + 8 * s, 256);
     }
     asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
@@ -3085,7 +3318,7 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
         if (f >= STAGES) mbar_wait(bar_empty + 8 * st, ((f / STAGES) - 1) & 1);
         if (lane == 0) hdr[st] = -1;
         __syncwarp();
-        mbar_arrive(bar_full + 8 * st);
+        if (!TMA) mbar_arrive(bar_full + 8 * st);
         if (lane == 0) {
           mbar_arrive(bar_full + 8 * st);
           if (atomicAdd(sched + 1, 1) == (int)gridDim.x - 1) {
@@ -3109,7 +3342,7 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
       const uint8_t* w_blk = wq + ((size_t)e * n_blocks + nb) * NCHUNK * C::W_STAGE;
       const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * NCHUNK * C::S_STAGE;
       long long pw = 0;
-      if (PROF && lane == 0) prof[item * 8 + 6] = gtimer();
+      if (PROF && lane == 0) prof[item * PSTR + 6] = gtimer();
       for (int kc = 0; kc < NCHUNK; ++kc, ++f) {
         const uint32_t st = f % STAGES;
         long long c0 = PROF ? clock64() : 0;
@@ -3118,9 +3351,25 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
         const uint32_t sb = base + st * C::STAGE, full = bar_full + 8 * st;
         if (lane == 0) {
           hdr[st] = item;
-          mbar_expect_tx(full, C::W_STAGE + C::S_STAGE);
-          bulk_g2s(sb + C::A_STAGE, w_blk + (size_t)kc * C::W_STAGE, C::W_STAGE, full);
-          bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s_blk + (size_t)kc * C::S_STAGE, C::S_STAGE, full);
+          const uint32_t act_tx = !TMA || (abl & 6) ? 0 : N * 256;
+          mbar_expect_tx(full, (abl & 4) ? 0 : C::W_STAGE + C::S_STAGE + act_tx);
+          if (!(abl & 4)) {
+            bulk_g2s(sb + C::A_STAGE, w_blk + (size_t)kc * C::W_STAGE, C::W_STAGE, full);
+            bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s_blk + (size_t)kc * C::S_STAGE, C::S_STAGE, full);
+          }
+        }
+        if (TMA) {
+          __syncwarp();   // lane 0's expect_tx precedes the boxes' complete_tx
+          if (!(abl & 6)) {
+#pragma unroll
+            for (int slab = 0; slab < 2; ++slab) {
+              const uint32_t dst = sb + slab * (N * 128);
+              // GEMM1's token rows were gathered in expert order beforehand (gather_rows), so
+              // both GEMMs load rows row0 .. row0 + N - 1 as one box per slab.
+              if (lane == 0) tma_2d(dst, &tmap, kc * 128 + slab * 64, row0, full);
+            }
+          }
+          continue;
         }
 #pragma unroll
         for (int i = 0; i < N / 2; ++i) {
@@ -3128,11 +3377,12 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
           const uint32_t dst = sb + seg * C::KSTRIDE + (n / 8) * 128 + (n % 8) * 16;
           const bool ok = src_row[i] >= 0;
           const uint8_t* src = reinterpret_cast<const uint8_t*>(a_src + (size_t)(ok ? src_row[i] : 0) * KTOT) + kc * 256 + seg * 16;
-          asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" :: "r"(dst), "l"(src), "r"(ok ? 16u : 0u));
+          if (!(abl & 6))
+            asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" :: "r"(dst), "l"(src), "r"(ok ? 16u : 0u));
         }
         asm volatile("cp.async.mbarrier.arrive.noinc.shared::cta.b64 [%0];\n" :: "r"(full) : "memory");
       }
-      if (PROF && lane == 0) prof[item * 8 + 4] = pw;
+      if (PROF && lane == 0) prof[item * PSTR + 4] = pw;
     }
   }
 
@@ -3151,24 +3401,38 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
     const int row0 = exp_start[e] + mc * N;
     const int rows_e = exp_start[e + 1] - row0;
     const float gsc = gs[e] * 256.0f;
-    long long ct0 = 0;
+    // abl & 32: cycles waiting for data / tensor core; abl & 64 also: decode (stage data ready
+    // -> A fragments built) and issue (wgmma.fence .. commit: includes the warpgroup's meeting)
+    long long ct0 = 0, t_full = 0, t_mma = 0, t_dec = 0, t_iss = 0, tm = 0;
     if (PROF && warp == 0) {
       ct0 = clock64();
-      if (lane == 0) prof[item * 8 + 1] = gtimer();
+      if (lane == 0) prof[item * PSTR + 1] = gtimer();
     }
     float d[N / 2];
 #pragma unroll
     for (int i = 0; i < N / 2; ++i) d[i] = 0.f;
     // A fragments, double-buffered by half chunk (4 k16 steps): the tensor core runs one
     // half's wgmmas while the warp decodes the next.
-    uint32_t afr[2][4][4];
+    uint32_t afr[SINGLE ? 1 : 2][BIG ? 8 : 4][4];
 #pragma unroll 1
     for (int kc0 = 0; kc0 < NCHUNK; kc0 += STAGES, f += STAGES) {
       const uint32_t parity = (f / STAGES) & 1;
 #pragma unroll
       for (int st = 0; st < STAGES; ++st) {
-        mbar_wait(bar_full + 8 * st, parity);
-        asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");   // cp.async (generic) -> wgmma (async)
+        if (abl & 32) {
+          const long long t0 = clock64();
+          mbar_wait(bar_full + 8 * st, parity);
+          t_full += clock64() - t0;
+        } else {
+          mbar_wait(bar_full + 8 * st, parity);
+        }
+        if (abl & 64) tm = clock64();
+        if (abl & 1) {
+          // no math: release this stage at once (and nothing is ever released late)
+          mbar_arrive(bar_empty + 8 * st);
+          continue;
+        }
+        if (!TMA) asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");   // cp.async (generic) -> wgmma (async)
         uint4 wv[2];
         uint2 sv[2];
 #pragma unroll
@@ -3179,7 +3443,10 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
           asm volatile("ld.shared.v2.u32 {%0,%1}, [%2];\n" : "=r"(sv[j].x), "=r"(sv[j].y)
                        : "r"(s_src + st * C::STAGE + j * 64));
         }
-        const uint64_t desc0 = wg_desc(base + st * C::STAGE, C::KSTRIDE, 128);
+        // no swizzle: core matrices, K stride in LBO; TMA: 128 B swizzle K-major, 8-row groups
+        // 1024 B apart (SBO), 64-k slabs N * 128 B apart, k16 steps 32 B apart within a slab.
+        const uint64_t desc0 = TMA ? (wg_desc(base + st * C::STAGE, 16, 1024) | (1ull << 62))
+                                   : wg_desc(base + st * C::STAGE, C::KSTRIDE, 128);
 #pragma unroll
         for (int hc = 0; hc < 2; ++hc) {          // half chunk: words 2hc, 2hc+1 = steps 4hc .. 4hc+3
 #pragma unroll
@@ -3191,12 +3458,15 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
 #pragma unroll
             for (int half = 0; half < 2; ++half) {
               const int step = 2 * w + half;
-              uint32_t* a = afr[hc][2 * ww + half];
+              uint32_t* a = afr[SINGLE ? 0 : hc][(BIG ? 4 * hc : 0) + 2 * ww + half];
 #pragma unroll
               for (int j = 0; j < 2; ++j) {
                 const uint32_t sw = w < 2 ? sv[j].x : sv[j].y;
                 const uint32_t sp = half == 0 ? scale_even(sw) : scale_odd(sw);
-                if ((step % 4) < 2) {
+                if (abl & 16) {
+                  a[j] = v[j][0] ^ wv[j].x;
+                  a[2 + j] = wv[j].y;
+                } else if ((step % 4) < 2) {
                   a[j] = mul2h<0>(v[j][2 * half], sp);
                   a[2 + j] = mul2h<0>(v[j][2 * half + 1], sp);
                 } else {
@@ -3206,25 +3476,53 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
               }
             }
           }
+          if (BIG && hc == 0) continue;   // decode the second half before the one batch
+          long long ti = 0;
+          if (abl & 64) {
+            ti = clock64();
+            t_dec += ti - tm;
+          }
           asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory");
 #pragma unroll
-          for (int i = 0; i < 4; ++i) {
-            const int step = 4 * hc + i;
-            wgmma_rs<N>(d, afr[hc][i], desc0 + ((uint64_t)(2 * step * C::KSTRIDE) >> 4));
+          for (int i = 0; i < (BIG ? 8 : 4); ++i) {
+            const int step = BIG ? i : 4 * hc + i;
+            uint32_t* a = afr[SINGLE ? 0 : hc][i];
+            if (abl & 8) {
+              d[0] += __int_as_float((a[0] ^ a[3]) & 0x3f800000u);
+            } else {
+              const uint32_t off = TMA ? (step / 4) * (N * 128) + (step % 4) * 32 : 2 * step * C::KSTRIDE;
+              wgmma_rs<N>(d, a, desc0 + ((uint64_t)off >> 4));
+            }
           }
           asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+          if (abl & 64) t_iss += clock64() - ti;
           // <= 1 group in flight: the other half's A buffer (and, after half 1, this stage's
           // token tile once the next wait completes) are free again.
-          asm volatile("wgmma.wait_group.sync.aligned 1;\n" ::: "memory");
+          if (abl & 32) {
+            const long long t0 = clock64();
+            if (SINGLE) asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+            else asm volatile("wgmma.wait_group.sync.aligned 1;\n" ::: "memory");
+            t_mma += clock64() - t0;
+            if (abl & 64) tm = clock64();
+          } else if (SINGLE) {
+            asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+          } else {
+            asm volatile("wgmma.wait_group.sync.aligned 1;\n" ::: "memory");
+          }
         }
         // This stage's first half is done (waited above); its second half may still read the
         // token tile: release the stage after the next half's wait, i.e. one stage late.
+        if (abl & 1) continue;
+        if (SINGLE) {
+          mbar_arrive(bar_empty + 8 * st);   // all of this stage's wgmmas are complete
+          continue;
+        }
         if (st > 0) mbar_arrive(bar_empty + 8 * (st - 1));
         else if (kc0 > 0) mbar_arrive(bar_empty + 8 * (STAGES - 1));
       }
     }
     asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
-    mbar_arrive(bar_empty + 8 * (STAGES - 1));
+    if (!(abl & 1) && !SINGLE) mbar_arrive(bar_empty + 8 * (STAGES - 1));
 
     // Epilogue (v6's): d[4t + i] = C[n = r / r + 8][token 8t + c + i]; pair columns by shuffle.
 #pragma unroll
@@ -3256,9 +3554,15 @@ __global__ void __launch_bounds__(288, 3) moe_gemm_wg_kernel(
       }
     }
     if (PROF && warp == 0 && lane == 0) {
-      prof[item * 8 + 0] = smid();
-      prof[item * 8 + 2] = gtimer();
-      prof[item * 8 + 5] = clock64() - ct0;
+      prof[item * PSTR + 0] = smid();
+      prof[item * PSTR + 2] = gtimer();
+      prof[item * PSTR + 5] = clock64() - ct0;
+      if (abl & 32) {
+        prof[item * PSTR + 3] = t_full;
+        prof[item * PSTR + 7] = t_mma;
+        prof[item * PSTR + 8] = t_dec;
+        prof[item * PSTR + 9] = t_iss;
+      }
     }
   }
 }
@@ -3269,6 +3573,41 @@ MOE_HOST_SRC = r"""
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <algorithm>
+#include <cuda.h>
+#include <cudaTypedefs.h>
+
+// cuTensorMapEncodeTiled through the runtime's driver entry point (no -lcuda needed).
+static PFN_cuTensorMapEncodeTiled_v12000 tmap_encoder() {
+  static PFN_cuTensorMapEncodeTiled_v12000 fn = nullptr;
+  if (!fn) {
+    void* p = nullptr;
+#if CUDART_VERSION >= 12050
+    cudaDriverEntryPointQueryResult q;
+    cudaGetDriverEntryPoint("cuTensorMapEncodeTiled", &p, cudaEnableDefault, &q);
+#else
+    cudaGetDriverEntryPoint("cuTensorMapEncodeTiled", &p, cudaEnableDefault);
+#endif
+    fn = reinterpret_cast<PFN_cuTensorMapEncodeTiled_v12000>(p);
+  }
+  return fn;
+}
+
+// [rows, 4096] bf16 activations, boxes of 64 k x box_rows rows, 128-byte swizzle.
+static TmapBlob act_tmap(const torch::Tensor& a, int box_rows) {
+  CUtensorMap m;
+  cuuint64_t dims[2] = {4096, (cuuint64_t)a.size(0)};
+  cuuint64_t strides[1] = {4096 * 2};
+  cuuint32_t box[2] = {64, (cuuint32_t)box_rows};
+  cuuint32_t elem[2] = {1, 1};
+  CUresult r = tmap_encoder()(&m, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 2, a.data_ptr(), dims, strides, box, elem,
+                              CU_TENSOR_MAP_INTERLEAVE_NONE, CU_TENSOR_MAP_SWIZZLE_128B,
+                              CU_TENSOR_MAP_L2_PROMOTION_L2_128B, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+  TORCH_CHECK(r == CUDA_SUCCESS, "cuTensorMapEncodeTiled failed: ", (int)r);
+  TmapBlob b;
+  static_assert(sizeof(CUtensorMap) == sizeof(TmapBlob), "tensor map size");
+  memcpy(&b, &m, sizeof(b));
+  return b;
+}
 
 template <int MODE, int MT, int STAGES>
 void launch(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
@@ -3337,12 +3676,12 @@ void moe_gemm_ws(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, 
   TORCH_CHECK(false, "moe_gemm_ws: unsupported mode / m tiles / stages");
 }
 
-template <int MODE, int MT, int STAGES, bool PROF>
+template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0>
 void launch_sab(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
                 torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
                 int n_blocks, int grid, long long* prof, int* sched) {
   size_t smem = (size_t)STAGES * (SabCfg<MT>::STAGE + 32);
-  auto k = moe_gemm_sab_kernel<MODE, MT, STAGES, PROF>;
+  auto k = moe_gemm_sab_kernel<MODE, MT, STAGES, PROF, ABL>;
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   int per_sm = 0, sms = 0, dev = 0;
   cudaGetDevice(&dev);
@@ -3359,13 +3698,15 @@ void launch_sab(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, 
 void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                   torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                   torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
-                  torch::Tensor sched) {
+                  torch::Tensor sched, int64_t abl) {
   int* sp = sched.data_ptr<int32_t>();
   long long* pp = prof.numel() ? reinterpret_cast<long long*>(prof.data_ptr<int64_t>()) : nullptr;
   if (pp) {
 #ifdef OKC_PROF
-#define SPCASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch_sab<M_, T_, S_, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
-    SPCASE(1, 1, 4) SPCASE(2, 1, 4) SPCASE(1, 2, 4) SPCASE(2, 2, 4)
+#define SPCASE(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
+#define SPCASES(A_) SPCASE(1, 2, 4, A_) SPCASE(2, 2, 4, A_)
+    SPCASES(0) SPCASES(3) SPCASES(4) SPCASES(12) SPCASES(20) SPCASES(28)
+    SPCASE(1, 1, 4, 0) SPCASE(2, 1, 4, 0) SPCASE(1, 1, 8, 0) SPCASE(2, 1, 8, 0)
 #endif
     TORCH_CHECK(false, "moe_gemm_sab: no profiling build for this configuration (needs -DOKC_PROF)");
   }
@@ -3374,12 +3715,14 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
   TORCH_CHECK(false, "moe_gemm_sab: unsupported mode / token groups / stages");
 }
 
-template <int MODE, int N, int STAGES, bool PROF>
+template <int MODE, int N, int STAGES, bool PROF, int ABL = 0, bool W0 = false, bool BIG = false, bool TMA = false>
 void launch_wg(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
                torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
                int n_blocks, int grid, long long* prof, int* sched) {
-  size_t smem = (size_t)STAGES * (WgCfg<N>::STAGE + 32);
-  auto k = moe_gemm_wg_kernel<MODE, N, STAGES, PROF>;
+  size_t smem = (size_t)STAGES * (WgCfg<N>::STAGE + 32) + 1024;   // + alignment slack
+  auto k = moe_gemm_wg_kernel<MODE, N, STAGES, PROF, ABL, W0, BIG, TMA>;
+  TmapBlob tm{};
+  if (TMA) tm = act_tmap(a_src, N);
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   int per_sm = 0, sms = 0, dev = 0;
   cudaGetDevice(&dev);
@@ -3390,24 +3733,46 @@ void launch_wg(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, t
       reinterpret_cast<const __nv_bfloat16*>(a_src.data_ptr()), row_route.data_ptr<int32_t>(),
       wq.data_ptr<uint8_t>(), ws.data_ptr<uint8_t>(), gs.data_ptr<float>(),
       active.data_ptr<int32_t>(), n_active.data_ptr<int32_t>(), exp_start.data_ptr<int32_t>(),
-      reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks, prof, sched);
+      reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks, prof, sched, tm);
 }
 
 void moe_gemm_wg(int64_t mode, int64_t n_tok, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                  torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
-                 torch::Tensor sched) {
+                 torch::Tensor sched, int64_t abl) {
   int* sp = sched.data_ptr<int32_t>();
   long long* pp = prof.numel() ? reinterpret_cast<long long*>(prof.data_ptr<int64_t>()) : nullptr;
   if (pp) {
 #ifdef OKC_PROF
-#define GPCASE(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == S_) { launch_wg<M_, N_, S_, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
-    GPCASE(1, 16, 4) GPCASE(2, 16, 4)
+#define GPCASE(M_, N_, S_, A_) if (mode == M_ && n_tok == N_ && stages == S_ && abl == A_) { launch_wg<M_, N_, S_, true, A_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
+#define GPCASES(A_) GPCASE(1, 16, 4, A_) GPCASE(2, 16, 4, A_)
+    GPCASES(0) GPCASES(3) GPCASES(4) GPCASES(12) GPCASES(20) GPCASES(28) GPCASES(32) GPCASES(96)
+#define GPCASE0(M_, N_, S_, A_) if (mode == M_ && n_tok == N_ && stages == 100 + S_ && abl == A_) { launch_wg<M_, N_, S_, true, A_, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
+    GPCASE0(1, 16, 4, 0) GPCASE0(2, 16, 4, 0) GPCASE0(1, 16, 4, 32) GPCASE0(2, 16, 4, 32) GPCASE0(1, 16, 4, 96) GPCASE0(2, 16, 4, 96)
+#define GPCASEB(M_, N_, S_, A_) if (mode == M_ && n_tok == N_ && stages == 200 + S_ && abl == A_) { launch_wg<M_, N_, S_, true, A_, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
+    GPCASEB(1, 16, 4, 0) GPCASEB(2, 16, 4, 0) GPCASEB(1, 16, 4, 96) GPCASEB(2, 16, 4, 96)
+    GPCASEB(1, 32, 4, 0) GPCASEB(2, 32, 4, 0) GPCASEB(1, 32, 4, 96) GPCASEB(2, 32, 4, 96)
+    GPCASE(1, 32, 4, 0) GPCASE(2, 32, 4, 0) GPCASE(1, 32, 4, 96) GPCASE(2, 32, 4, 96)
+    GPCASE(1, 32, 4, 2) GPCASE(2, 32, 4, 2) GPCASE(1, 32, 4, 3) GPCASE(2, 32, 4, 3)
+    GPCASE0(1, 16, 4, 2) GPCASE0(2, 16, 4, 2) GPCASE0(1, 16, 4, 3) GPCASE0(2, 16, 4, 3)
+#define GPCASET(M_, N_, S_, A_) if (mode == M_ && n_tok == N_ && stages == 300 + S_ && abl == A_) { launch_wg<M_, N_, S_, true, A_, N_ <= 16, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp); return; }
+    GPCASET(1, 16, 4, 0) GPCASET(2, 16, 4, 0) GPCASET(1, 32, 4, 0) GPCASET(2, 32, 4, 0)
+    GPCASET(1, 16, 4, 96) GPCASET(2, 16, 4, 96) GPCASET(1, 32, 4, 96) GPCASET(2, 32, 4, 96)
 #endif
     TORCH_CHECK(false, "moe_gemm_wg: no profiling build for this configuration (needs -DOKC_PROF)");
   }
 #define GCASE(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == S_) { launch_wg<M_, N_, S_, false>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp); return; }
   GCASE(1, 8, 4) GCASE(2, 8, 4) GCASE(1, 16, 4) GCASE(2, 16, 4) GCASE(1, 8, 8) GCASE(2, 8, 8) GCASE(1, 16, 8) GCASE(2, 16, 8)
+  // stages + 100: the W0 (single A buffer, 4 CTAs/SM) variant with that many stages.
+#define GCASE0(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == 100 + S_) { launch_wg<M_, N_, S_, false, 0, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp); return; }
+  GCASE0(1, 8, 4) GCASE0(2, 8, 4) GCASE0(1, 16, 4) GCASE0(2, 16, 4)
+  // stages + 200: BIG (one wgmma batch per chunk).
+#define GCASEB(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == 200 + S_) { launch_wg<M_, N_, S_, false, 0, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp); return; }
+  GCASEB(1, 8, 4) GCASEB(2, 8, 4) GCASEB(1, 16, 4) GCASEB(2, 16, 4) GCASEB(1, 32, 4) GCASEB(2, 32, 4)
+  GCASE(1, 32, 4) GCASE(2, 32, 4)
+  // stages + 300: TMA token tiles (N = 16: the W0 4-CTA form; N = 32: double-buffered, 2 CTAs)
+#define GCASET(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == 300 + S_) { launch_wg<M_, N_, S_, false, 0, N_ <= 16, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp); return; }
+  GCASET(1, 8, 4) GCASET(2, 8, 4) GCASET(1, 16, 4) GCASET(2, 16, 4) GCASET(1, 32, 4) GCASET(2, 32, 4)
   TORCH_CHECK(false, "moe_gemm_wg: unsupported mode / tokens / stages");
 }
 
@@ -3429,11 +3794,11 @@ MOE_CUDA_CPP = """
 void moe_gemm_wg(int64_t mode, int64_t n_tok, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                  torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
-                 torch::Tensor sched);
+                 torch::Tensor sched, int64_t abl);
 void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                   torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                   torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
-                  torch::Tensor sched);
+                  torch::Tensor sched, int64_t abl);
 void moe_gemm_ws(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                  torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, int64_t ks,
@@ -3566,6 +3931,19 @@ def _route_compact_kernel(ids_ptr, local_start_ptr, row_route_ptr, pos_of_route_
 
 
 @triton.jit
+def _gather_rows_kernel(x_ptr, row_route_ptr, exp_start_ptr, out_ptr, E: tl.constexpr, ROWS: tl.constexpr,
+                        H: tl.constexpr):
+    """out[r] = x[row_route[r] // 8] for the local rows r < exp_start[E] (expert order), so
+    GEMM1's token tile is contiguous rows, loadable by one TMA box."""
+    rows = tl.program_id(0) * ROWS + tl.arange(0, ROWS)
+    live = rows < tl.load(exp_start_ptr + E)
+    src = tl.load(row_route_ptr + rows, mask=live, other=0) // 8
+    cols = tl.arange(0, H)
+    v = tl.load(x_ptr + src.to(tl.int64)[:, None] * H + cols[None, :], mask=live[:, None], other=0.0)
+    tl.store(out_ptr + rows.to(tl.int64)[:, None] * H + cols[None, :], v, mask=live[:, None])
+
+
+@triton.jit
 def _post_norm_rows_kernel(y_ptr, w_ptr, s_ptr, pos_ptr, out_ptr, eps, TOPK: tl.constexpr, H: tl.constexpr):
     """out[t] = sum over slots k with a local row of s[t, k] * RMSNorm(y[row] * w)."""
     t = tl.program_id(0)
@@ -3642,9 +4020,14 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     out = torch.empty((m, hidden), dtype=x.dtype, device=device)
     grid = 132 * ctas_per_sm
 
+    tma = wg and stages >= 300
+    xs = torch.empty((p, 4096), dtype=torch.bfloat16, device=device) if tma else x
+
     def route():
         _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, rows_per_chunk,
                                         NE=256, E=count, CHUNK=256, num_warps=4)
+        if tma:
+            _gather_rows_kernel[(triton.cdiv(p, 4),)](x, row_route, exp_start, xs, E=count, ROWS=4, H=4096, num_warps=4)
 
     # prof: None, or (prof1, prof2) int64 buffers [max items * 8] for the profiling build.
     no_prof = torch.empty((0,), dtype=torch.int64, device=device)
@@ -3658,12 +4041,12 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
 
     def gemm1():
         if wg:    # v7: mt = 8-token groups per item (N = 8 mt)
-            mod.moe_gemm_wg(1, 8 * mt, stages, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
-                            n_active, exp_start, inter, 64, grid, prof[0], sched[0:2])
+            mod.moe_gemm_wg(1, 8 * mt, stages, xs, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
+                            n_active, exp_start, inter, 64, grid, prof[0], sched[0:2], abl)
             return
         if sab:   # 64 n blocks (GEMM1: 8 gate/up pairs per CTA), 32 for GEMM2 (16 n8 groups per CTA)
             mod.moe_gemm_sab(1, mt, stages, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
-                             n_active, exp_start, inter, 64, grid, prof[0], sched[0:2])
+                             n_active, exp_start, inter, 64, grid, prof[0], sched[0:2], abl)
             return
         # 64 work items per active expert per GEMM: 8 warps x (MODE 1: a gate/up pair, MODE 2: an n8 group).
         g1(1, mt, stages, x, row_route, bank["w13q" + sfx], bank["w13s" + sfx], bank["w13_gs"], active, n_active,
@@ -3672,11 +4055,11 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     def gemm2():
         if wg:
             mod.moe_gemm_wg(2, 8 * mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
-                            n_active, exp_start, y, 32, grid, prof[1], sched[2:4])
+                            n_active, exp_start, y, 32, grid, prof[1], sched[2:4], abl)
             return
         if sab:
             mod.moe_gemm_sab(2, mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
-                             n_active, exp_start, y, 32, grid, prof[1], sched[2:4])
+                             n_active, exp_start, y, 32, grid, prof[1], sched[2:4], abl)
             return
         g2(2, mt, stages, inter, row_route, bank["w2q" + sfx], bank["w2s" + sfx], bank["w2_gs"], active, n_active,
              exp_start, y, 512 // 8, grid)
@@ -3925,8 +4308,9 @@ def run_moe_cuda_sim(weights, state, variants=None, budget_s=300.0, seed=9_100_0
 
 def _prof_report(tag, buf, n_items, bytes_total, grid, clk_ghz=1.98):
     """One line from a profiling-build launch: where the GEMM's time went."""
-    r = buf[: n_items * 8].view(n_items, 8).cpu().double()
+    r = buf[: n_items * 12].view(n_items, 12).cpu().double()
     sm, t0, t1, cw, pw, cyc, p0 = (r[:, i] for i in range(7))
+    t_dec, t_iss = r[:, 8], r[:, 9]
     start, end = float(torch.minimum(t0, p0).min()), float(t1.max())
     span = end - start                                                  # ns
     dur = t1 - t0
@@ -3936,22 +4320,31 @@ def _prof_report(tag, buf, n_items, bytes_total, grid, clk_ghz=1.98):
     cons_wait = float(cw.sum() / cyc.sum())                             # consumer warp 0 starved for data
     prod_wait = float(pw.sum() / cyc.sum())                             # producer blocked on free stages
     per_sm = torch.bincount(sm.long(), minlength=132)
+    t_mma = r[:, 7]
+    waits = ""
+    if float(t_mma.sum()) > 0 or float(cw.sum()) > 0:   # timed build: warp 0's split of its item time
+        waits = (f" warp time: data wait {100 * float(cw.sum() / cyc.sum()):.0f}%, tensor wait"
+                 f" {100 * float(t_mma.sum() / cyc.sum()):.0f}%, rest {100 * float(1 - (cw.sum() + t_mma.sum()) / cyc.sum()):.0f}%")
+        if float(t_dec.sum()) > 0:
+            waits += (f" (decode {100 * float(t_dec.sum() / cyc.sum()):.0f}%, fence+issue"
+                      f" {100 * float(t_iss.sum() / cyc.sum()):.0f}%)")
+        waits += ";"
     print(f"  prof {tag}: {n_items} items on {int((per_sm > 0).sum())} SMs, span {span / 1e3:.1f} us,"
           f" {bytes_total / span / 1e3:.2f} TB/s; slot use {100 * busy:.0f}%; 90% done at {t90 / 1e3:.1f} us"
           f" (tail {(span - t90) / 1e3:.1f}); item {float(dur.median()) / 1e3:.1f} us med,"
-          f" {float(dur.quantile(0.9)) / 1e3:.1f} p90; producer waits {100 * prod_wait:.0f}%; items/SM {int(per_sm.max())} max {float(per_sm[per_sm > 0].float().mean()):.1f} mean",
+          f" {float(dur.quantile(0.9)) / 1e3:.1f} p90;{waits} producer waits {100 * prod_wait:.0f}%; items/SM {int(per_sm.max())} max {float(per_sm[per_sm > 0].float().mean()):.1f} mean",
           flush=True)
 
 
 ABLATIONS = {0: "full", 1: "no math", 2: "no act rows", 3: "weights only", 4: "math only",
-             12: "decode only", 20: "mma only", 28: "loop only"}
+             12: "decode only", 20: "mma only", 28: "loop only", 32: "timed", 36: "timed math", 96: "timed fine"}
 
 
 def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 256), abls=(0, 1, 2, 3, 4)):
     """Timeline of each GEMM (profiling build, cold L2) on scored shapes, and the same
     pipeline with parts switched off (ABLATIONS): which part closes the gap to the roofline."""
     try:
-        moe_cuda_module()
+        moe_cuda_module(prof=True)
     except Exception as e:
         print(f"moe prof: compile failed: {str(e)[-800:]}")
         return
@@ -3969,10 +4362,10 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
         for name, kw in cfgs.items():
             for abl in abls:
                 maxi = (32 + bs * 8 // ((8 if kw.get("sab") else 16) * kw["mt"]) + 1) * 64
-                prof = (torch.zeros(maxi * 8, dtype=torch.int64, device="cuda"),
-                        torch.zeros(maxi * 8, dtype=torch.int64, device="cuda"))
+                prof = (torch.zeros(maxi * 12, dtype=torch.int64, device="cuda"),
+                        torch.zeros(maxi * 12, dtype=torch.int64, device="cuda"))
                 fns, _ = moe_cuda_stages(data["hidden_states"], ids, data["topk_weights"], ls, bank, state["norm_w"],
-                                         POST_NORM_EPS, prof=prof, abl=abl, **kw)
+                                         _SIM_EPS, prof=prof, abl=abl, **kw)
                 for fn in fns:
                     fn()
                 fns[0]()
@@ -3982,10 +4375,58 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
                     flush.zero_()
                     fn()
                     torch.cuda.synchronize()
-                    n_items = int((prof[g].view(-1, 8)[:, 2] > 0).sum())
+                    n_items = int((prof[g].view(-1, 12)[:, 2] > 0).sum())
                     grid = 132 * (4 if kw["ks"] == 1 else 1)
                     _prof_report(f"bs{bs} {name} {ABLATIONS[abl]:>12} gemm{g + 1} ({ne} exp)", prof[g], n_items,
                                  nbytes, grid)
+
+
+_SIM_EPS = globals().get("POST_NORM_EPS", 1e-8)   # the MoE host defines POST_NORM_EPS; other hosts do not
+
+
+def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7):
+    """run_moe_profile on random NVFP4 weights for the 32 local experts: runs inside ANY
+    problem's host (the kernels' speed does not depend on the weight values), so kernel
+    experiments do not spend the MoE problem's checks."""
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    E, I, H = 32, 4096, 4096
+
+    def scales(n, k):   # positive normal E4M3 in [2^-3, 2^2): inside the fast decode's range
+        e = torch.randint(4, 9, (n, k), generator=g, device="cuda", dtype=torch.int32)
+        m = torch.randint(0, 8, (n, k), generator=g, device="cuda", dtype=torch.int32)
+        return ((e << 3) | m).to(torch.uint8).view(torch.float8_e4m3fn)
+
+    weights = {
+        "w13": torch.randint(0, 256, (E, 2 * I, H // 2), generator=g, device="cuda", dtype=torch.uint8),
+        "w2": torch.randint(0, 256, (E, H, I // 2), generator=g, device="cuda", dtype=torch.uint8),
+        "w13_gs": torch.full((E,), 1e-3, device="cuda"), "w2_gs": torch.full((E,), 1e-3, device="cuda"),
+    }
+    weights["w13_sf"] = torch.stack([scales(2 * I, H // 16) for _ in range(E)])
+    weights["w2_sf"] = torch.stack([scales(H, I // 16) for _ in range(E)])
+    state = {"norm_w": torch.ones(H, dtype=torch.bfloat16, device="cuda")}
+    if abls:
+        run_moe_profile(weights, state, cfgs=cfgs, sizes=sizes, abls=abls)
+    # Correctness without the MoE host: every config's forward output against the gate-verified
+    # v6 configuration (s2) on the same routing, and bitwise repeatability.
+    bank = state.get("cuda_bank")
+    if bank is None:
+        bank = build_cuda_bank(weights)
+        ws_layout(bank)
+    ls = torch.zeros(1, dtype=torch.int32, device="cuda")
+    for i, bs in enumerate(sizes):
+        data = generate_input(bs=bs, sharding="ep8", seed=8_800_000 + i, device="cuda")
+        args = (data["hidden_states"], data["topk_ids"], data["topk_weights"], ls, bank, state["norm_w"], _SIM_EPS)
+        ref = moe_cuda_forward(*args, mt=2, stages=4, ctas_per_sm=4, sab=True)
+        for name, kw in cfgs.items():
+            kw = {k: v for k, v in kw.items() if k != "abl"}
+            out = moe_cuda_forward(*args, **kw)
+            again = moe_cuda_forward(*args, **kw)
+            torch.cuda.synchronize()
+            print(f"check {name} bs{bs}: rel diff vs v6 {rel_l2(out, ref):.1e}, row worst {row_worst(out, ref):.1e},"
+                  f" repeat {'equal' if torch.equal(out, again) else 'DIFFERENT'}", flush=True)
+
+    del weights
+    torch.cuda.empty_cache()
 
 
 
@@ -4059,7 +4500,7 @@ def prepare(weights: Weights):
     del bench
     print(f"prepare: tuned in {time.time() - t0:.0f} s")
     try:
-        run_moe_cuda_sim(weights, state, variants={'s2': dict(stages=4, ctas_per_sm=4, mt=2, sab=True), 's2 st8': dict(stages=8, ctas_per_sm=2, mt=2, sab=True), 's1 st8': dict(stages=8, ctas_per_sm=2, mt=1, sab=True), 'wg16': dict(stages=4, ctas_per_sm=4, mt=2, wg=True), 'wg16 st8': dict(stages=8, ctas_per_sm=2, mt=2, wg=True), 'wg8 st8': dict(stages=8, ctas_per_sm=2, mt=1, wg=True)}, stages_for='none', budget_s=280)
+        run_moe_cuda_sim(weights, state, variants={'t2': dict(stages=304, ctas_per_sm=4, mt=2, wg=True), 't4': dict(stages=304, ctas_per_sm=4, mt=4, wg=True)}, stages_for='none', budget_s=250)
     except Exception as e:  # the sim must never break the host's own result
         import traceback
         print('sim failed:', ''.join(traceback.format_exc())[-1500:])

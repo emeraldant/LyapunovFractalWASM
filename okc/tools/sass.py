@@ -231,12 +231,14 @@ def moe_wg(args):
     import kernel as K
     prof = "true" if "prof" in args else "false"
     insts = [(1, 16, 4), (2, 16, 4), (1, 8, 4), (1, 32, 4)]
-    names = [f"moe_gemm_wg_kernel<{m}, {n}, {s}, {prof}>" for m, n, s in insts]
+    w0 = "true" if "w0" in args else "false"
+    big = "true" if "big" in args else "false"
+    names = [f"moe_gemm_wg_kernel<{m}, {n}, {s}, {prof}, 0, {w0}, {big}>" for m, n, s in insts]
     src = NVRTC_PRELUDE + K.MOE_DEVICE_SRC.replace("#include <stdint.h>", "") + "\n" + "\n".join(
-        f"template __global__ void moe_gemm_wg_kernel<{m}, {n}, {s}, {prof}>("
+        f"template __global__ void moe_gemm_wg_kernel<{m}, {n}, {s}, {prof}, 0, {w0}, {big}>("
         "const __nv_bfloat16*, const int32_t*, const uint8_t*, const uint8_t*, "
         "const float*, const int32_t*, const int32_t*, const int32_t*, "
-        "__nv_bfloat16*, int, long long*, int*);" for m, n, s in insts)
+        "__nv_bfloat16*, int, long long*, int*, const __grid_constant__ TmapBlob);" for m, n, s in insts)
     log, sass = compile_sass(nvrtc_ptx(src, names))
     for line in log.splitlines():
         if "Used" in line or "spill" in line or "arning" in line:

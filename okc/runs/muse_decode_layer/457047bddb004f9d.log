@@ -1,0 +1,90 @@
+moe cuda: ready in 49 s
+attention B1   L1 sliding: cuda 17.2 us, fused 18.1 us, sglang 25.6 us
+attention B1   L1 full   : cuda 29.6 us, fused 60.1 us, sglang 38.1 us
+attention B1   L8 sliding: cuda inf us, fused 39.6 us, sglang 28.4 us
+attention B1   L8 full   : cuda inf us, fused 143.2 us, sglang 44.1 us
+attention B16  L1 sliding: cuda 19.1 us, fused 23.2 us, sglang 32.3 us
+attention B16  L1 full   : cuda 123.2 us, fused 318.8 us, sglang 214.0 us
+attention B16  L8 sliding: cuda inf us, fused 45.3 us, sglang 35.5 us
+attention B16  L8 full   : cuda inf us, fused 408.7 us, sglang 218.1 us
+attention B32  L1 sliding: cuda 21.6 us, fused 28.0 us, sglang 38.9 us
+attention B32  L1 full   : cuda 223.9 us, fused 561.6 us, sglang 398.4 us
+attention B32  L8 sliding: cuda inf us, fused 65.6 us, sglang 42.1 us
+attention B32  L8 full   : cuda inf us, fused 716.7 us, sglang 400.2 us
+moe bs1 ('cuda', 's1k4'): adopted over ('fast', 8, True) 57.4/57.3 us, 47.4/51.0 us
+moe bs1   : ('cuda', 's1k4') 57.4 us (sglang 94.6 us)
+moe bs8 ('cuda', 's1k4'): adopted over ('fast', 8, False) 80.5/87.8 us, 95.2/109.5 us
+moe bs8 ('cuda', 's1dw'): adopted over ('cuda', 's1k4') 78.3/80.5 us, 85.0/95.3 us
+moe bs8   : ('cuda', 's1dw') 78.3 us (sglang 132.6 us)
+moe bs16 ('cuda', 's1k4'): adopted over ('fast', 8, False) 125.2/150.4 us, 145.9/180.8 us
+moe bs16 ('cuda', 's1dw'): adopted over ('cuda', 's1k4') 113.5/125.0 us, 140.0/146.4 us
+moe bs16  : ('cuda', 's1dw') 113.5 us (sglang 199.1 us)
+moe bs32 ('cuda', 's1k4'): adopted over ('fast', 16, False) 136.7/157.1 us, 192.2/243.9 us
+moe bs32 ('cuda', 's1dw'): adopted over ('cuda', 's1k4') 129.6/136.6 us, 182.1/192.1 us
+moe bs32 ('cuda', 's2w'): adopted over ('cuda', 's1dw') 124.3/129.5 us, 179.3/182.0 us
+moe bs32  : ('cuda', 's2w') 124.3 us (sglang 171.4 us)
+moe bs128 ('cuda', 's1k4'): adopted over ('fast', 16, False) 262.8/301.9 us, 299.6/333.8 us
+moe bs128 ('cuda', 's1dw'): adopted over ('cuda', 's1k4') 235.0/262.8 us, 263.9/299.1 us
+moe bs128 ('cuda', 's2w'): adopted over ('cuda', 's1dw') 217.2/234.7 us, 238.3/262.7 us
+moe bs128 ('cuda', 's2q'): adopted over ('cuda', 's2w') 211.6/217.8 us, 227.2/238.4 us
+moe bs128 : ('cuda', 's2q') 211.6 us (sglang 483.0 us)
+moe bs256 ('cuda', 's1dw'): adopted over ('fast', 16, False) 369.8/414.6 us, 332.0/359.3 us
+moe bs256 ('cuda', 's2w'): adopted over ('cuda', 's1dw') 286.8/368.8 us, 251.0/333.1 us
+moe bs256 ('cuda', 's2q'): adopted over ('cuda', 's2w') 272.5/287.7 us, 248.0/251.2 us
+moe bs256 ('cuda', 'v8'): adopted over ('cuda', 's2q') 275.4/272.7 us, 218.1/246.9 us
+moe bs256 ('cuda', 's2qv16'): adopted over ('cuda', 'v8') 258.2/273.7 us, 212.0/216.7 us
+moe bs256 : ('cuda', 's2qv16') 258.2 us (sglang 622.4 us)
+proj qkv_gate  m1   : ('fma', 1, 4, 1024, 1, 4, 2) 19.8 us (sglang 20.7 us)
+proj o         m1   : ('base',) 11.9 us (sglang 11.9 us)
+proj pooler    m1   : ('fma', 1, 8, 1024, 1, 4, 2) 26.5 us (sglang 29.9 us)
+proj unpooler  m1   : ('fma', 1, 4, 1024, 1, 4, 2) 11.2 us (sglang 11.4 us)
+proj qkv_gate  m8   : ('base',) 20.9 us (sglang 20.9 us)
+proj o         m8   : ('dot', 16, 32, 128, 1, 4, 4) 11.6 us (sglang 11.9 us)
+proj pooler    m8   : ('base',) 30.3 us (sglang 30.3 us)
+proj unpooler  m8   : ('base',) 11.5 us (sglang 11.5 us)
+proj qkv_gate  m16  : ('base',) 21.1 us (sglang 21.1 us)
+proj o         m16  : ('dot', 16, 32, 128, 1, 4, 4) 11.5 us (sglang 12.0 us)
+proj pooler    m16  : ('base',) 30.3 us (sglang 30.3 us)
+proj unpooler  m16  : ('base',) 27.6 us (sglang 27.6 us)
+proj qkv_gate  m32  : ('base',) 21.2 us (sglang 21.2 us)
+proj o         m32  : ('dot', 32, 32, 128, 1, 4, 4) 11.7 us (sglang 11.9 us)
+proj pooler    m32  : ('base',) 30.6 us (sglang 30.6 us)
+proj unpooler  m32  : ('base',) 28.1 us (sglang 28.1 us)
+proj qkv_gate  m128 : ('base',) 24.3 us (sglang 24.3 us)
+proj o         m128 : ('base',) 12.6 us (sglang 12.6 us)
+proj pooler    m128 : ('base',) 31.6 us (sglang 31.6 us)
+proj unpooler  m128 : ('base',) 29.2 us (sglang 29.2 us)
+proj qkv_gate  m256 : ('base',) 28.7 us (sglang 28.7 us)
+proj o         m256 : ('base',) 13.5 us (sglang 13.5 us)
+proj pooler    m256 : ('base',) 38.1 us (sglang 38.1 us)
+proj unpooler  m256 : ('base',) 32.8 us (sglang 32.8 us)
+layer check B1 L1: next input 4.19e-03, stream update 4.41e-03, ids 1.000
+layer check B4 L8: next input 3.36e-03, stream update 3.97e-03, ids 1.000
+layer check B16 L1: next input 3.17e-03, stream update 3.89e-03, ids 1.000
+layer check B32 L8: next input 3.60e-03, stream update 4.12e-03, ids 1.000
+layer check: 2440/2440 expert ids identical
+prepare: 142 s
+USDT:2026-10-23 18:24:27 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:27 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 18:24:27 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:27 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 18:24:28 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop

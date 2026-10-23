@@ -1,0 +1,97 @@
+moe cuda: ready in 43 s
+moe bs1 ('cuda', 's1'): not faster (50.9/51.3 us, 65.1/57.3 us)
+moe bs1 ('cuda', 's2'): not faster (51.4/50.7 us, 65.0/57.8 us)
+moe bs1 ('cuda', 's1d'): not faster (49.6/51.0 us, 57.0/57.7 us)
+moe bs1 ('cuda', 't2'): not faster (55.4/50.8 us, 71.5/57.8 us)
+moe bs1 ('cuda', 't4'): not faster (59.3/50.8 us, 70.1/58.0 us)
+moe plan bs1   : ('fast', 8, True) 50.3 us (sglang 87.5 us)
+moe bs8 ('cuda', 's1'): adopted over ('fast', 8, False) 92.6/110.5 us, 114.0/120.8 us
+moe bs8 ('cuda', 's2'): not faster (103.7/93.2 us, 108.7/113.6 us)
+moe bs8 ('cuda', 's1d'): adopted over ('cuda', 's1') 84.7/92.8 us, 106.2/114.2 us
+moe bs8 ('cuda', 't2'): not faster (99.5/85.1 us, 121.6/106.3 us)
+moe bs8 ('cuda', 't4'): not faster (97.8/84.5 us, 119.2/106.1 us)
+moe plan bs8   : ('cuda', 's1d') 84.7 us (sglang 151.3 us)
+moe bs16 ('cuda', 's1'): adopted over ('fast', 8, False) 130.0/139.3 us, 133.7/149.5 us
+moe bs16 ('cuda', 's2'): adopted over ('cuda', 's1') 118.0/130.2 us, 120.5/135.5 us
+moe bs16 ('cuda', 's1d'): not faster (118.5/117.8 us, 125.1/120.7 us)
+moe bs16 ('cuda', 't2'): not faster (132.4/118.2 us, 135.7/120.0 us)
+moe bs16 ('cuda', 't4'): not faster (134.9/117.6 us, 136.2/120.1 us)
+moe plan bs16  : ('cuda', 's2') 118.0 us (sglang 184.4 us)
+moe bs32 ('cuda', 's1'): adopted over ('fast', 8, False) 165.6/210.7 us, 140.5/180.1 us
+moe bs32 ('cuda', 's2'): not faster (162.5/165.7 us, 139.8/140.8 us)
+moe bs32 ('cuda', 's1d'): not faster (170.1/165.2 us, 154.3/140.6 us)
+moe bs32 ('cuda', 't2'): not faster (177.4/164.2 us, 135.1/139.9 us)
+moe bs32 ('cuda', 't4'): not faster (191.7/168.0 us, 137.5/140.4 us)
+moe plan bs32  : ('cuda', 's1') 165.6 us (sglang 231.5 us)
+moe bs128 ('cuda', 's1'): adopted over ('fast', 16, False) 304.6/351.8 us, 314.4/362.4 us
+moe bs128 ('cuda', 's2'): adopted over ('cuda', 's1') 281.6/305.4 us, 283.9/314.9 us
+moe bs128 ('cuda', 's1d'): not faster (356.1/281.9 us, 377.8/283.0 us)
+moe bs128 ('cuda', 't2'): adopted over ('cuda', 's2') 258.9/280.3 us, 257.6/283.1 us
+moe bs128 ('cuda', 't4'): not faster (275.9/262.1 us, 273.9/259.3 us)
+moe plan bs128 : ('cuda', 't2') 258.9 us (sglang 516.1 us)
+moe bs256 ('cuda', 's1'): not faster (365.0/400.7 us, 448.3/455.5 us)
+moe bs256 ('cuda', 's2'): adopted over ('fast', 16, False) 334.4/400.3 us, 389.8/452.2 us
+moe bs256 ('cuda', 's1d'): not faster (455.6/332.8 us, 553.9/388.0 us)
+moe bs256 ('cuda', 't2'): adopted over ('cuda', 's2') 281.8/331.1 us, 313.2/388.9 us
+moe bs256 ('cuda', 't4'): not faster (280.1/282.0 us, 311.8/313.8 us)
+moe plan bs256 : ('cuda', 't2') 281.8 us (sglang 613.0 us)
+prepare: tuned in 52 s
+moe cuda: compiled in 0 s
+t2|s bs1|ok 3.3e-03 w3.3e-03|50.1 vs plan 45.9us x0.912 [0.91,0.92] vs sglang x1.65
+t4|s bs1|ok 3.3e-03 w3.3e-03|53.8 vs plan 45.7us x0.853 [0.84,0.86] vs sglang x1.54
+t2|s bs8|ok 3.4e-03 w3.4e-03|116.3 vs plan 98.8us x0.851 [0.85,0.86] vs sglang x1.35
+t4|s bs8|ok 3.4e-03 w3.4e-03|114.5 vs plan 98.6us x0.859 [0.85,0.86] vs sglang x1.36
+t2|s bs16|ok 3.4e-03 w3.5e-03|93.9 vs plan 94.7us x1.010 [1.01,1.02] vs sglang x1.59
+t4|s bs16|ok 3.4e-03 w3.5e-03|93.1 vs plan 95.3us x1.022 [1.02,1.03] vs sglang x1.61
+t2|s bs32|ok 3.4e-03 w3.5e-03|152.7 vs plan 151.4us x0.993 [0.99,1.02] vs sglang x1.33
+t4|s bs32|ok 3.4e-03 w3.5e-03|174.0 vs plan 151.0us x0.867 [0.86,0.87] vs sglang x1.16
+t2|s bs128|ok 3.4e-03 w3.5e-03|207.8 vs plan 208.0us x1.001 [1.00,1.01] vs sglang x2.01
+t4|s bs128|ok 3.4e-03 w3.5e-03|228.2 vs plan 207.5us x0.908 [0.90,0.91] vs sglang x1.82
+t2|s bs256|ok 3.4e-03 w3.5e-03|291.3 vs plan 291.8us x1.002 [1.00,1.01] vs sglang x2.12
+t4|s bs256|ok 3.4e-03 w3.5e-03|276.4 vs plan 291.3us x1.054 [1.05,1.06] vs sglang x2.23
+t2|n bs2|ok 3.3e-03 w3.3e-03|89.2 vs plan 76.6us x0.865 [0.85,0.88] vs sglang x1.35
+t4|n bs2|ok 3.3e-03 w3.3e-03|82.8 vs plan 75.7us x0.917 [0.91,0.92] vs sglang x1.43
+t2|n bs5|ok 3.3e-03 w3.4e-03|87.3 vs plan 75.4us x0.862 [0.86,0.87] vs sglang x1.42
+t4|n bs5|ok 3.3e-03 w3.4e-03|82.0 vs plan 75.2us x0.918 [0.91,0.93] vs sglang x1.51
+t2|n bs12|ok 3.3e-03 w3.4e-03|125.9 vs plan 109.2us x0.867 [0.86,0.87] vs sglang x1.41
+t4|n bs12|ok 3.3e-03 w3.4e-03|129.5 vs plan 109.1us x0.842 [0.84,0.85] vs sglang x1.37
+t2|n bs24|ok 3.4e-03 w3.5e-03|153.6 vs plan 139.2us x0.903 [0.90,0.92] vs sglang x1.54
+t4|n bs24|ok 3.4e-03 w3.5e-03|174.0 vs plan 138.8us x0.797 [0.79,0.80] vs sglang x1.36
+t2|n bs48|ok 3.4e-03 w3.5e-03|167.2 vs plan 167.1us x0.999 [0.99,1.01] vs sglang x1.30
+t4|n bs48|ok 3.4e-03 w3.5e-03|186.1 vs plan 166.6us x0.896 [0.89,0.90] vs sglang x1.16
+t2|n bs64|ok 3.4e-03 w3.5e-03|178.2 vs plan 178.2us x1.000 [0.99,1.01] vs sglang x1.81
+t4|n bs64|ok 3.4e-03 w3.5e-03|202.6 vs plan 178.4us x0.880 [0.88,0.88] vs sglang x1.59
+t2|n bs96|ok 3.4e-03 w3.6e-03|217.0 vs plan 216.0us x0.999 [0.99,1.01] vs sglang x1.65
+t4|n bs96|ok 3.4e-03 w3.6e-03|228.5 vs plan 217.1us x0.946 [0.93,0.95] vs sglang x1.57
+t2|n bs200|ok 3.4e-03 w3.6e-03|348.8 vs plan 348.2us x0.999 [1.00,1.00] vs sglang x1.95
+t4|n bs200|ok 3.4e-03 w3.6e-03|328.4 vs plan 347.4us x1.057 [1.06,1.06] vs sglang x2.06
+t2|n bs8 skew|ok 3.3e-03 w3.5e-03|67.6 vs plan 60.6us x0.898 [0.89,0.91] vs sglang x1.57
+t4|n bs8 skew|ok 3.3e-03 w3.5e-03|67.2 vs plan 60.3us x0.899 [0.89,0.91] vs sglang x1.57
+t2|n bs32 skew|ok 3.4e-03 w3.5e-03|87.0 vs plan 120.5us x1.385 [1.38,1.39] vs sglang x1.25
+t4|n bs32 skew|ok 3.4e-03 w3.5e-03|81.8 vs plan 121.2us x1.481 [1.47,1.49] vs sglang x1.33
+t2|n bs256 skew|ok 3.4e-03 w3.6e-03|295.2 vs plan 295.2us x1.000 [1.00,1.00] vs sglang x1.00
+t4|n bs256 skew|ok 3.4e-03 w3.6e-03|221.2 vs plan 295.1us x1.334 [1.33,1.34] vs sglang x1.33
+t2|t bs3|ok 3.4e-03 w3.4e-03|77.0 vs plan 69.0us x0.891 [0.88,0.92] vs sglang x1.40
+t4|t bs3|ok 3.4e-03 w3.4e-03|80.6 vs plan 69.2us x0.866 [0.85,0.88] vs sglang x1.36
+t2|t bs33|ok 3.4e-03 w3.5e-03|194.9 vs plan 195.0us x1.000 [1.00,1.00] vs sglang x1.37
+t4|t bs33|ok 3.4e-03 w3.5e-03|224.7 vs plan 195.7us x0.871 [0.87,0.87] vs sglang x1.19
+t2|t bs257|ok 3.4e-03 w3.5e-03|294.8 vs plan 674.5us x2.289 [2.28,2.30] vs sglang x2.29
+t4|t bs257|ok 3.4e-03 w3.5e-03|311.0 vs plan 674.9us x2.176 [2.16,2.21] vs sglang x2.18
+t2|t bs1 skew|ok 3.4e-03 w3.4e-03|68.0 vs plan 66.8us x0.981 [0.97,1.00] vs sglang x1.45
+t4|t bs1 skew|ok 3.4e-03 w3.4e-03|70.6 vs plan 66.3us x0.935 [0.93,0.95] vs sglang x1.38
+t2|t bs128 skew|ok 3.4e-03 w3.5e-03|190.4 vs plan 190.7us x1.002 [1.00,1.00] vs sglang x1.10
+t4|t bs128 skew|ok 3.4e-03 w3.5e-03|130.5 vs plan 190.3us x1.458 [1.45,1.46] vs sglang x1.60
+GATE t2: FAIL | vs sglang scored 1.647 other 1.460 | wrong [] unstable [] regress ['s bs1 x0.91', 's bs8 x0.85', 'n bs2 x0.86', 'n bs5 x0.86', 'n bs12 x0.87', 'n bs24 x0.90', 'n bs8 skew x0.90', 't bs3 x0.89']
+GATE t4: FAIL | vs sglang scored 1.585 other 1.478 | wrong [] unstable [] regress ['s bs1 x0.85', 's bs8 x0.86', 's bs32 x0.87', 's bs128 x0.91', 'n bs2 x0.92', 'n bs5 x0.92', 'n bs12 x0.84', 'n bs24 x0.80', 'n bs48 x0.90', 'n bs64 x0.88', 'n bs96 x0.95', 'n bs8 skew x0.90', 't bs3 x0.87', 't bs33 x0.87', 't bs1 skew x0.94']
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:09:18 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop

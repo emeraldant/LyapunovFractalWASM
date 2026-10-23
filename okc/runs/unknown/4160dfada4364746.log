@@ -1,0 +1,100 @@
+check s1 bs1: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 45.1 us (v6 s2 46.1, x1.021)
+check s1k2 bs1: rel diff vs v6 7.1e-05, row worst 7.1e-05, repeat equal; 42.1 us (v6 s2 46.5, x1.100)
+check s1k4 bs1: rel diff vs v6 1.2e-04, row worst 1.2e-04, repeat equal; 38.6 us (v6 s2 45.7, x1.191)
+check s1k8 bs1: rel diff vs v6 1.2e-04, row worst 1.2e-04, repeat equal; 43.5 us (v6 s2 46.3, x1.070)
+check s1dk2 bs1: rel diff vs v6 7.1e-05, row worst 7.1e-05, repeat equal; 39.1 us (v6 s2 46.2, x1.183)
+check s1dk4 bs1: rel diff vs v6 1.2e-04, row worst 1.2e-04, repeat equal; 39.2 us (v6 s2 46.0, x1.174)
+check s1d bs1: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 43.8 us (v6 s2 46.5, x1.057)
+check s1 bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 87.4 us (v6 s2 95.0, x1.087)
+check s1k2 bs8: rel diff vs v6 3.8e-04, row worst 9.3e-04, repeat equal; 82.0 us (v6 s2 95.7, x1.162)
+check s1k4 bs8: rel diff vs v6 3.9e-04, row worst 9.3e-04, repeat equal; 82.0 us (v6 s2 95.9, x1.170)
+check s1k8 bs8: rel diff vs v6 4.1e-04, row worst 9.3e-04, repeat equal; 89.6 us (v6 s2 94.6, x1.061)
+check s1dk2 bs8: rel diff vs v6 3.8e-04, row worst 9.3e-04, repeat equal; 81.3 us (v6 s2 95.5, x1.179)
+check s1dk4 bs8: rel diff vs v6 3.9e-04, row worst 9.3e-04, repeat equal; 80.0 us (v6 s2 96.2, x1.201)
+check s1d bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 81.5 us (v6 s2 95.6, x1.175)
+check s1 bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 138.9 us (v6 s2 143.6, x1.037)
+check s1k2 bs16: rel diff vs v6 4.3e-04, row worst 7.2e-04, repeat equal; 141.8 us (v6 s2 143.9, x1.013)
+check s1k4 bs16: rel diff vs v6 4.5e-04, row worst 7.1e-04, repeat equal; 143.5 us (v6 s2 143.3, x0.987)
+check s1k8 bs16: rel diff vs v6 4.6e-04, row worst 7.0e-04, repeat equal; 159.6 us (v6 s2 142.9, x0.895)
+check s1dk2 bs16: rel diff vs v6 4.3e-04, row worst 7.2e-04, repeat equal; 147.2 us (v6 s2 143.3, x0.973)
+check s1dk4 bs16: rel diff vs v6 4.5e-04, row worst 7.1e-04, repeat equal; 150.1 us (v6 s2 143.4, x0.956)
+check s1d bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 144.8 us (v6 s2 144.2, x0.996)
+check s1 bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 157.6 us (v6 s2 158.0, x0.991)
+check s1k2 bs32: rel diff vs v6 4.0e-04, row worst 7.2e-04, repeat equal; 157.2 us (v6 s2 158.0, x1.004)
+check s1k4 bs32: rel diff vs v6 4.2e-04, row worst 7.2e-04, repeat equal; 158.6 us (v6 s2 158.9, x1.000)
+check s1k8 bs32: rel diff vs v6 4.3e-04, row worst 7.2e-04, repeat equal; 175.9 us (v6 s2 154.7, x0.886)
+check s1dk2 bs32: rel diff vs v6 4.0e-04, row worst 7.2e-04, repeat equal; 162.4 us (v6 s2 157.8, x0.968)
+check s1dk4 bs32: rel diff vs v6 4.2e-04, row worst 7.2e-04, repeat equal; 170.2 us (v6 s2 154.0, x0.905)
+check s1d bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 158.5 us (v6 s2 156.6, x0.983)
+attention B1   L1 sliding: fused 18.4 us, sglang 26.1 us
+attention B1   L1 full   : fused 60.5 us, sglang 41.3 us
+attention B1   L8 sliding: fused 39.5 us, sglang 29.2 us
+attention B1   L8 full   : fused 145.5 us, sglang 44.5 us
+attention B16  L1 sliding: fused 23.4 us, sglang 32.0 us
+attention B16  L1 full   : fused 319.0 us, sglang 212.8 us
+attention B16  L8 sliding: fused 43.9 us, sglang 35.2 us
+attention B16  L8 full   : fused 410.4 us, sglang 217.4 us
+attention B32  L1 sliding: fused 28.7 us, sglang 38.7 us
+attention B32  L1 full   : fused 561.1 us, sglang 400.0 us
+attention B32  L8 sliding: fused 65.8 us, sglang 41.4 us
+attention B32  L8 full   : fused 717.3 us, sglang 402.6 us
+moe bs1   : ('fast', 8, True) 58.0 us (sglang 96.2 us)
+moe bs8   : ('fast', 8, False) 120.9 us (sglang 165.4 us)
+moe bs16  : ('fast', 8, False) 170.7 us (sglang 221.1 us)
+moe bs32  : ('fast', 8, False) 221.9 us (sglang 236.3 us)
+moe bs128 : ('fast', 16, False) 354.8 us (sglang 522.7 us)
+moe bs256 : ('fast', 16, False) 491.6 us (sglang 671.1 us)
+proj qkv_gate  m1   : ('fma', 1, 4, 1024, 1, 4, 2) 20.3 us (sglang 21.0 us)
+proj o         m1   : ('base',) 12.0 us (sglang 12.0 us)
+proj pooler    m1   : ('fma', 1, 8, 1024, 1, 4, 2) 26.3 us (sglang 30.3 us)
+proj unpooler  m1   : ('fma', 1, 4, 1024, 1, 4, 2) 11.5 us (sglang 11.8 us)
+proj qkv_gate  m8   : ('base',) 21.1 us (sglang 21.1 us)
+proj o         m8   : ('dot', 16, 32, 128, 1, 4, 4) 11.8 us (sglang 12.0 us)
+proj pooler    m8   : ('base',) 30.4 us (sglang 30.4 us)
+proj unpooler  m8   : ('base',) 12.0 us (sglang 12.0 us)
+proj qkv_gate  m16  : ('base',) 21.2 us (sglang 21.2 us)
+proj o         m16  : ('dot', 16, 32, 128, 1, 4, 4) 11.7 us (sglang 12.1 us)
+proj pooler    m16  : ('base',) 30.4 us (sglang 30.4 us)
+proj unpooler  m16  : ('base',) 28.2 us (sglang 28.2 us)
+proj qkv_gate  m32  : ('base',) 21.6 us (sglang 21.6 us)
+proj o         m32  : ('dot', 32, 32, 128, 1, 4, 4) 11.9 us (sglang 12.1 us)
+proj pooler    m32  : ('base',) 30.9 us (sglang 30.9 us)
+proj unpooler  m32  : ('base',) 28.1 us (sglang 28.1 us)
+proj qkv_gate  m128 : ('base',) 24.8 us (sglang 24.8 us)
+proj o         m128 : ('base',) 12.5 us (sglang 12.5 us)
+proj pooler    m128 : ('base',) 31.7 us (sglang 31.7 us)
+proj unpooler  m128 : ('base',) 29.5 us (sglang 29.5 us)
+proj qkv_gate  m256 : ('base',) 28.8 us (sglang 28.8 us)
+proj o         m256 : ('base',) 13.8 us (sglang 13.8 us)
+proj pooler    m256 : ('base',) 37.9 us (sglang 37.9 us)
+proj unpooler  m256 : ('base',) 33.3 us (sglang 33.3 us)
+layer check B1 L1: next input 6.37e-03, stream update 7.08e-03, ids 1.000
+layer check B4 L8: next input 5.04e-05, stream update 5.09e-05, ids 1.000
+layer check B16 L1: next input 0.00e+00, stream update 0.00e+00, ids 1.000
+layer check B32 L8: next input 3.46e-04, stream update 3.42e-04, ids 1.000
+layer check: 2440/2440 expert ids identical
+prepare: 54 s
+USDT:2026-10-23 04:22:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:22:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:22:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:22:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:22:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:22:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

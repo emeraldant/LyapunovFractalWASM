@@ -1,0 +1,98 @@
+  prof bs16 s1         full gemm1 (14 exp): 896 items on 132 SMs, span 78.6 us, 3.36 TB/s; slot use 71%; 90% done at 68.1 us (tail 10.5); item 33.8 us med, 48.9 p90; producer waits 62%; items/SM 8 max 6.8 mean
+  prof bs16 s1         full gemm2 (14 exp): 448 items on 132 SMs, span 45.3 us, 2.92 TB/s; slot use 63%; 90% done at 42.5 us (tail 2.8); item 33.3 us med, 38.0 p90; producer waits 73%; items/SM 4 max 3.4 mean
+  prof bs16 s1 weights only gemm1 (14 exp): 896 items on 132 SMs, span 73.2 us, 3.61 TB/s; slot use 72%; 90% done at 71.4 us (tail 1.8); item 30.2 us med, 40.7 p90; producer waits 88%; items/SM 8 max 6.8 mean
+  prof bs16 s1 weights only gemm2 (14 exp): 448 items on 132 SMs, span 40.2 us, 3.29 TB/s; slot use 67%; 90% done at 38.9 us (tail 1.3); item 32.0 us med, 33.5 p90; producer waits 93%; items/SM 4 max 3.4 mean
+  prof bs16 s1    math only gemm1 (14 exp): 896 items on 132 SMs, span 55.0 us, 4.80 TB/s; slot use 80%; 90% done at 54.5 us (tail 0.5); item 19.5 us med, 53.5 p90; producer waits 89%; items/SM 7 max 6.8 mean
+  prof bs16 s1    math only gemm2 (14 exp): 448 items on 132 SMs, span 31.2 us, 4.23 TB/s; slot use 53%; 90% done at 31.0 us (tail 0.3); item 18.4 us med, 30.0 p90; producer waits 86%; items/SM 4 max 3.4 mean
+  prof bs16 s1  decode only gemm1 (14 exp): 896 items on 132 SMs, span 36.4 us, 7.27 TB/s; slot use 78%; 90% done at 36.1 us (tail 0.3); item 12.5 us med, 35.1 p90; producer waits 87%; items/SM 7 max 6.8 mean
+  prof bs16 s1  decode only gemm2 (14 exp): 448 items on 132 SMs, span 20.7 us, 6.37 TB/s; slot use 51%; 90% done at 20.2 us (tail 0.5); item 11.3 us med, 18.9 p90; producer waits 85%; items/SM 4 max 3.4 mean
+  prof bs16 s1     mma only gemm1 (14 exp): 896 items on 132 SMs, span 30.5 us, 8.67 TB/s; slot use 80%; 90% done at 30.0 us (tail 0.5); item 15.1 us med, 18.2 p90; producer waits 73%; items/SM 7 max 6.8 mean
+  prof bs16 s1     mma only gemm2 (14 exp): 448 items on 132 SMs, span 17.4 us, 7.59 TB/s; slot use 66%; 90% done at 17.2 us (tail 0.3); item 12.3 us med, 16.1 p90; producer waits 73%; items/SM 4 max 3.4 mean
+  prof bs16 s1    loop only gemm1 (14 exp): 896 items on 132 SMs, span 26.4 us, 10.02 TB/s; slot use 79%; 90% done at 25.9 us (tail 0.5); item 9.5 us med, 24.6 p90; producer waits 64%; items/SM 7 max 6.8 mean
+  prof bs16 s1    loop only gemm2 (14 exp): 448 items on 132 SMs, span 15.6 us, 8.46 TB/s; slot use 54%; 90% done at 15.4 us (tail 0.3); item 9.0 us med, 14.1 p90; producer waits 65%; items/SM 4 max 3.4 mean
+  prof bs32 s1         full gemm1 (13 exp): 960 items on 132 SMs, span 84.5 us, 2.90 TB/s; slot use 72%; 90% done at 73.0 us (tail 11.5); item 33.5 us med, 49.4 p90; producer waits 54%; items/SM 8 max 7.3 mean
+  prof bs32 s1         full gemm2 (13 exp): 480 items on 132 SMs, span 43.8 us, 2.80 TB/s; slot use 63%; 90% done at 41.5 us (tail 2.3); item 29.4 us med, 36.4 p90; producer waits 60%; items/SM 4 max 3.6 mean
+  prof bs32 s1 weights only gemm1 (13 exp): 960 items on 132 SMs, span 68.6 us, 3.58 TB/s; slot use 78%; 90% done at 66.8 us (tail 1.8); item 30.0 us med, 40.4 p90; producer waits 88%; items/SM 8 max 7.3 mean
+  prof bs32 s1 weights only gemm2 (13 exp): 480 items on 132 SMs, span 38.1 us, 3.22 TB/s; slot use 72%; 90% done at 37.6 us (tail 0.5); item 31.0 us med, 33.3 p90; producer waits 90%; items/SM 4 max 3.6 mean
+  prof bs32 s1    math only gemm1 (13 exp): 960 items on 132 SMs, span 63.2 us, 3.88 TB/s; slot use 76%; 90% done at 55.0 us (tail 8.2); item 19.7 us med, 53.5 p90; producer waits 89%; items/SM 8 max 7.3 mean
+  prof bs32 s1    math only gemm2 (13 exp): 480 items on 132 SMs, span 31.2 us, 3.93 TB/s; slot use 60%; 90% done at 31.0 us (tail 0.3); item 18.7 us med, 30.0 p90; producer waits 87%; items/SM 4 max 3.6 mean
+  prof bs32 s1  decode only gemm1 (13 exp): 960 items on 132 SMs, span 41.7 us, 5.88 TB/s; slot use 74%; 90% done at 36.4 us (tail 5.4); item 12.5 us med, 35.3 p90; producer waits 87%; items/SM 8 max 7.3 mean
+  prof bs32 s1  decode only gemm2 (13 exp): 480 items on 132 SMs, span 20.5 us, 5.99 TB/s; slot use 57%; 90% done at 20.2 us (tail 0.3); item 11.5 us med, 19.2 p90; producer waits 85%; items/SM 4 max 3.6 mean
+  prof bs32 s1     mma only gemm1 (13 exp): 960 items on 132 SMs, span 34.0 us, 7.21 TB/s; slot use 78%; 90% done at 31.2 us (tail 2.8); item 14.8 us med, 18.2 p90; producer waits 73%; items/SM 8 max 7.3 mean
+  prof bs32 s1     mma only gemm2 (13 exp): 480 items on 132 SMs, span 17.7 us, 6.95 TB/s; slot use 74%; 90% done at 17.4 us (tail 0.3); item 14.6 us med, 16.1 p90; producer waits 72%; items/SM 4 max 3.6 mean
+  prof bs32 s1    loop only gemm1 (13 exp): 960 items on 132 SMs, span 29.4 us, 8.33 TB/s; slot use 75%; 90% done at 26.9 us (tail 2.6); item 9.2 us med, 24.6 p90; producer waits 64%; items/SM 8 max 7.3 mean
+  prof bs32 s1    loop only gemm2 (13 exp): 480 items on 132 SMs, span 15.6 us, 7.86 TB/s; slot use 61%; 90% done at 15.4 us (tail 0.3); item 9.2 us med, 14.1 p90; producer waits 63%; items/SM 4 max 3.6 mean
+check s1 bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal
+check s1 bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal
+attention B1   L1 sliding: fused 17.9 us, sglang 24.9 us
+attention B1   L1 full   : fused 61.0 us, sglang 39.8 us
+attention B1   L8 sliding: fused 40.2 us, sglang 28.6 us
+attention B1   L8 full   : fused 142.8 us, sglang 43.6 us
+attention B16  L1 sliding: fused 23.5 us, sglang 32.1 us
+attention B16  L1 full   : fused 319.8 us, sglang 214.6 us
+attention B16  L8 sliding: fused 43.6 us, sglang 35.6 us
+attention B16  L8 full   : fused 408.8 us, sglang 217.8 us
+attention B32  L1 sliding: fused 28.7 us, sglang 38.8 us
+attention B32  L1 full   : fused 560.7 us, sglang 399.0 us
+attention B32  L8 sliding: fused 65.2 us, sglang 42.8 us
+attention B32  L8 full   : fused 715.8 us, sglang 400.2 us
+moe bs1   : ('fast', 8, True) 58.3 us (sglang 95.3 us)
+moe bs8   : ('fast', 8, False) 120.2 us (sglang 164.4 us)
+moe bs16  : ('fast', 8, False) 169.5 us (sglang 219.2 us)
+moe bs32  : ('fast', 16, False) 221.1 us (sglang 234.9 us)
+moe bs128 : ('fast', 16, False) 354.6 us (sglang 522.6 us)
+moe bs256 : ('fast', 16, False) 485.8 us (sglang 665.4 us)
+proj qkv_gate  m1   : ('fma', 1, 8, 1024, 1, 4, 2) 20.4 us (sglang 21.4 us)
+proj o         m1   : ('base',) 12.1 us (sglang 12.1 us)
+proj pooler    m1   : ('fma', 1, 8, 1024, 1, 4, 2) 27.5 us (sglang 30.4 us)
+proj unpooler  m1   : ('fma', 1, 4, 1024, 1, 4, 2) 11.3 us (sglang 11.7 us)
+proj qkv_gate  m8   : ('base',) 21.3 us (sglang 21.3 us)
+proj o         m8   : ('dot', 16, 32, 128, 1, 4, 4) 11.8 us (sglang 12.0 us)
+proj pooler    m8   : ('base',) 30.2 us (sglang 30.2 us)
+proj unpooler  m8   : ('base',) 11.6 us (sglang 11.6 us)
+proj qkv_gate  m16  : ('base',) 21.0 us (sglang 21.0 us)
+proj o         m16  : ('dot', 16, 32, 128, 1, 4, 4) 11.8 us (sglang 12.2 us)
+proj pooler    m16  : ('base',) 30.7 us (sglang 30.7 us)
+proj unpooler  m16  : ('base',) 28.0 us (sglang 28.0 us)
+proj qkv_gate  m32  : ('base',) 21.7 us (sglang 21.7 us)
+proj o         m32  : ('base',) 12.2 us (sglang 12.2 us)
+proj pooler    m32  : ('base',) 31.2 us (sglang 31.2 us)
+proj unpooler  m32  : ('base',) 27.9 us (sglang 27.9 us)
+proj qkv_gate  m128 : ('base',) 24.5 us (sglang 24.5 us)
+proj o         m128 : ('base',) 12.8 us (sglang 12.8 us)
+proj pooler    m128 : ('base',) 32.4 us (sglang 32.4 us)
+proj unpooler  m128 : ('base',) 29.2 us (sglang 29.2 us)
+proj qkv_gate  m256 : ('base',) 28.7 us (sglang 28.7 us)
+proj o         m256 : ('base',) 13.7 us (sglang 13.7 us)
+proj pooler    m256 : ('base',) 38.5 us (sglang 38.5 us)
+proj unpooler  m256 : ('base',) 33.1 us (sglang 33.1 us)
+layer check B1 L1: next input 6.44e-03, stream update 7.09e-03, ids 1.000
+layer check B4 L8: next input 0.00e+00, stream update 0.00e+00, ids 1.000
+layer check B16 L1: next input 6.55e-05, stream update 6.79e-05, ids 1.000
+layer check B32 L8: next input 3.84e-04, stream update 3.77e-04, ids 1.000
+layer check: 2440/2440 expert ids identical
+prepare: 53 s
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:49:45 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:45 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:49:45 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:45 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:49:45 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:49:45 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop

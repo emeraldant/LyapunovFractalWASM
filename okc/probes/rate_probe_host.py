@@ -386,6 +386,87 @@ __global__ void lop3_rate(float* sink, int iters) {
   if (s == 12345u) sink[0] = s;
 }
 
+// Overlap probe: per iteration each warp does a decode-like ALU block (64 LOP3 + 32 HMUL2
+// over 8 independent chains) and/or its warpgroup issues 4 wgmma m64n16k16 from registers.
+// MODE bits: 1 = ALU block, 2 = wgmma (fence, 4 x wgmma, commit, wait 0), 4 = wait 1 (async).
+template <int MODE>
+__global__ void overlap_probe(float* sink, int iters) {
+  __shared__ __align__(128) uint8_t sB[16 * 256];
+  for (int i = threadIdx.x; i < 16 * 64; i += blockDim.x) reinterpret_cast<uint32_t*>(sB)[i] = 0x3f803f80u;
+  asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+  __syncthreads();
+  const uint64_t desc = desc0((uint32_t)__cvta_generic_to_shared(sB));
+  uint32_t x[8];
+  for (int i = 0; i < 8; ++i) x[i] = threadIdx.x * 8 + i;
+  const uint32_t m = 0x3f803f81u;
+  float d[8] = {};
+  for (int it = 0; it < iters; ++it) {
+    if (MODE & 17) {   // 1: LOP3 + HMUL2 block; 16: LOP3 part only
+#pragma unroll
+      for (int r = 0; r < 8; ++r)
+#pragma unroll
+        for (int i = 0; i < 8; ++i) asm volatile("lop3.b32 %0, %0, 0x81C081C0, %0, 0x6a;" : "+r"(x[i]));
+    }
+    if (MODE & 33) {   // 1: LOP3 + HMUL2 block; 32: HMUL2 part only
+#pragma unroll
+      for (int r = 0; r < 4; ++r)
+#pragma unroll
+        for (int i = 0; i < 8; ++i) asm volatile("mul.rn.bf16x2 %0, %0, %1;" : "+r"(x[i]) : "r"(m));
+    }
+    if (MODE & 8) {   // the same MACs per warp as 4 x m64n16k16 per warpgroup: 8 x m16n8k16
+#pragma unroll
+      for (int k = 0; k < 8; ++k)
+        asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
+                     : "+f"(d[4 * (k & 1)]), "+f"(d[4 * (k & 1) + 1]), "+f"(d[4 * (k & 1) + 2]), "+f"(d[4 * (k & 1) + 3])
+                     : "r"(x[k]), "r"(x[(k + 1) % 8]), "r"(x[(k + 2) % 8]), "r"(x[(k + 3) % 8]), "r"(x[(k + 4) % 8]), "r"(m));
+    }
+    if (MODE & 2) {
+      asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory");
+#pragma unroll
+      for (int k = 0; k < 4; ++k)
+        asm volatile("{\n .reg .pred p;\n setp.ne.b32 p, 1, 0;\n"
+                     "wgmma.mma_async.sync.aligned.m64n16k16.f32.bf16.bf16 {%0,%1,%2,%3,%4,%5,%6,%7}, {%8,%9,%10,%11}, %12, p, 1, 1, 0;\n}\n"
+                     : "+f"(d[0]), "+f"(d[1]), "+f"(d[2]), "+f"(d[3]), "+f"(d[4]), "+f"(d[5]), "+f"(d[6]), "+f"(d[7])
+                     : "r"(x[2 * k]), "r"(x[2 * k + 1]), "r"(x[(2 * k + 2) % 8]), "r"(x[(2 * k + 3) % 8]), "l"(desc));
+      asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+      if (MODE & 4) asm volatile("wgmma.wait_group.sync.aligned 1;\n" ::: "memory");
+      else asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+    }
+  }
+  asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+  uint32_t s = 0;
+  for (int i = 0; i < 8; ++i) s ^= x[i];
+  float f = 0.f;
+  for (int i = 0; i < 8; ++i) f += d[i];
+  if (s == 12345u || f == 12345.f) sink[0] = f;
+}
+
+double run_overlap(int mode, int blocks, int threads, int iters, torch::Tensor sink) {
+  cudaEvent_t e0, e1;
+  cudaEventCreate(&e0); cudaEventCreate(&e1);
+  auto go = [&]() {
+    float* p = sink.data_ptr<float>();
+    if (mode == 1) overlap_probe<1><<<blocks, threads>>>(p, iters);
+    if (mode == 2) overlap_probe<2><<<blocks, threads>>>(p, iters);
+    if (mode == 3) overlap_probe<3><<<blocks, threads>>>(p, iters);
+    if (mode == 7) overlap_probe<7><<<blocks, threads>>>(p, iters);
+    if (mode == 8) overlap_probe<8><<<blocks, threads>>>(p, iters);
+    if (mode == 9) overlap_probe<9><<<blocks, threads>>>(p, iters);
+    if (mode == 16) overlap_probe<16><<<blocks, threads>>>(p, iters);
+    if (mode == 18) overlap_probe<18><<<blocks, threads>>>(p, iters);
+    if (mode == 32) overlap_probe<32><<<blocks, threads>>>(p, iters);
+    if (mode == 34) overlap_probe<34><<<blocks, threads>>>(p, iters);
+  };
+  go();
+  cudaEventRecord(e0);
+  go();
+  cudaEventRecord(e1);
+  cudaEventSynchronize(e1);
+  float ms = 0;
+  cudaEventElapsedTime(&ms, e0, e1);
+  return ms;
+}
+
 double run(int which, int n, int blocks, int threads, int iters, torch::Tensor sink) {
   cudaEvent_t e0, e1;
   cudaEventCreate(&e0); cudaEventCreate(&e1);
@@ -409,14 +490,15 @@ double run(int which, int n, int blocks, int threads, int iters, torch::Tensor s
 }
 """
 
-_RATE_CPP = "double run(int which, int n, int blocks, int threads, int iters, torch::Tensor sink);"
+_RATE_CPP = ("double run(int which, int n, int blocks, int threads, int iters, torch::Tensor sink);\n"
+             "double run_overlap(int mode, int blocks, int threads, int iters, torch::Tensor sink);")
 
 
 def run_rate_probe():
     import time
     from torch.utils.cpp_extension import load_inline
     t = time.time()
-    mod = load_inline(name="okc_rate_probe", cpp_sources=_RATE_CPP, cuda_sources=_RATE_SRC, functions=["run"],
+    mod = load_inline(name="okc_rate_probe", cpp_sources=_RATE_CPP, cuda_sources=_RATE_SRC, functions=["run", "run_overlap"],
                       extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"], verbose=False)
     print(f"rate probe: compiled in {time.time() - t:.0f} s")
     sink = torch.zeros(4, device="cuda")
@@ -441,10 +523,28 @@ def run_rate_probe():
             print(f"rate {name}, {warps} warps/SM: {inst / (ms * 1e-3) / sms / 4 / clk:.2f} warp-instr/clk/SMSP")
 
 
+def run_overlap_probe():
+    from torch.utils.cpp_extension import load_inline
+    mod = load_inline(name="okc_rate_probe", cpp_sources=_RATE_CPP, cuda_sources=_RATE_SRC, functions=["run", "run_overlap"],
+                      extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"], verbose=False)
+    sink = torch.zeros(4, device="cuda")
+    clk, sms, iters = 1.98e9, 132, 2000
+    for wgs_per_cta, ctas in ((2, 4), (2, 2)):
+        res = {}
+        for mode, name in ((1, "alu"), (2, "wgmma"), (3, "alu+wgmma"), (8, "mma.sync"), (9, "alu+mma.sync"),
+                           (16, "lop3"), (18, "lop3+wgmma"), (32, "hmul2"), (34, "hmul2+wgmma")):
+            ms = mod.run_overlap(mode, sms * ctas, 128 * wgs_per_cta, iters, sink)
+            res[name] = ms * 1e-3 * clk / iters
+        print(f"overlap {wgs_per_cta * ctas} WG/SM: clocks per iteration (all WGs): "
+              + ", ".join(f"{k} {v:.0f}" for k, v in res.items())
+              + f"; sums: alu+wgmma {res['alu'] + res['wgmma']:.0f}, lop3+wgmma {res['lop3'] + res['wgmma']:.0f},"
+              f" hmul2+wgmma {res['hmul2'] + res['wgmma']:.0f}")
+
+
 
 def prepare(weights: Weights):
     try:
-        run_rate_probe()
+        run_overlap_probe()
     except Exception as e:  # the sim must never break the host's own result
         import traceback
         print('sim failed:', ''.join(traceback.format_exc())[-1500:])

@@ -716,6 +716,12 @@ def _fused_attention(qkv, data, cfg):
 ALIGN_CHUNK = 256
 
 @triton.jit
+def _bins(loc, E: tl.constexpr):
+    """counts[i] = #(loc == i) for i < E (loc in [0, E]), via a one-hot sum."""
+    return tl.sum((loc[:, None] == tl.arange(0, E)[None, :]).to(tl.int32), axis=0)
+
+
+@triton.jit
 def _align_local_kernel(ids_ptr, local_start_ptr, sorted_ptr, block_expert_ptr, n_padded_ptr, local_ids_ptr,
                         P, MAX_BLOCKS, NE: tl.constexpr,
                         E: tl.constexpr, BS: tl.constexpr, BS_P2: tl.constexpr, CHUNK: tl.constexpr,

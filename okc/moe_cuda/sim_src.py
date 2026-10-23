@@ -12,7 +12,7 @@ import triton.language as tl
 
 # @bundle muse_moe_w4a16/reference.py D_HIDDEN D_EXPERT N_EXPERTS ROUTED_PER_TOKEN LOCAL POPULARITY generate_input
 # @bundle muse_moe_w4a16/nvfp4.py outlier_channels
-# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULE moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _gather_rows_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_cuda_stages moe_cuda_forward
+# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULE moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _gather_rows_kernel _splitk_silu_kernel _post_norm_parts_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_cuda_stages moe_cuda_forward
 # @bundle sim/harness.py SimBench rel_l2 row_worst SimReport
 
 # Every shape the judge can plausibly draw near, not just the scored ones: a kernel that wins
@@ -184,13 +184,17 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
         ne = int(torch.unique(ids[ids < 32]).numel())
         for name, kw in cfgs.items():
             for abl in abls:
-                maxi = (32 + bs * 8 // ((8 if kw.get("sab") else 16) * kw["mt"]) + 1) * 64
+                maxi = (32 + bs * 8 // ((8 if kw.get("sab") else 16) * kw["mt"]) + 1) * 64 * kw.get("kparts", 1)
                 prof = (torch.zeros(maxi * 12, dtype=torch.int64, device="cuda"),
                         torch.zeros(maxi * 12, dtype=torch.int64, device="cuda"))
                 fns, _ = moe_cuda_stages(data["hidden_states"], ids, data["topk_weights"], ls, bank, state["norm_w"],
                                          _SIM_EPS, prof=prof, abl=abl, **kw)
-                for fn in fns:
-                    fn()
+                try:
+                    for fn in fns:
+                        fn()
+                except Exception as e:
+                    print(f"  prof {name} abl {abl}: {type(e).__name__}: {str(e)[:120]}")
+                    continue
                 fns[0]()
                 torch.cuda.synchronize()
                 for g, (fn, nbytes) in enumerate(((fns[1], ne * W13_BYTES), (fns[2], ne * W2_BYTES))):
@@ -207,7 +211,7 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
 _SIM_EPS = globals().get("POST_NORM_EPS", 1e-8)   # the MoE host defines POST_NORM_EPS; other hosts do not
 
 
-def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7):
+def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7, timed=True, stage_detail=False):
     """run_moe_profile on random NVFP4 weights for the 32 local experts: runs inside ANY
     problem's host (the kernels' speed does not depend on the weight values), so kernel
     experiments do not spend the MoE problem's checks."""
@@ -236,17 +240,30 @@ def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7):
         bank = build_cuda_bank(weights)
         ws_layout(bank)
     ls = torch.zeros(1, dtype=torch.int32, device="cuda")
+    bench = SimBench() if timed else None
     for i, bs in enumerate(sizes):
         data = generate_input(bs=bs, sharding="ep8", seed=8_800_000 + i, device="cuda")
         args = (data["hidden_states"], data["topk_ids"], data["topk_weights"], ls, bank, state["norm_w"], _SIM_EPS)
-        ref = moe_cuda_forward(*args, mt=2, stages=4, ctas_per_sm=4, sab=True)
+        ref_kw = dict(mt=2, stages=4, ctas_per_sm=4, sab=True)
+        ref = moe_cuda_forward(*args, **ref_kw)
         for name, kw in cfgs.items():
             kw = {k: v for k, v in kw.items() if k != "abl"}
             out = moe_cuda_forward(*args, **kw)
             again = moe_cuda_forward(*args, **kw)
             torch.cuda.synchronize()
-            print(f"check {name} bs{bs}: rel diff vs v6 {rel_l2(out, ref):.1e}, row worst {row_worst(out, ref):.1e},"
-                  f" repeat {'equal' if torch.equal(out, again) else 'DIFFERENT'}", flush=True)
+            line = (f"check {name} bs{bs}: rel diff vs v6 {rel_l2(out, ref):.1e}, row worst {row_worst(out, ref):.1e},"
+                    f" repeat {'equal' if torch.equal(out, again) else 'DIFFERENT'}")
+            if bench is not None:   # whole forward, CUDA graph, cold L2, paired against v6 s2
+                a_us, b_us, sp, ci = bench.compare(lambda kw=kw: moe_cuda_forward(*args, **kw),
+                                                   lambda: moe_cuda_forward(*args, **ref_kw), pairs=9)
+                line += f"; {a_us:.1f} us (v6 s2 {b_us:.1f}, x{sp:.3f})"
+                if stage_detail:   # each stage as its own graph (cold L2), vs the route stage
+                    fns, _ = moe_cuda_stages(*args, **kw)
+                    for fn in fns:
+                        fn()
+                    ts = [bench.compare(fn, fns[0], pairs=6)[0] for fn in fns]
+                    line += " | stages " + " ".join(f"{t:.1f}" for t in ts)
+            print(line, flush=True)
 
     del weights
     torch.cuda.empty_cache()

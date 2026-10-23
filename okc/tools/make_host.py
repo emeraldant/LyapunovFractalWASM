@@ -16,6 +16,8 @@ OKC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 
 def main(host, sim, out, call, extra="", after=False):
+    # Missing bundled names fail here, not on the judge's GPU.
+    subprocess.check_call([sys.executable, os.path.join(OKC, "tools", "check_bundle.py"), os.path.join(OKC, sim)])
     src = open(os.path.join(OKC, host)).read()
     sim_src = open(os.path.join(OKC, sim)).read()
     hook = ("def prepare(weights: Weights):\n"

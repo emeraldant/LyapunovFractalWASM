@@ -208,7 +208,7 @@ def moe_sab(args):
         f"template __global__ void moe_gemm_sab_kernel<{m}, {t}, {s}, {prof}>("
         "const __nv_bfloat16*, const int32_t*, const uint8_t*, const uint8_t*, "
         "const float*, const int32_t*, const int32_t*, const int32_t*, "
-        "__nv_bfloat16*, int, long long*, int*);" for m, t, s in insts)
+        "__nv_bfloat16*, int, long long*, int*, int, float*, int, int);" for m, t, s in insts)
     log, sass = compile_sass(nvrtc_ptx(src, names))
     for line in log.splitlines():
         if "Used" in line or "spill" in line:
@@ -238,10 +238,10 @@ def moe_wg(args):
         f"template __global__ void moe_gemm_wg_kernel<{m}, {n}, {s}, {prof}, 0, {w0}, {big}>("
         "const __nv_bfloat16*, const int32_t*, const uint8_t*, const uint8_t*, "
         "const float*, const int32_t*, const int32_t*, const int32_t*, "
-        "__nv_bfloat16*, int, long long*, int*, const __grid_constant__ TmapBlob);" for m, n, s in insts)
+        "__nv_bfloat16*, int, long long*, int*, const __grid_constant__ TmapBlob, int);" for m, n, s in insts)
     log, sass = compile_sass(nvrtc_ptx(src, names))
     for line in log.splitlines():
-        if "Used" in line or "spill" in line or "arning" in line:
+        if "Used" in line or "spill" in line or "arning" in line or "C75" in line:
             print(line.strip()[:300])
     for fname, lines in split_functions(sass).items():
         if "wg_kernel" not in fname:

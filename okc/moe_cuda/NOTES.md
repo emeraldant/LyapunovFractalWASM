@@ -97,6 +97,34 @@ GEMM1, ~39 us at peak. (3) Memory alone is above dream: hot experts re-streamed 
 chunk (2304 items vs 1536 unique). Next levers: 256-k stages (half the handshakes per byte),
 more independent work per warp (decode overlapping wgmma), 32-token tiles without spills.
 
+### Measured unit rates and overlap (rate_probe.py, H200)
+
+- wgmma m64nNk16 RS (A from registers): ~14.5 clk/instr/SM for N 8 and 16, 17.8 clk at N 32
+  (90% of the 1024 dense bf16 MAC/clk/SM peak only at N 32). mma.sync m16n8k16 ~1200 MAC/clk/SM.
+- LOP3 0.48 warp-instr/clk/SMSP, HMUL2.BF16 0.87.
+- Overlap: RS wgmma and mma.sync do NOT overlap the ALU: ALU+wgmma took 1616 clk vs 1586 for
+  the sum of the parts; LOP3+wgmma additive, HMUL2+wgmma worse than additive; LOP3+HMUL2
+  overlap partly (~85%). So the consumer is an ADDITIVE cost model, in SM-cycles: ALU op 0.52,
+  HMUL2 0.29, wgmma N16 14.5, HMMA 1.7. It predicts bs 256 t2 GEMM1 at 203 us (measured 193).
+- Decode microbenchmark (registers only, no memory): 0.0212 SM-clk per weight; with mma.sync
+  N8 0.0235 = 65% of the HBM budget (0.0362 SM-clk per weight at 4.06 TB/s). The full kernel
+  costs ~1.85x that, so the gap at small batch is the memory pipeline, not the math.
+  (IMAD.WIDE rotation variant of the decode: slower, refuted.)
+
+### Small-batch ablations and the bytes-in-flight hypothesis
+
+bs 16/32 on s1 (v6): weights-only (no math) reaches only 3.3-3.6 TB/s; math-only is under the
+dream. Little's law: 4.06 TB/s x ~1 us loaded latency = ~4 MB in flight chip-wide = ~31 KB per
+SM... at the measured per-chunk latencies (several us under load) the smem-held stages cap
+bytes in flight. Fix that does not cost smem: cp.async.bulk.prefetch.L2 PFD chunks ahead
+(PFD 6 -> ~220 KB in flight per SM, L2 footprint ~29 MB < 50 MB). `pfd` kernel parameter.
+
+Split K (v6 kparts, fp32 partial slices summed in fixed order, deterministic): only bs 1 wins,
+45 -> 38.6 us (route 1.4, GEMM1+silu 19.3, GEMM2 10.7, post 3.9 us).
+
+TMA token tiles for v7 (128B swizzle, K-major; config t2 = stages 304): judge 408b8505 1.714
+(bs1 1.658, bs8 1.682, bs16 1.667, bs32 1.363, bs128 1.983, bs256 2.016).
+
 ## Hopper facts used (per SM sub-partition = SMSP, per clock)
 
 | pipe | warp instructions / clk | what runs there |

@@ -1,0 +1,118 @@
+  prof bs32 t2         full gemm1 (16 exp): 1024 items on 132 SMs, span 90.1 us, 3.35 TB/s; slot use 81%; 90% done at 87.6 us (tail 2.6); item 33.0 us med, 69.8 p90; producer waits 54%; items/SM 8 max 7.8 mean
+  prof bs32 t2         full gemm2 (16 exp): 512 items on 132 SMs, span 49.2 us, 3.07 TB/s; slot use 70%; 90% done at 47.6 us (tail 1.5); item 34.0 us med, 41.7 p90; producer waits 65%; items/SM 4 max 3.9 mean
+  prof bs32 t4         full gemm1 (16 exp): 1024 items on 132 SMs, span 108.3 us, 2.79 TB/s; slot use 42%; 90% done at 94.7 us (tail 13.6); item 23.0 us med, 29.2 p90; producer waits 34%; items/SM 8 max 7.8 mean
+  prof bs32 t4         full gemm2 (16 exp): 512 items on 132 SMs, span 54.8 us, 2.76 TB/s; slot use 41%; 90% done at 53.8 us (tail 1.0); item 22.8 us med, 27.1 p90; producer waits 40%; items/SM 4 max 3.9 mean
+  prof bs32 t4w         full gemm1 (16 exp): 1024 items on 132 SMs, span 108.0 us, 2.80 TB/s; slot use 42%; 90% done at 94.2 us (tail 13.8); item 24.1 us med, 28.4 p90; producer waits 34%; items/SM 8 max 7.8 mean
+  prof bs32 t4w         full gemm2 (16 exp): 512 items on 132 SMs, span 51.7 us, 2.92 TB/s; slot use 55%; 90% done at 50.4 us (tail 1.3); item 29.4 us med, 40.2 p90; producer waits 46%; items/SM 4 max 3.9 mean
+  prof bs128 t2         full gemm1 (21 exp): 1728 items on 132 SMs, span 146.9 us, 2.70 TB/s; slot use 81%; 90% done at 133.4 us (tail 13.6); item 29.2 us med, 52.7 p90; producer waits 49%; items/SM 14 max 13.1 mean
+  prof bs128 t2         full gemm2 (21 exp): 864 items on 132 SMs, span 77.3 us, 2.56 TB/s; slot use 75%; 90% done at 71.4 us (tail 5.9); item 29.2 us med, 60.4 p90; producer waits 52%; items/SM 7 max 6.5 mean
+  prof bs128 t4         full gemm1 (21 exp): 1472 items on 132 SMs, span 152.8 us, 2.59 TB/s; slot use 43%; 90% done at 138.5 us (tail 14.3); item 23.0 us med, 27.9 p90; producer waits 31%; items/SM 12 max 11.2 mean
+  prof bs128 t4         full gemm2 (21 exp): 736 items on 132 SMs, span 81.2 us, 2.44 TB/s; slot use 40%; 90% done at 79.4 us (tail 1.8); item 23.0 us med, 27.1 p90; producer waits 35%; items/SM 6 max 5.6 mean
+  prof bs128 t4w         full gemm1 (21 exp): 1472 items on 132 SMs, span 154.9 us, 2.56 TB/s; slot use 43%; 90% done at 140.5 us (tail 14.3); item 23.8 us med, 28.4 p90; producer waits 32%; items/SM 12 max 11.2 mean
+  prof bs128 t4w         full gemm2 (21 exp): 736 items on 132 SMs, span 78.8 us, 2.51 TB/s; slot use 54%; 90% done at 76.3 us (tail 2.6); item 27.4 us med, 51.2 p90; producer waits 44%; items/SM 6 max 5.6 mean
+  prof bs256 t2         full gemm1 (25 exp): 2368 items on 132 SMs, span 192.8 us, 2.45 TB/s; slot use 85%; 90% done at 176.9 us (tail 15.9); item 28.2 us med, 52.0 p90; producer waits 46%; items/SM 19 max 17.9 mean
+  prof bs256 t2         full gemm2 (25 exp): 1184 items on 132 SMs, span 96.8 us, 2.44 TB/s; slot use 86%; 90% done at 94.7 us (tail 2.0); item 29.2 us med, 88.1 p90; producer waits 49%; items/SM 9 max 9.0 mean
+  prof bs256 t4         full gemm1 (25 exp): 1856 items on 132 SMs, span 189.7 us, 2.49 TB/s; slot use 44%; 90% done at 172.5 us (tail 17.2); item 23.0 us med, 27.9 p90; producer waits 30%; items/SM 15 max 14.1 mean
+  prof bs256 t4         full gemm2 (25 exp): 928 items on 132 SMs, span 106.8 us, 2.21 TB/s; slot use 40%; 90% done at 93.7 us (tail 13.1); item 24.6 us med, 28.7 p90; producer waits 35%; items/SM 8 max 7.0 mean
+  prof bs256 t4w         full gemm1 (25 exp): 1856 items on 132 SMs, span 189.4 us, 2.49 TB/s; slot use 44%; 90% done at 173.6 us (tail 15.9); item 22.8 us med, 27.9 p90; producer waits 31%; items/SM 15 max 14.1 mean
+  prof bs256 t4w         full gemm2 (25 exp): 928 items on 132 SMs, span 96.5 us, 2.44 TB/s; slot use 57%; 90% done at 87.6 us (tail 9.0); item 30.5 us med, 50.7 p90; producer waits 41%; items/SM 8 max 7.0 mean
+check t2 bs32: rel diff vs v6 5.0e-04, row worst 1.2e-03, repeat equal
+check t4 bs32: rel diff vs v6 5.0e-04, row worst 1.2e-03, repeat equal
+check t4w bs32: rel diff vs v6 5.0e-04, row worst 1.2e-03, repeat equal
+check t2 bs128: rel diff vs v6 5.2e-04, row worst 1.4e-03, repeat equal
+check t4 bs128: rel diff vs v6 5.2e-04, row worst 1.4e-03, repeat equal
+check t4w bs128: rel diff vs v6 5.2e-04, row worst 1.4e-03, repeat equal
+check t2 bs256: rel diff vs v6 5.5e-04, row worst 1.4e-03, repeat equal
+check t4 bs256: rel diff vs v6 5.5e-04, row worst 1.4e-03, repeat equal
+check t4w bs256: rel diff vs v6 5.5e-04, row worst 1.4e-03, repeat equal
+plan qkv_gate  m1    n2304 : ('fma', 1, 4, 1024, 1, 4, 2) 19.5 us (sglang 20.9 us)
+plan o         m1    n8192 : ('base',) 12.0 us (sglang 12.0 us)
+plan pooler    m1    n4096 : ('fma', 1, 8, 1024, 1, 4, 2) 26.6 us (sglang 30.1 us)
+plan unpooler  m1    n1024 : ('fma', 1, 4, 1024, 1, 4, 2) 11.1 us (sglang 11.4 us)
+plan router    m1    n256  : ('fma', 1, 16, 512, 16, 4, 2) 11.0 us (sglang 15.6 us)
+plan qkv_gate  m8    n2304 : ('base',) 21.4 us (sglang 21.4 us)
+plan o         m8    n8192 : ('dot', 16, 32, 128, 1, 4, 4) 11.7 us (sglang 12.0 us)
+plan pooler    m8    n4096 : ('base',) 30.4 us (sglang 30.4 us)
+plan unpooler  m8    n1024 : ('base',) 11.8 us (sglang 11.8 us)
+plan router    m8    n256  : ('dot', 16, 16, 128, 16, 4, 4) 15.7 us (sglang 31.6 us)
+plan qkv_gate  m16   n2304 : ('base',) 21.0 us (sglang 21.0 us)
+plan o         m16   n8192 : ('dot', 16, 32, 128, 1, 4, 4) 11.7 us (sglang 12.1 us)
+plan pooler    m16   n4096 : ('base',) 30.4 us (sglang 30.4 us)
+plan unpooler  m16   n8192 : ('base',) 27.9 us (sglang 27.9 us)
+plan router    m16   n256  : ('dot', 16, 16, 128, 16, 4, 4) 14.9 us (sglang 20.5 us)
+plan qkv_gate  m32   n2304 : ('base',) 21.2 us (sglang 21.2 us)
+plan o         m32   n8192 : ('dot', 32, 32, 128, 1, 4, 4) 12.0 us (sglang 12.3 us)
+plan pooler    m32   n4096 : ('base',) 31.3 us (sglang 31.3 us)
+plan unpooler  m32   n8192 : ('base',) 28.2 us (sglang 28.2 us)
+plan router    m32   n256  : ('dot', 32, 16, 128, 16, 4, 4) 17.0 us (sglang 21.2 us)
+plan qkv_gate  m128  n2304 : ('base',) 24.8 us (sglang 24.8 us)
+plan o         m128  n8192 : ('base',) 12.8 us (sglang 12.8 us)
+plan pooler    m128  n4096 : ('base',) 31.9 us (sglang 31.9 us)
+plan unpooler  m128  n8192 : ('base',) 29.7 us (sglang 29.7 us)
+plan router    m128  n256  : ('base',) 22.3 us (sglang 22.3 us)
+plan qkv_gate  m256  n2304 : ('base',) 28.5 us (sglang 28.5 us)
+plan o         m256  n8192 : ('base',) 13.8 us (sglang 13.8 us)
+plan pooler    m256  n4096 : ('base',) 37.9 us (sglang 37.9 us)
+plan unpooler  m256  n8192 : ('base',) 33.5 us (sglang 33.5 us)
+plan router    m256  n256  : ('base',) 23.0 us (sglang 23.0 us)
+prepare: tuned in 59 s
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 03:21:00 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop

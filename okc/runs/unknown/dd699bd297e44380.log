@@ -1,0 +1,276 @@
+check s1 bs1: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 45.7 us (v6 s2 46.1, x1.016)
+sim failed: Traceback (most recent call last):
+  File "/tmp/muse_decode_layer-t3tejh6o/run/submission.py", line 3573, in prepare
+    run_moe_profile_synth({'s1': dict(stages=4, ctas_per_sm=4, mt=1, sab=True), 's1k2': dict(stages=4, ctas_per_sm=4, mt=1, sab=True, kparts=2), 's1k4': dict(stages=4, ctas_per_sm=4, mt=1, sab=True, kparts=4), 's1k8': dict(stages=4, ctas_per_sm=4, mt=1, sab=True, kparts=8), 's1dk2': dict(stages=8, ctas_per_sm=2, mt=1, sab=True, kparts=2), 's1dk4': dict(stages=8, ctas_per_sm=2, mt=1, sab=True, kparts=4), 's1d': dict(stages=8, ctas_per_sm=2, mt=1, sab=True)}, sizes=(1, 8, 16, 32), abls=())
+  File "/tmp/muse_decode_layer-t3tejh6o/run/submission.py", line 3555, in run_moe_profile_synth
+    out = moe_cuda_forward(*args, **kw)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/muse_decode_layer-t3tejh6o/run/submission.py", line 3206, in moe_cuda_forward
+    fn()
+  File "/tmp/muse_decode_layer-t3tejh6o/run/submission.py", line 3172, in gemm1
+    _splitk_silu_kernel[(p,)](part1, exp_start, inter, p, E=count, KP=kparts, H=4096, num_warps=8)
+    ^^^^^^^^^^^^^^^^^^^
+NameError: name '_splitk_silu_kernel' is not defined
+
+attention B1   L1 sliding: fused 17.6 us, sglang 23.2 us
+attention B1   L1 full   : fused 60.4 us, sglang 40.3 us
+attention B1   L8 sliding: fused 39.3 us, sglang 28.5 us
+attention B1   L8 full   : fused 143.2 us, sglang 44.1 us
+attention B16  L1 sliding: fused 23.2 us, sglang 31.5 us
+attention B16  L1 full   : fused 317.2 us, sglang 213.4 us
+attention B16  L8 sliding: fused 45.4 us, sglang 34.5 us
+attention B16  L8 full   : fused 406.3 us, sglang 216.9 us
+attention B32  L1 sliding: fused 28.5 us, sglang 38.0 us
+attention B32  L1 full   : fused 557.3 us, sglang 397.6 us
+attention B32  L8 sliding: fused 66.6 us, sglang 41.9 us
+attention B32  L8 full   : fused 713.0 us, sglang 399.5 us
+moe bs1 ('fast', 8, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs1 ('fast', 8, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs1 ('fast', 16, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs1 ('fast', 16, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs1   : ('base',) 95.0 us (sglang 95.0 us)
+moe bs8 ('fast', 8, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs8 ('fast', 8, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs8 ('fast', 16, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs8 ('fast', 16, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs8   : ('base',) 164.5 us (sglang 164.5 us)
+moe bs16 ('fast', 8, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs16 ('fast', 8, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs16 ('fast', 16, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs16 ('fast', 16, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs16  : ('base',) 220.3 us (sglang 220.3 us)
+moe bs32 ('fast', 8, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs32 ('fast', 8, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs32 ('fast', 16, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs32 ('fast', 16, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs32 ('fast', 32, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs32 ('fast', 32, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs32  : ('base',) 235.2 us (sglang 235.2 us)
+moe bs128 ('fast', 8, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs128 ('fast', 8, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs128 ('fast', 16, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs128 ('fast', 16, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs128 ('fast', 32, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs128 ('fast', 32, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs128 ('fast', 48, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs128 ('fast', 48, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs128 ('fast', 64, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs128 ('fast', 64, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs128 : ('base',) 519.8 us (sglang 519.8 us)
+moe bs256 ('fast', 8, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs256 ('fast', 8, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs256 ('fast', 16, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs256 ('fast', 16, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs256 ('fast', 32, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs256 ('fast', 32, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs256 ('fast', 48, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs256 ('fast', 48, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs256 ('fast', 64, False): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs256 ('fast', 64, True): CompilationError: at 23:18:
+    offsets), then places only its own expert's routes, padding and blocks."""
+    e = tl.program_id(0)
+    experts = tl.arange(0, E)
+    offs = tl.ar
+moe bs256 : ('base',) 664.7 us (sglang 664.7 us)
+proj qkv_gate  m1   : ('fma', 1, 4, 1024, 1, 4, 2) 20.9 us (sglang 21.0 us)
+proj o         m1   : ('base',) 12.1 us (sglang 12.1 us)
+proj pooler    m1   : ('fma', 1, 8, 1024, 1, 4, 2) 26.0 us (sglang 30.2 us)
+proj unpooler  m1   : ('fma', 1, 4, 1024, 1, 4, 2) 11.4 us (sglang 11.6 us)
+proj qkv_gate  m8   : ('base',) 21.4 us (sglang 21.4 us)
+proj o         m8   : ('dot', 16, 32, 128, 1, 4, 4) 11.7 us (sglang 12.0 us)
+proj pooler    m8   : ('base',) 30.4 us (sglang 30.4 us)
+proj unpooler  m8   : ('base',) 11.5 us (sglang 11.5 us)
+proj qkv_gate  m16  : ('base',) 21.5 us (sglang 21.5 us)
+proj o         m16  : ('dot', 16, 32, 128, 1, 4, 4) 11.7 us (sglang 12.1 us)
+proj pooler    m16  : ('base',) 30.7 us (sglang 30.7 us)
+proj unpooler  m16  : ('base',) 28.2 us (sglang 28.2 us)
+proj qkv_gate  m32  : ('base',) 21.4 us (sglang 21.4 us)
+proj o         m32  : ('base',) 12.1 us (sglang 12.1 us)
+proj pooler    m32  : ('base',) 30.7 us (sglang 30.7 us)
+proj unpooler  m32  : ('base',) 28.4 us (sglang 28.4 us)
+proj qkv_gate  m128 : ('base',) 24.9 us (sglang 24.9 us)
+proj o         m128 : ('base',) 12.6 us (sglang 12.6 us)
+proj pooler    m128 : ('base',) 32.1 us (sglang 32.1 us)
+proj unpooler  m128 : ('base',) 30.0 us (sglang 30.0 us)
+proj qkv_gate  m256 : ('base',) 29.2 us (sglang 29.2 us)
+proj o         m256 : ('base',) 13.5 us (sglang 13.5 us)
+proj pooler    m256 : ('base',) 38.2 us (sglang 38.2 us)
+proj unpooler  m256 : ('base',) 33.4 us (sglang 33.4 us)
+layer check B1 L1: next input 0.00e+00, stream update 0.00e+00, ids 1.000
+layer check B4 L8: next input 0.00e+00, stream update 0.00e+00, ids 1.000
+layer check B16 L1: next input 0.00e+00, stream update 0.00e+00, ids 1.000
+layer check B32 L8: next input 0.00e+00, stream update 0.00e+00, ids 1.000
+layer check: 2440/2440 expert ids identical
+prepare: 62 s
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 04:14:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

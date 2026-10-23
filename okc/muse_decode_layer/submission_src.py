@@ -358,7 +358,7 @@ _INV_FREQ = {}
 
 ALIGN_CHUNK = 256
 
-# @bundle muse_moe_w4a16/submission.py _align_local_kernel _post_norm_sum_kernel _experts _moe_fast
+# @bundle muse_moe_w4a16/submission.py _bins _align_local_kernel _post_norm_sum_kernel _experts _moe_fast
 
 # ---------------------------------------------------------------------------------------
 # The layer with the faster parts

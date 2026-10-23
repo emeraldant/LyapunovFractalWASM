@@ -1,0 +1,308 @@
+{
+ "id": "83c77431df4e4813",
+ "mode": "check",
+ "team": "emeraldant",
+ "board": "muse_attention_decode",
+ "result": {
+  "gpu": "H200",
+  "error": null,
+  "flags": [],
+  "checks": {
+   "ok": true,
+   "flagged": [],
+   "rejected": []
+  },
+  "passed": false,
+  "status": "ok",
+  "machine": {
+   "node": "n-i3rdb5ks34a6fp3m52rhc7cstu",
+   "gpu_after": {
+    "name": "NVIDIA H200",
+    "clocks.sm": 1980.0,
+    "clocks.mem": 3201.0,
+    "power.draw": 122.84,
+    "power.limit": 700.0,
+    "clocks.max.sm": 1980.0,
+    "driver_version": "580.159.03",
+    "temperature.gpu": 33.0
+   },
+   "gpu_before": {
+    "name": "NVIDIA H200",
+    "clocks.sm": 1980.0,
+    "clocks.mem": 3201.0,
+    "power.draw": 133.28,
+    "power.limit": 700.0,
+    "clocks.max.sm": 1980.0,
+    "driver_version": "580.159.03",
+    "temperature.gpu": 34.0
+   }
+  },
+  "records": [
+   {
+    "case": {
+     "ctx": 10,
+     "seed": 1019410458968885676,
+     "batch": 1,
+     "heads": "tp8",
+     "layer": "sliding"
+    },
+    "event": "test",
+    "index": 0,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 2047,
+     "seed": 1019555685760346622,
+     "batch": 3,
+     "heads": "tp8",
+     "layer": "sliding"
+    },
+    "event": "test",
+    "index": 1,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 5000,
+     "page": 1,
+     "seed": 1019700912551807569,
+     "batch": 5,
+     "heads": "tp8",
+     "layer": "sliding",
+     "q_len": 8,
+     "spread": "mixed"
+    },
+    "event": "test",
+    "index": 2,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 3000,
+     "seed": 1019846139343268517,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "full"
+    },
+    "event": "test",
+    "index": 3,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 8192,
+     "seed": 1019991366134729466,
+     "batch": 8,
+     "heads": "dp",
+     "layer": "full",
+     "spread": "mixed"
+    },
+    "event": "test",
+    "index": 4,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 100000,
+     "page": 1,
+     "seed": 1020136592926190416,
+     "batch": 2,
+     "heads": "tp8",
+     "layer": "full",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 5,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 6000,
+     "dist": "edges",
+     "page": 1,
+     "seed": 1020281819717651367,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "sliding"
+    },
+    "event": "test",
+    "index": 6,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 6000,
+     "dist": "edges",
+     "seed": 1020427046509112319,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "full",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 7,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 1048576,
+     "seed": 1020572273300573272,
+     "batch": 1,
+     "heads": "tp8",
+     "layer": "full",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 8,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 4000,
+     "page": 1,
+     "seed": 1021443634049339011,
+     "batch": 3,
+     "heads": "tp8",
+     "layer": "sliding",
+     "q_len": 8,
+     "kv_scale": 0.015625
+    },
+    "event": "test",
+    "index": 9,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 9000,
+     "seed": 1021588860840799971,
+     "batch": 2,
+     "heads": "tp8",
+     "layer": "full",
+     "kv_scale": 0.015625
+    },
+    "event": "test",
+    "index": 10,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 80000,
+     "dist": "soft",
+     "seed": 1020717500092034226,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "full",
+     "spread": "mixed"
+    },
+    "event": "test",
+    "index": 11,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 6000,
+     "dist": "soft",
+     "page": 1,
+     "seed": 1020862726883495181,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "sliding",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 12,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 20000,
+     "dist": "soft",
+     "seed": 1021007953674956137,
+     "batch": 2,
+     "heads": "dp",
+     "layer": "full",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 13,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 80000,
+     "dist": "coherent",
+     "page": 1,
+     "seed": 1021153180466417094,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "full",
+     "spread": "mixed"
+    },
+    "event": "test",
+    "index": 14,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   },
+   {
+    "case": {
+     "ctx": 20000,
+     "dist": "coherent",
+     "seed": 1021298407257878052,
+     "batch": 2,
+     "heads": "dp",
+     "layer": "full",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 15,
+    "status": "fail",
+    "message": "NameError: name 'ATTN_VER_SRC' is not defined"
+   }
+  ],
+  "speedup": null,
+  "score_us": null,
+  "evaluator": {
+   "files": {
+    "harness/eval.py": "0051a1bfac67a9f1fad06086b306653c6643b2bb253e15a794aa672312f070a9",
+    "harness/runner.py": "c905e5c80264c6d27620b6fc7d55b162dccdb8ed7282f8a513a4d2e6f2f226f2",
+    "harness/worker.py": "950437610f57ddffbc1176b65d9c2ae909c47bf67b1e3fe0716a81946986f568",
+    "challenge/nvfp4.py": "cfdf37c7bc14b10f7353aba7d4632f4767401b92b4b073941a8030d9a961aaaf",
+    "challenge/checks.py": "9a046c3c38db28b325dcd1557baecdf6bc9ef941d2175f9a900ba4c230bb8055",
+    "harness/static_checks.py": "c5588b69e9e86229459a525c61b30096f6f13ff2add6cadf98f272c4ac8ca0c2",
+    "configs/muse-spark-open.yaml": "98f07230e4e64fe91b7c76d9a3ce04948053c043d494d5f1fae56cfe2de033af",
+    "problems/muse_attention_decode/task.yml": "645f889fbbd52d1d731bf5eb53356aa7ef6eea8fab3073f0a2a3dd582fe6e4bb",
+    "problems/muse_attention_decode/baseline.py": "37f51207283f85a65eb393b1dfb1344759d7df0bdec5450e34d24e7139f56ecc",
+    "problems/muse_attention_decode/reference.py": "386f7f67a1d788501e8fb9005d340423d098a0946e23810ba10878228c11a37b"
+   },
+   "image": "localhost:30500/kc/judge@sha256:9a7f287b80d772c6f636bbcb57422c619fe326e2aabc53803b85007bca93f68e",
+   "code_sha256": "1d519ebf2014fef91b41ffea9bcd7e9c5066784ef5a2a5e2cf06a8cec554d188"
+  },
+  "returncode": 112,
+  "speedup_ci": null
+ },
+ "status": "done",
+ "call_id": "nyc3:kc-83c77431df4e4813",
+ "cluster": "nyc3",
+ "dedicated": false,
+ "created_at": 1792765175.3361561,
+ "started_at": 1792765693.0310206,
+ "finished_at": 1792765734.9620059,
+ "payload_ref": "muse_attention_decode/7558dcdfea6a4182f0f8919323f32b4a934aeee28f039ed999e1eafab65ef4e1.py",
+ "content_hash": "7558dcdfea6a4182f0f8919323f32b4a934aeee28f039ed999e1eafab65ef4e1",
+ "duplicate_of": null
+}

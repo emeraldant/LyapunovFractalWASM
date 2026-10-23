@@ -1,0 +1,245 @@
+zen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-rb5sxfu5/run/submission.py", line 1243, in <module>
+    "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                                               ^^^^^^^^^^^^
+NameError: name 'ATTN_VER_SRC' is not defined. Did you mean: 'ATTN_HOST_SRC'?

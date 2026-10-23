@@ -585,7 +585,7 @@ def _sglang_attention(data):
 # ---------------------------------------------------------------------------------------
 # v4: CUDA, one launch per decode step (okc/attn_cuda/kernel.py, bundled below).
 
-# @bundle attn_cuda/kernel.py ATTN_DEVICE_SRC ATTN_HOST_SRC ATTN_CUDA_SRC ATTN_CUDA_CPP _ATTN_MODULES _ATTN_COUNTERS _ATTN_EMPTY _no_prof attn_cuda_module attn_cuda_supported attn_cuda_decode
+# @bundle attn_cuda/kernel.py ATTN_DEVICE_SRC ATTN_VER_SRC ATTN_HOST_SRC ATTN_CUDA_SRC ATTN_CUDA_CPP _ATTN_MODULES _ATTN_COUNTERS _ATTN_EMPTY _no_prof attn_cuda_module attn_cuda_supported attn_cuda_decode
 
 
 def _attn_v4(data, n_ctas=396, stages=3, min_keys=256, prof=None):

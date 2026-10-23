@@ -590,13 +590,13 @@ def _sglang_attention(data):
 
 def _attn_v4(data, n_ctas=396, stages=3, min_keys=256, prof=None):
     cfg = data["config"]
-    batch = cfg["batch"]
-    qkv = data["qkv"].reshape(batch, -1)
+    batch, length = cfg["batch"], cfg["q_len"]
+    qkv = data["qkv"].reshape(batch * length, -1)
     if not qkv.is_contiguous():
         qkv = qkv.contiguous()
     inv_freq = _inv_freq(cfg["rope_theta"], cfg["head_dim"], qkv.device)
     out = attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=n_ctas, stages=stages, min_keys=min_keys, prof=prof)
-    return out.view(batch, 1, -1)
+    return out.view(batch, length, -1)
 
 
 def _kernel_v3(data):

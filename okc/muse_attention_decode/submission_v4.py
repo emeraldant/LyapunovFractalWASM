@@ -600,7 +600,7 @@ struct AttnParams {
   const __nv_bfloat16* qkv; const float* inv_freq; const int32_t* seq_lens; const int32_t* page_table;
   const int64_t* cache_loc; uint8_t* k_cache; uint8_t* v_cache; const float* k_scale; const float* v_scale;
   __nv_bfloat16* out; float* ws_acc; float* ws_ml; float* ws2_acc; float* ws2_ml; int32_t* counters; long long* prof;
-  int qkv_w, pt_stride, B, HQ, HKV, page_shift, window, rope, n_ctas, max_groups;
+  int qkv_w, pt_stride, B, HQ, HKV, page_shift, window, rope, n_ctas, max_groups, L;
   float qk_factor, sm_scale_log2, eps;
 };
 
@@ -1186,11 +1186,20 @@ static void launch_dec(const AttnParams& p, int grid_x, int grid_y) {
   kern<<<dim3(grid_x, grid_y), 128, smem, at::cuda::getCurrentCUDAStream()>>>(p);
 }
 
+template <int S>
+static void launch_ver(const AttnParams& p, int grid_x, int grid_y) {
+  size_t smem = (size_t)S * 16384;
+  auto kern = attn_ver_kernel<S>;
+  cudaFuncSetAttribute(kern, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+  kern<<<dim3(grid_x, grid_y), 128, smem, at::cuda::getCurrentCUDAStream()>>>(p);
+}
+
 void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens, torch::Tensor page_table,
               torch::Tensor cache_loc, torch::Tensor k_cache, torch::Tensor v_cache, torch::Tensor k_scale,
               torch::Tensor v_scale, torch::Tensor out, torch::Tensor ws_acc, torch::Tensor ws_ml,
               torch::Tensor ws2_acc, torch::Tensor ws2_ml, torch::Tensor counters, torch::Tensor prof, int64_t max_groups, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
-              int64_t rope, double qk_factor, double sm_scale_log2, double eps, int64_t n_ctas, int64_t stages) {
+              int64_t rope, double qk_factor, double sm_scale_log2, double eps, int64_t n_ctas, int64_t stages,
+              int64_t L) {
   AttnParams p;
   p.qkv = reinterpret_cast<const __nv_bfloat16*>(qkv.data_ptr());
   p.inv_freq = inv_freq.data_ptr<float>();
@@ -1212,9 +1221,15 @@ void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens,
   p.qkv_w = (int)qkv.size(-1);
   p.pt_stride = (int)page_table.stride(0);
   p.B = (int)B; p.HQ = (int)HQ; p.HKV = (int)HKV; p.page_shift = (int)page_shift; p.window = (int)window;
-  p.rope = (int)rope; p.n_ctas = (int)n_ctas;
+  p.rope = (int)rope; p.n_ctas = (int)n_ctas; p.L = (int)L;
   p.qk_factor = (float)qk_factor; p.sm_scale_log2 = (float)sm_scale_log2; p.eps = (float)eps;
   int pairs = (int)HKV / 2;
+  if (L > 1) {
+    if (stages == 3) launch_ver<3>(p, (int)n_ctas, pairs);
+    else if (stages == 4) launch_ver<4>(p, (int)n_ctas, pairs);
+    else TORCH_CHECK(false, "attn_dec: unsupported stages for L > 1");
+    return;
+  }
   if (stages == 3) launch_dec<3>(p, (int)n_ctas, pairs);
   else if (stages == 4) launch_dec<4>(p, (int)n_ctas, pairs);
   else if (stages == 5) launch_dec<5>(p, (int)n_ctas, pairs);
@@ -1225,7 +1240,7 @@ void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens,
 
 
 ATTN_CUDA_SRC = ATTN_HOST_SRC.replace("#include <ATen/cuda/CUDAContext.h>\n",
-                                      "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC, 1)
+                                      "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
 
 
 ATTN_CUDA_CPP = """
@@ -1233,7 +1248,8 @@ void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens,
               torch::Tensor cache_loc, torch::Tensor k_cache, torch::Tensor v_cache, torch::Tensor k_scale,
               torch::Tensor v_scale, torch::Tensor out, torch::Tensor ws_acc, torch::Tensor ws_ml,
               torch::Tensor ws2_acc, torch::Tensor ws2_ml, torch::Tensor counters, torch::Tensor prof, int64_t max_groups, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
-              int64_t rope, double qk_factor, double sm_scale_log2, double eps, int64_t n_ctas, int64_t stages);
+              int64_t rope, double qk_factor, double sm_scale_log2, double eps, int64_t n_ctas, int64_t stages,
+              int64_t L);
 """
 
 
@@ -1265,15 +1281,15 @@ def attn_cuda_module():
 def attn_cuda_supported(cfg, page_table):
     """Shapes the CUDA path covers (others take the Triton / SGLang paths)."""
     page = cfg["page_size"]
-    return (cfg["q_len"] == 1 and cfg["head_dim"] == 64 and cfg["num_kv_heads"] % 2 == 0
+    return (1 <= cfg["q_len"] <= 8 and cfg["head_dim"] == 64 and cfg["num_kv_heads"] % 2 == 0
             and cfg["num_q_heads"] == 8 * cfg["num_kv_heads"] and cfg["batch"] <= 64
             and page & (page - 1) == 0)
 
 
 def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=256, prof=None):
-    """qkv [B, W] bf16 -> [B, Hq * 64] bf16; writes the new cache entries. n_ctas: CTAs per
-    KV-head pair at most (fewer when the batch has fewer than min_keys keys per CTA)."""
-    batch = cfg["batch"]
+    """qkv [B * L, W] bf16 -> [B * L, Hq * 64] bf16; writes the new cache entries. n_ctas: CTAs
+    per KV-head pair at most (fewer when the batch has fewer than min_keys keys per CTA)."""
+    batch, length = cfg["batch"], cfg["q_len"]
     hq, hkv = cfg["num_q_heads"], cfg["num_kv_heads"]
     pairs = hkv // 2
     page = cfg["page_size"]
@@ -1289,16 +1305,19 @@ def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=25
     if counters is None:
         counters = _ATTN_COUNTERS[key] = torch.zeros(key[1], dtype=torch.int32, device=device)
     slots = pairs * (n + batch)
-    ws_acc = torch.empty((slots, 2, 8, 64), dtype=torch.float32, device=device)
-    ws_ml = torch.empty((slots, 2, 8, 2), dtype=torch.float32, device=device)
-    ws2_acc = torch.empty((pairs * batch * max_groups, 2, 8, 64), dtype=torch.float32, device=device)
-    ws2_ml = torch.empty((pairs * batch * max_groups, 2, 8, 2), dtype=torch.float32, device=device)
-    out = torch.empty((batch, hq * 64), dtype=torch.bfloat16, device=device)
+    rows = 8 if length == 1 else 64
+    acc_shape = (2, 8, 64) if length == 1 else (2, 64, 64)
+    ws_acc = torch.empty((slots,) + acc_shape, dtype=torch.float32, device=device)
+    ws_ml = torch.empty((slots, 2, rows, 2), dtype=torch.float32, device=device)
+    ws2_acc = torch.empty((pairs * batch * max_groups,) + acc_shape, dtype=torch.float32, device=device)
+    ws2_ml = torch.empty((pairs * batch * max_groups, 2, rows, 2), dtype=torch.float32, device=device)
+    out = torch.empty((batch * length, hq * 64), dtype=torch.bfloat16, device=device)
     attn_cuda_module().attn_dec(
         qkv, inv_freq, data["seq_lens"], page_table, data["cache_loc"], data["k_cache"], data["v_cache"],
-        data["k_scale"], data["v_scale"], out, ws_acc, ws_ml, ws2_acc, ws2_ml, counters, prof if prof is not None else _no_prof(device), max_groups, batch, hq, hkv, page.bit_length() - 1,
+        data["k_scale"], data["v_scale"], out, ws_acc, ws_ml, ws2_acc, ws2_ml, counters,
+        prof if prof is not None else _no_prof(device), max_groups, batch, hq, hkv, page.bit_length() - 1,
         window, int(bool(cfg["rope_theta"])), cfg["qk_scale_factor"], cfg["sm_scale"] * 1.4426950408889634, 1e-5,
-        n, stages)
+        n, stages, length)
     return out
 
 
@@ -1306,13 +1325,13 @@ def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=25
 
 def _attn_v4(data, n_ctas=396, stages=3, min_keys=256, prof=None):
     cfg = data["config"]
-    batch = cfg["batch"]
-    qkv = data["qkv"].reshape(batch, -1)
+    batch, length = cfg["batch"], cfg["q_len"]
+    qkv = data["qkv"].reshape(batch * length, -1)
     if not qkv.is_contiguous():
         qkv = qkv.contiguous()
     inv_freq = _inv_freq(cfg["rope_theta"], cfg["head_dim"], qkv.device)
     out = attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=n_ctas, stages=stages, min_keys=min_keys, prof=prof)
-    return out.view(batch, 1, -1)
+    return out.view(batch, length, -1)
 
 
 def _kernel_v3(data):

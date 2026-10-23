@@ -1,0 +1,109 @@
+prof v4 B1 ctx80000 L1 slid tp8 soft p1: 8 CTAs, span 13.1us, start skew 0.0us, clk 1.83GHz | start 0.00/0.00 | lengths 0.86/0.89 | segments 1.40/1.42 | prologue 3.20/3.21 | t0 ready 4.70/4.73 | t0 done 5.71/5.76 | t1 ready 5.86/5.91 | t1 done 6.81/6.87 | t2 ready 6.93/6.99 | t2 done 7.48/7.54 | t3 ready 7.61/7.66 | t3 done 8.16/8.21 | seg end 8.20/8.26 | partial+atomic 10.07/10.76 | merged 10.19/13.17 | end 10.22/13.26
+prof v4 B1 ctx80000 L1 full tp8 cohe p1: 313 CTAs, span 26.2us, start skew 0.3us, clk 1.82GHz | start 0.00/0.00 | lengths 0.65/0.83 | segments 1.23/1.40 | prologue 4.22/4.87 | t0 ready 7.45/8.37 | t0 done 8.68/10.04 | t1 ready 8.86/10.32 | t1 done 10.10/12.35 | t2 ready 10.31/12.69 | t2 done 11.04/13.70 | t3 ready 11.21/13.97 | t3 done 11.97/14.64 | seg end 12.06/14.68 | partial+atomic 14.08/16.73 | merged 14.19/26.80 | end 14.23/26.83
+prof v4 B16 ctx80000 L1 slid tp8 soft p1: 128 CTAs, span 14.1us, start skew 0.1us, clk 1.85GHz | start 0.00/0.00 | lengths 0.72/0.75 | segments 1.27/1.31 | prologue 3.12/3.33 | t0 ready 5.52/5.95 | t0 done 6.50/6.86 | t1 ready 6.65/7.01 | t1 done 7.60/7.96 | t2 ready 7.72/8.08 | t2 done 8.26/8.62 | t3 ready 8.39/8.74 | t3 done 8.92/9.29 | seg end 8.97/9.33 | partial+atomic 10.81/11.75 | merged 10.96/14.14 | end 10.99/14.17
+prof v4 B16 ctx80000 L1 full tp8 cohe p1: 396 CTAs, span 120.9us, start skew 0.3us, clk 1.77GHz | start 0.00/0.00 | lengths 0.73/0.87 | segments 1.34/1.48 | prologue 3.87/4.44 | t0 ready 8.67/10.53 | t0 done 10.18/12.40 | t1 ready 10.39/12.55 | t1 done 11.89/14.43 | t2 ready 12.11/14.74 | t2 done 13.65/16.51 | t3 ready 13.83/16.74 | t3 done 15.37/18.36 | t4 ready 15.60/18.52 | t4 done 17.09/20.25 | t5 ready 17.51/20.80 | t5 done 18.94/22.41 | t6 ready 19.66/23.35 | t6 done 20.98/24.71 | t7 ready 21.66/25.75 | t7 done 23.02/27.07 | t8 ready 23.91/27.69 | t8 done 25.28/29.07 | t9 ready 25.98/30.01 | t9 done 27.29/31.54 | t10 ready 28.02/40.69 | t10 done 29.43/43.09 | t11 ready 29.99/43.60 | t11 done 31.37/45.43 | t12 ready 31.86/45.77 | t12 done 33.28/47.53 | t13 ready 33.64/47.74 | t13 done 35.15/49.58 | t14 ready 35.47/49.81 | t14 done 36.90/51.79 | t15 ready 38.19/51.98 | t15 done 39.39/53.81 | seg end 97.43/113.33 | partial+atomic 99.46/115.04 | merged 99.65/120.60 | end 99.70/120.64
+prof v4 B32 ctx80000 L1 slid tp8 soft p1: 256 CTAs, span 17.6us, start skew 0.2us, clk 1.84GHz | start 0.00/0.00 | lengths 0.80/0.91 | segments 1.36/1.48 | prologue 3.46/3.78 | t0 ready 7.27/8.01 | t0 done 8.41/9.24 | t1 ready 8.60/9.36 | t1 done 9.79/10.71 | t2 ready 9.97/10.90 | t2 done 10.69/11.75 | t3 ready 10.85/11.88 | t3 done 11.57/12.64 | seg end 11.65/12.68 | partial+atomic 13.69/15.27 | merged 13.81/17.51 | end 13.84/17.71
+prof v4 B32 ctx80000 L1 full tp8 cohe p1: 396 CTAs, span 214.9us, start skew 0.3us, clk 1.78GHz | start 0.00/0.00 | lengths 0.77/0.92 | segments 1.37/1.52 | prologue 4.25/4.71 | t0 ready 8.69/10.30 | t0 done 10.14/12.14 | t1 ready 10.36/12.36 | t1 done 11.87/14.31 | t2 ready 12.08/20.40 | t2 done 13.63/21.99 | t3 ready 13.83/22.17 | t3 done 15.38/23.63 | t4 ready 15.68/27.09 | t4 done 17.22/29.24 | t5 ready 17.70/29.55 | t5 done 19.20/30.88 | t6 ready 19.80/31.05 | t6 done 21.13/32.57 | t7 ready 22.13/33.41 | t7 done 23.44/35.48 | t8 ready 24.33/35.61 | t8 done 25.72/36.91 | t9 ready 26.39/38.55 | t9 done 27.83/40.19 | t10 ready 28.48/40.37 | t10 done 29.87/42.21 | t11 ready 30.51/42.47 | t11 done 31.99/44.41 | t12 ready 32.35/44.78 | t12 done 33.87/46.61 | t13 ready 34.76/46.91 | t13 done 36.05/48.94 | t14 ready 36.98/49.30 | t14 done 38.40/51.14 | t15 ready 38.77/51.34 | t15 done 40.27/53.14 | seg end 185.24/210.59 | partial+atomic 187.31/212.51 | merged 187.45/216.21 | end 187.50/216.46
+sim attention: replay overhead 5.1 us
+attention v3|t|B1 ctx10 L1 slid tp8 norm p64|ok 1.1e-03/0.08
+attention v4|t|B1 ctx10 L1 slid tp8 norm p64|ok 7.4e-05/0.08
+ion v4s4n264|t|B1 ctx10 L1 slid tp8 norm p64|ok 7.4e-05/0.08
+attention v3|t|B3 ctx2047 L1 slid tp8 norm p64|ok 5.3e-04/0.15
+attention v4|t|B3 ctx2047 L1 slid tp8 norm p64|ok 1.6e-04/0.15
+ion v4s4n264|t|B3 ctx2047 L1 slid tp8 norm p64|ok 1.6e-04/0.15
+attention v3|t|B4 ctx3000 L1 full tp8 norm p64|ok 7.8e-04/0.15
+attention v4|t|B4 ctx3000 L1 full tp8 norm p64|ok 1.3e-04/0.15
+ion v4s4n264|t|B4 ctx3000 L1 full tp8 norm p64|ok 1.3e-04/0.15
+attention v3|t|B8 ctx8192 L1 full dp norm p64|ok 1.0e-03/0.15
+attention v4|t|B8 ctx8192 L1 full dp norm p64|ok 2.3e-04/0.15
+ion v4s4n264|t|B8 ctx8192 L1 full dp norm p64|ok 2.2e-04/0.15
+attention v3|t|B4 ctx6000 L1 slid tp8 edge p1|ok 5.4e-04/0.15
+attention v4|t|B4 ctx6000 L1 slid tp8 edge p1|ok 9.2e-05/0.15
+ion v4s4n264|t|B4 ctx6000 L1 slid tp8 edge p1|ok 9.2e-05/0.15
+attention v3|t|B2 ctx9000 L1 full tp8 norm p64 s0.0156|ok 4.6e-04/0.15
+attention v4|t|B2 ctx9000 L1 full tp8 norm p64 s0.0156|ok 1.6e-04/0.15
+ion v4s4n264|t|B2 ctx9000 L1 full tp8 norm p64 s0.0156|ok 1.6e-04/0.15
+attention v3|t|B4 ctx80000 L1 full tp8 soft p64|ok 1.1e-03/0.15
+attention v4|t|B4 ctx80000 L1 full tp8 soft p64|ok 3.4e-04/0.15
+ion v4s4n264|t|B4 ctx80000 L1 full tp8 soft p64|ok 1.7e-04/0.15
+attention v3|t|B4 ctx80000 L1 full tp8 cohe p1|ok 5.5e-04/0.12
+attention v4|t|B4 ctx80000 L1 full tp8 cohe p1|ok 6.6e-06/0.12
+ion v4s4n264|t|B4 ctx80000 L1 full tp8 cohe p1|ok 3.2e-05/0.12
+attention v3|s|B1 ctx80000 L1 slid tp8 soft p1|ok 8.9e-04/0.15|13.1/20.7us x1.603 [1.54,1.63]
+attention v4|s|B1 ctx80000 L1 slid tp8 soft p1|ok 1.6e-04/0.15|14.1/20.9us x1.495 [1.45,1.68]
+ion v4s4n264|s|B1 ctx80000 L1 slid tp8 soft p1|ok 1.6e-04/0.15|13.8/21.4us x1.593 [1.50,1.82]
+attention v3|s|B1 ctx80000 L1 full tp8 cohe p1|ok 4.2e-04/0.13|23.4/34.3us x1.465 [1.45,1.48]
+attention v4|s|B1 ctx80000 L1 full tp8 cohe p1|ok 0.0e+00/0.13|25.7/34.6us x1.341 [1.33,1.37]
+ion v4s4n264|s|B1 ctx80000 L1 full tp8 cohe p1|ok 1.1e-04/0.13|24.6/34.5us x1.396 [1.38,1.42]
+attention v3|s|B16 ctx80000 L1 slid tp8 soft p1|ok 9.9e-04/0.15|18.3/27.8us x1.517 [1.48,1.55]
+attention v4|s|B16 ctx80000 L1 slid tp8 soft p1|ok 1.8e-04/0.15|14.7/27.5us x1.871 [1.79,2.01]
+ion v4s4n264|s|B16 ctx80000 L1 slid tp8 soft p1|ok 1.8e-04/0.15|14.7/27.4us x1.873 [1.81,2.01]
+attention v3|s|B16 ctx80000 L1 full tp8 cohe p1|ok 6.2e-04/0.13|178.0/209.9us x1.178 [1.17,1.18]
+attention v4|s|B16 ctx80000 L1 full tp8 cohe p1|ok 1.2e-04/0.13|118.4/206.9us x1.747 [1.74,1.76]
+ion v4s4n264|s|B16 ctx80000 L1 full tp8 cohe p1|ok 1.5e-04/0.13|133.1/209.7us x1.578 [1.57,1.58]
+attention v3|s|B32 ctx80000 L1 slid tp8 soft p1|ok 1.3e-03/0.15|23.6/33.5us x1.415 [1.39,1.44]
+attention v4|s|B32 ctx80000 L1 slid tp8 soft p1|ok 3.4e-04/0.15|17.2/33.9us x1.972 [1.93,2.00]
+ion v4s4n264|s|B32 ctx80000 L1 slid tp8 soft p1|ok 3.4e-04/0.15|17.8/33.6us x1.880 [1.86,1.93]
+attention v3|s|B32 ctx80000 L1 full tp8 cohe p1|ok 6.7e-04/0.14|407.9/389.6us x0.955 [0.95,0.96]
+attention v4|s|B32 ctx80000 L1 full tp8 cohe p1|ok 2.0e-04/0.14|214.0/388.8us x1.823 [1.81,1.84]
+ion v4s4n264|s|B32 ctx80000 L1 full tp8 cohe p1|ok 2.0e-04/0.14|241.5/390.6us x1.618 [1.61,1.63]
+attention v3|n|B2 ctx80000 L1 slid tp8 soft p1|ok 6.8e-04/0.15|13.5/22.1us x1.634 [1.61,1.67]
+attention v4|n|B2 ctx80000 L1 slid tp8 soft p1|ok 1.2e-04/0.15|14.5/22.3us x1.524 [1.47,1.59]
+ion v4s4n264|n|B2 ctx80000 L1 slid tp8 soft p1|ok 1.2e-04/0.15|14.3/22.4us x1.582 [1.55,1.62]
+attention v3|n|B8 ctx80000 L1 full tp8 cohe p1|ok 5.9e-04/0.14|94.9/115.2us x1.213 [1.21,1.22]
+attention v4|n|B8 ctx80000 L1 full tp8 cohe p1|ok 1.4e-04/0.14|77.2/115.8us x1.501 [1.49,1.53]
+ion v4s4n264|n|B8 ctx80000 L1 full tp8 cohe p1|ok 2.2e-04/0.14|74.9/116.1us x1.547 [1.53,1.56]
+attention v3|n|B24 ctx80000 L1 slid tp8 soft p1|ok 1.1e-03/0.15|20.6/35.7us x1.703 [1.68,1.76]
+attention v4|n|B24 ctx80000 L1 slid tp8 soft p1|ok 2.3e-04/0.15|16.3/36.5us x2.218 [2.20,2.27]
+ion v4s4n264|n|B24 ctx80000 L1 slid tp8 soft p1|ok 2.3e-04/0.15|16.7/35.5us x2.116 [2.08,2.18]
+attention v3|n|B40 ctx80000 L1 full tp8 cohe p1|ok 7.4e-04/0.13|492.0/667.6us x1.358 [1.35,1.36]
+attention v4|n|B40 ctx80000 L1 full tp8 cohe p1|ok 2.1e-04/0.13|262.4/669.8us x2.558 [2.54,2.57]
+ion v4s4n264|n|B40 ctx80000 L1 full tp8 cohe p1|ok 1.9e-04/0.13|297.5/667.1us x2.249 [2.24,2.26]
+attention v3|n|B16 ctx20000 L1 full tp8 soft p1|ok 8.5e-04/0.15|54.2/72.9us x1.350 [1.34,1.36]
+attention v4|n|B16 ctx20000 L1 full tp8 soft p1|ok 1.6e-04/0.15|44.6/73.1us x1.637 [1.60,1.66]
+ion v4s4n264|n|B16 ctx20000 L1 full tp8 soft p1|ok 1.9e-04/0.15|48.5/72.8us x1.501 [1.48,1.52]
+attention v3|n|B16 ctx160000 L1 full tp8 cohe p1|ok 5.4e-04/0.08|354.8/393.3us x1.108 [1.10,1.11]
+attention v4|n|B16 ctx160000 L1 full tp8 cohe p1|ok 1.6e-04/0.08|217.5/394.0us x1.811 [1.80,1.82]
+ion v4s4n264|n|B16 ctx160000 L1 full tp8 cohe p1|ok 1.8e-04/0.08|247.3/392.9us x1.589 [1.59,1.60]
+attention v3|n|B4 ctx300000 L1 full tp8 norm p1|ok 5.3e-04/0.15|171.1/192.5us x1.125 [1.12,1.13]
+attention v4|n|B4 ctx300000 L1 full tp8 norm p1|ok 9.1e-05/0.15|109.6/192.3us x1.758 [1.75,1.76]
+ion v4s4n264|n|B4 ctx300000 L1 full tp8 norm p1|ok 7.5e-05/0.15|123.9/192.0us x1.552 [1.54,1.56]
+attention v3|n|B32 ctx2500 L1 slid tp8 edge p1|ok 7.7e-04/0.15|23.0/33.2us x1.433 [1.41,1.45]
+attention v4|n|B32 ctx2500 L1 slid tp8 edge p1|ok 1.9e-04/0.15|16.8/33.5us x1.973 [1.93,2.03]
+ion v4s4n264|n|B32 ctx2500 L1 slid tp8 edge p1|ok 1.9e-04/0.15|17.2/33.2us x1.938 [1.90,1.97]
+sim attention v3: 22 cases in 22 s
+sim tests: 8 cases, 0 wrong
+sim scored: 6 cases, 0 wrong, speedup geomean 1.335, min 0.955 (B32 ctx80000 L1 full tp8 cohe p1)
+sim nearby: 8 cases, 0 wrong, speedup geomean 1.350, min 1.108 (B16 ctx160000 L1 full tp8 cohe p1)
+sim attention v4: 22 cases in 22 s
+sim tests: 8 cases, 0 wrong
+sim scored: 6 cases, 0 wrong, speedup geomean 1.693, min 1.341 (B1 ctx80000 L1 full tp8 cohe p1)
+sim nearby: 8 cases, 0 wrong, speedup geomean 1.844, min 1.501 (B8 ctx80000 L1 full tp8 cohe p1)
+sim attention v4s4n264: 22 cases in 22 s
+sim tests: 8 cases, 0 wrong
+sim scored: 6 cases, 0 wrong, speedup geomean 1.647, min 1.396 (B1 ctx80000 L1 full tp8 cohe p1)
+sim nearby: 8 cases, 0 wrong, speedup geomean 1.739, min 1.501 (B16 ctx20000 L1 full tp8 soft p1)
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:42 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 14:12:43 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:43 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 14:12:43 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:43 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 14:12:43 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 14:12:43 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop

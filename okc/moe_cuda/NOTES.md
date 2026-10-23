@@ -389,3 +389,24 @@ Stage profile self-hosted in an attention check (synthetic weights, judge routin
   microbenchmark reaches with the MMA (loads / ldmatrix / barriers / stalls, ~23%).
 - s1dw2fp wins bs 1 by 8.7% here (the gate already carries it).
 - aaln's tip (compile-time ring stage indices) is already how v6's consumer runs (unrolled st).
+
+## Correction: the bs 8-32 GEMMs lose to wave quantization, not the decode rate (run 74e36e12)
+
+s1dw ablations (profiling build, cold L2, synthetic weights, judge-like routing), bs 8 GEMM1 (7 experts, 448 items, 264 slots):
+
+| variant | span | TB/s | slot use | item med |
+|---|---|---|---|---|
+| full | 45.1 us | 2.93 | 64% | 18.2 us |
+| no math (memory only) | 41.2 | 3.21 | 62% | 15.9 |
+| math only | 33.5 | 3.94 | 73% | 11.3 |
+| decode only | 22.3 | 5.93 | 69% | 7.7 |
+| mma only | 18.9 | 6.97 | 74% | 8.4 |
+| loop only | 15.9 | 8.32 | 69% | 7.2 |
+
+- Memory alone takes 41 of the 45 us: 448 equal items on 264 slots run in two waves (starts p90
+  24.6 us), the second ~70% full. Per CTA an item streams at ~18.5 GB/s (264 x = 4.9 TB/s > HBM),
+  so with equal bytes per CTA GEMM1 would sit at the HBM ceiling: ~132 MB / 4.3 TB/s = 31 us + fill.
+  bs 32 the same (slot use 78%, starts p50 26 us). The "0.031 clk/weight decode rate" model above
+  is wrong for these sizes: math hides under memory (45.1 vs 41.2).
+- Next: stream K (sk, equal 72 KB units per CTA) on the current v6 (two-chunk stages) - the old
+  refutation was on an earlier kernel generation. Probe moe_sk_attn (run after 74e36e12).

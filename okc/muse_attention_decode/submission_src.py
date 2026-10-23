@@ -1,7 +1,8 @@
 # okc: problem=muse_attention_decode
-"""Gated attention decode for Muse Spark Open: our Triton kernels on decode steps (v1 on
-sliding-window layers, v3 on full-attention layers), SGLang's FA3 path on verify blocks
-(see kernel_fn).
+"""Gated attention decode for Muse Spark Open. Decode steps (q_len 1) run our CUDA kernel
+attn_dec_kernel (okc/attn_cuda/kernel.py, bundled below: one launch, KV gather balanced
+across the batch, f16 mma, in-kernel split merge); verify blocks run SGLang's FA3 path (see
+kernel_fn). The Triton kernels below (v1, v3) are the previous decode path, kept as fallback.
 
 SGLang runs five or six kernels per call (QK-norm + RoPE, the cache store, the query's FP8
 cast, FA3 and its split combine, the gated norm). At these sizes most of that is launch
@@ -619,8 +620,9 @@ def _kernel_v3(data):
 
 
 def kernel_fn(data: Inputs) -> torch.Tensor:
-    """Decode steps -> v4 (CUDA); verify blocks -> FA3 for now."""
+    """Decode steps -> v4 (CUDA, attn_dec_kernel); verify blocks -> SGLang's FA3 path for now
+    (attn_vwg_kernel is correct but slower there: check 644919ef)."""
     cfg = data["config"]
-    if attn_cuda_supported(cfg, data["page_table"]):
+    if cfg["q_len"] == 1 and attn_cuda_supported(cfg, data["page_table"]):
         return _attn_v4(data)
     return _kernel_v3(data)

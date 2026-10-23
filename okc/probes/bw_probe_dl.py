@@ -1362,7 +1362,7 @@ __global__ void ldg_stream(const uint4* __restrict__ src, size_t n, uint32_t* si
 
 // Warp 0 lane 0 produces; warps 1..NC consume. Each CTA streams its own contiguous range.
 __global__ void tma_stream(const uint8_t* __restrict__ src, const uint8_t* __restrict__ src2, int nchunks,
-                           int chunk, int extra, int stages, int lds, uint32_t* sink) {
+                           int chunk, int extra, int stages, int lds, uint32_t* sink, int hold) {
   extern __shared__ __align__(128) uint8_t smem[];
   const uint32_t base = (uint32_t)__cvta_generic_to_shared(smem);
   const int stage_bytes = chunk + extra;
@@ -1371,7 +1371,7 @@ __global__ void tma_stream(const uint8_t* __restrict__ src, const uint8_t* __res
   if (threadIdx.x == 0) {
     for (int s = 0; s < stages; ++s) {
       mbar_init(bar_full + 8 * s, 1);
-      mbar_init(bar_empty + 8 * s, nc * 32);
+      mbar_init(bar_empty + 8 * s, hold < 0 ? nc : nc * 32);   // hold < 0: one arrive per warp
     }
     asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
   }
@@ -1404,7 +1404,18 @@ __global__ void tma_stream(const uint8_t* __restrict__ src, const uint8_t* __res
                      : "r"(base + st * stage_bytes + o));
         x ^= a ^ d;
       }
-    mbar_arrive(bar_empty + 8 * st);
+    const int h = hold < 0 ? -hold : hold;
+    if (h > 1) {   // emulate the consumers' compute on this stage before releasing it
+      const long long t0 = clock64();
+      while (clock64() - t0 < h) {
+      }
+    }
+    if (hold < 0) {   // lane 0 only, as a predicated instruction (no divergent branch)
+      asm volatile("{\n .reg .pred p;\n setp.eq.u32 p, %1, 0;\n @p mbarrier.arrive.shared::cta.b64 _, [%0];\n}\n"
+                   :: "r"(bar_empty + 8 * st), "r"(lane) : "memory");
+    } else {
+      mbar_arrive(bar_empty + 8 * st);
+    }
   }
   if (x == 0x12345678u) sink[0] = x;
 }
@@ -1412,7 +1423,8 @@ __global__ void tma_stream(const uint8_t* __restrict__ src, const uint8_t* __res
 static torch::Tensor g_buf, g_buf2, g_sink;
 
 // Returns GB/s (bytes read / kernel time, median of 5 after a warmup).
-double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int stages, int lds, int grid_override, int nch_fixed) {
+double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int stages, int lds, int grid_override, int nch_fixed,
+              int hold) {
   const size_t total = (size_t)1 << 30;
   if (!g_buf.defined()) {
     g_buf = torch::ones({(long)total}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
@@ -1438,7 +1450,7 @@ double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int 
                                     reinterpret_cast<uint32_t*>(g_sink.data_ptr()));
     else
       tma_stream<<<grid, threads, smem>>>(g_buf.data_ptr<uint8_t>(), g_buf2.data_ptr<uint8_t>(), nchunks, chunk,
-                                          extra, stages, lds, reinterpret_cast<uint32_t*>(g_sink.data_ptr()));
+                                          extra, stages, lds, reinterpret_cast<uint32_t*>(g_sink.data_ptr()), hold);
   };
   launch();
   cudaDeviceSynchronize();
@@ -1461,7 +1473,8 @@ double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int 
 }
 """
 
-_BW_CPP = "double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int stages, int lds, int grid_override, int nch_fixed);"
+_BW_CPP = ("double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int stages, int lds, int grid_override, "
+           "int nch_fixed, int hold);")
 
 
 def run_bw_probe():
@@ -1471,14 +1484,22 @@ def run_bw_probe():
     mod = load_inline(name="okc_bw_probe", cpp_sources=_BW_CPP, cuda_sources=_BW_SRC, functions=["run_bw"],
                       extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"], verbose=False)
     print(f"bw probe: compiled in {time.time() - t:.0f} s", flush=True)
-    # The v6 GEMM1 at bs 8: 448 items of 32 chunks (8 KB + 1 KB), <= 4 CTAs per SM (smem caps it).
-    # Equal work per CTA; only the CTA -> SM spread differs. Smem 4 x 9 KB x 4 stages + pad -> 4 CTAs/SM max.
-    for grid, nch in ((528, 32), (448, 32), (396, 32), (264, 32), (224, 32), (528, 27), (132, 32), (133, 32), (448, 64)):
-        gbs = mod.run_bw(1, 4, 288, 8192, 1024, 4, 0, grid, nch)
-        print(f"bw tma grid {grid} x {nch} chunks of 8K+1K (4 stages, <= 4 CTAs/SM): {gbs:7.0f} GB/s", flush=True)
-    for grid, nch in ((528, 32), (448, 32), (224, 32)):
-        gbs = mod.run_bw(1, 4, 288, 8192, 1024, 4, 1, grid, nch)
-        print(f"bw tma grid {grid} x {nch} chunks +LDS: {gbs:7.0f} GB/s", flush=True)
+    # Consumers hold each stage `hold` cycles (the compute on it) before releasing it. v6 at bs 8
+    # holds a stage ~1.1 us (~2200 clk) with 4 CTAs/SM; the bytes alone need 1.2 us per stage per
+    # CTA at 4.49 TB/s. Rate with no hold = HBM; the question is how fast it falls with the hold.
+    # Bytes: 528 CTAs x 32 chunks (bs 8 GEMM1-sized), and 1 GB streams.
+    # DRAM under pacing: same consumer time per byte (hold scaled with the stage size), bigger
+    # copies / fewer streams. ~2000 clk per 9 KB is v6's pace at bs 8.
+    for cps, stages, chunk, extra, th in ((4, 4, 8192, 1024, 288), (4, 4, 8192, 0, 288), (4, 2, 16384, 2048, 288),
+                                          (4, 2, 16384, 0, 288), (2, 2, 32768, 0, 288), (2, 4, 16384, 0, 288),
+                                          (1, 4, 32768, 0, 288), (8, 2, 8192, 0, 64), (4, 4, 4096, 0, 288)):
+        line = []
+        for per9k in (1, 1000, 2000, 3000):
+            hold = max(1, per9k * (chunk + extra) // 9216)
+            gbs = mod.run_bw(1, cps, th, chunk, extra, stages, 0, 0, 0, hold)
+            line.append(f"{per9k}:{gbs:.0f}")
+        print(f"bw paced {cps} CTAs x {stages} x {chunk // 1024}K+{extra // 1024}K ({cps * stages * (chunk + extra) // 1024} KB/SM):"
+              f" GB/s by hold clk per 9 KB " + " ".join(line), flush=True)
 
 
 

@@ -27,6 +27,10 @@ def main(host, sim, out, call, extra="", after=False):
             "        import traceback\n"
             "        print('sim failed:', ''.join(traceback.format_exc())[-1500:])\n"
             "    torch.cuda.empty_cache()\n")
+    if src.count("def prepare(weights: Weights):\n") == 0 and src.count("def prepare(weights):\n") == 1:
+        src = src.replace("def prepare(weights):\n", "def prepare(weights: Weights):\n")   # untyped hosts
+        if "Weights" not in src.split("def prepare")[0]:
+            src = src.replace("def prepare(weights: Weights):\n", "Weights = dict\n\n\ndef prepare(weights: Weights):\n")
     assert src.count("def prepare(weights: Weights):\n") == 1, "host prepare() signature not found"
     if after:
         # Run the sim at the end of prepare(), with the host's `state` and `weights`.

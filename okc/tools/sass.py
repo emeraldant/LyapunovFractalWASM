@@ -234,9 +234,10 @@ def moe_wg(args):
     w0 = "true" if "w0" in args else "false"
     big = "true" if "big" in args else "false"
     tma = "true" if "tma" in args else "false"
-    names = [f"moe_gemm_wg_kernel<{m}, {n}, {s}, {prof}, 0, {w0}, {big}, {tma}>" for m, n, s in insts]
+    varn = "true" if "varn" in args else "false"
+    names = [f"moe_gemm_wg_kernel<{m}, {n}, {s}, {prof}, 0, {w0}, {big}, {tma}, {varn}>" for m, n, s in insts]
     src = NVRTC_PRELUDE + K.MOE_DEVICE_SRC.replace("#include <stdint.h>", "") + "\n" + "\n".join(
-        f"template __global__ void moe_gemm_wg_kernel<{m}, {n}, {s}, {prof}, 0, {w0}, {big}, {tma}>("
+        f"template __global__ void moe_gemm_wg_kernel<{m}, {n}, {s}, {prof}, 0, {w0}, {big}, {tma}, {varn}>("
         "const __nv_bfloat16*, const int32_t*, const uint8_t*, const uint8_t*, "
         "const float*, const int32_t*, const int32_t*, const int32_t*, "
         "__nv_bfloat16*, int, long long*, int*, const __grid_constant__ TmapBlob, int);" for m, n, s in insts)

@@ -284,3 +284,20 @@ one wave) but loses at bs 16 (2 warps per scheduler on far more items).
    ~30 µs total (SGLang 82 µs).
 3. Large batch (tiles > 1): mma.sync tops out near ~535 TFLOPS here; wgmma (swap-AB, as in
    fractalyze/sglang PR #5 and Humming) if tensor time binds.
+
+### Large batch: wgmma width per chunk (v8), and why small batch overlaps badly (2026-10-23 morning)
+
+- Per-tile cost fit on GPU routings (run 7cdd1063): GEMM1 4.20 / 5.40 / 6.76 us per expert
+  chunk at N 16 / 32 / 64 (N 16 runs the tensor core at ~55%, N 32 / 64 at ~90%). v8 = 64-row
+  chunks, wgmma width chosen per chunk by its live rows (16 / 32 / 64), one k-loop copy per
+  width: bs 256 -9% to -15% vs t2 on four routings (hot experts get 123-256 tokens).
+  Two launches by expert size (dual) did not beat it: a launch over few long items pays a
+  whole item (~20 us: 288 KB at 10-15 GB/s per CTA). Judge 165ac36d: **1.741** (bs 256
+  2.173 with v8, bs 8 1.689 with s1d kept by the summed gate).
+- Refuted: one mbarrier arrive per warp instead of 256 per stage (probe and kernels: no change).
+- Bandwidth probe with paced consumers (each stage held `hold` clk before release): when the
+  consumers' rate is near HBM's, delivered bandwidth collapses (4 CTAs x 4 x 9 KB: 64% of the
+  consumer-limited rate; 4 or 6 stages alike), less so with bigger copies (16 KB: 74%, 4 KB:
+  50%); with consumers well above HBM it stays ~97%. v6 at bs 8 has math (35 us) ~ memory
+  (32 us), so ~65-70% is expected: the 48 us measured. Levers: 16 KB copies; math well below
+  memory.

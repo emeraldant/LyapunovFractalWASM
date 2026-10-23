@@ -291,6 +291,7 @@ def _run(plan, data, state):
 CUDA_CONFIGS = {
     "k1": dict(mt=1, stages=4, ctas_per_sm=4, ws=True, ks=1),   # 4 CTAs x 8 consumer warps per SM
     "k2": dict(mt=1, stages=8, ctas_per_sm=1, ws=True, ks=2),   # split K: for too few items to fill the SMs
+    "m2": dict(mt=2, stages=4, ctas_per_sm=4, ws=True, ks=1),   # 32-row items: one decode feeds two tiles
 }
 CUDA_MARGIN = 0.98   # a CUDA plan must take <= 98% of the incumbent's time on both timing routings
 

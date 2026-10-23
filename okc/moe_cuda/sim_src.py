@@ -127,3 +127,68 @@ def run_moe_cuda_sim(weights, state, variants=None, budget_s=300.0, seed=9_100_0
         verdict = "PASS" if not (g["wrong"] or g["unstable"] or g["regress"]) else "FAIL"
         print(f"GATE {vname}: {verdict} | vs sglang scored {geo(sc):.3f} other {geo(nb):.3f} | wrong {g['wrong']}"
               f" unstable {g['unstable']} regress {g['regress']}")
+
+
+def _prof_report(tag, buf, n_items, bytes_total, grid, clk_ghz=1.98):
+    """One line from a profiling-build launch: where the GEMM's time went."""
+    r = buf[: n_items * 8].view(n_items, 8).cpu().double()
+    sm, t0, t1, cw, pw, cyc, p0 = (r[:, i] for i in range(7))
+    start, end = float(torch.minimum(t0, p0).min()), float(t1.max())
+    span = end - start                                                  # ns
+    dur = t1 - t0
+    busy = float(dur.sum()) / (span * grid)                             # item-time / (span x CTA slots)
+    done = torch.sort(t1).values
+    t90 = float(done[int(0.9 * (n_items - 1))]) - start
+    cons_wait = float(cw.sum() / cyc.sum())                             # consumer warp 0 starved for data
+    prod_wait = float(pw.sum() / cyc.sum())                             # producer blocked on free stages
+    per_sm = torch.bincount(sm.long(), minlength=132)
+    print(f"  prof {tag}: {n_items} items on {int((per_sm > 0).sum())} SMs, span {span / 1e3:.1f} us,"
+          f" {bytes_total / span / 1e3:.2f} TB/s; slot use {100 * busy:.0f}%; 90% done at {t90 / 1e3:.1f} us"
+          f" (tail {(span - t90) / 1e3:.1f}); item {float(dur.median()) / 1e3:.1f} us med,"
+          f" {float(dur.quantile(0.9)) / 1e3:.1f} p90; producer waits {100 * prod_wait:.0f}%; items/SM {int(per_sm.max())} max {float(per_sm[per_sm > 0].float().mean()):.1f} mean",
+          flush=True)
+
+
+ABLATIONS = {0: "full", 1: "no math", 2: "no act rows", 3: "weights only", 4: "math only",
+             12: "decode only", 20: "mma only", 28: "loop only"}
+
+
+def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 256), abls=(0, 1, 2, 3, 4)):
+    """Timeline of each GEMM (profiling build, cold L2) on scored shapes, and the same
+    pipeline with parts switched off (ABLATIONS): which part closes the gap to the roofline."""
+    try:
+        moe_cuda_module()
+    except Exception as e:
+        print(f"moe prof: compile failed: {str(e)[-800:]}")
+        return
+    bank = state.get("cuda_bank")
+    if bank is None:
+        bank = build_cuda_bank(weights)
+        ws_layout(bank)
+    cfgs = cfgs or {"k1": dict(stages=4, ctas_per_sm=4, mt=1, ws=True, ks=1)}
+    flush = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int32, device="cuda")
+    ls = torch.zeros(1, dtype=torch.int32, device="cuda")
+    for i, bs in enumerate(sizes):
+        data = generate_input(bs=bs, sharding="ep8", seed=seed + i, device="cuda")
+        ids = data["topk_ids"]
+        ne = int(torch.unique(ids[ids < 32]).numel())
+        for name, kw in cfgs.items():
+            for abl in abls:
+                maxi = (32 + bs * 8 // (16 * kw["mt"]) + 1) * 64
+                prof = (torch.zeros(maxi * 8, dtype=torch.int64, device="cuda"),
+                        torch.zeros(maxi * 8, dtype=torch.int64, device="cuda"))
+                fns, _ = moe_cuda_stages(data["hidden_states"], ids, data["topk_weights"], ls, bank, state["norm_w"],
+                                         POST_NORM_EPS, prof=prof, abl=abl, **kw)
+                for fn in fns:
+                    fn()
+                fns[0]()
+                torch.cuda.synchronize()
+                for g, (fn, nbytes) in enumerate(((fns[1], ne * W13_BYTES), (fns[2], ne * W2_BYTES))):
+                    prof[g].zero_()
+                    flush.zero_()
+                    fn()
+                    torch.cuda.synchronize()
+                    n_items = int((prof[g].view(-1, 8)[:, 2] > 0).sum())
+                    grid = 132 * (4 if kw["ks"] == 1 else 1)
+                    _prof_report(f"bs{bs} {name} {ABLATIONS[abl]:>12} gemm{g + 1} ({ne} exp)", prof[g], n_items,
+                                 nbytes, grid)

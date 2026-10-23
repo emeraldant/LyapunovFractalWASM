@@ -25,6 +25,29 @@ Geomean dream speedup ~2.6x (current submission 1.34x). The sim prints, per stag
 achieved fraction of this dream (`gemm1 193.1 (58% of 112)`), so a gap is always located to
 a stage before anything is changed.
 
+## The roofline has three terms, not one (found 2026-10-23, run 6c4f8d07)
+
+Per byte of weights (codes + scales) streamed from HBM, a design also moves bytes through
+shared memory (bulk-copy writes + ldmatrix / ld.shared reads), at 128 B/clk/SM (~33.4 TB/s),
+and issues instructions at 4 warp-instructions/clk/SM:
+
+    t >= max( HBM bytes / 4.06 TB/s,  smem bytes / 33.4 TB/s,  instructions / issue rate )
+
+| design | smem B per HBM B | smem ceiling | issue ceiling |
+|---|---|---|---|
+| v5 GEMM1 (A = 16 token rows, read by all 8 warps) | 6.4 | 5.2 TB/s | 7.6 TB/s |
+| v5 GEMM2 | 10.4 | **3.2 TB/s (below HBM)** | 6.9 TB/s |
+| v6 swap-AB, 8 tokens (weights = A from registers, tokens = B) | 4.25 | 7.9 TB/s | ~8 TB/s |
+
+Evidence: the "loop only" ablation (no loads, no decode, no MMA; only the smem reads) runs
+at 113-115 B/clk/SM in both GEMMs and both batch sizes = 88-90% of the smem port, and costs
+95 of GEMM2's 154 us at bs 256. Earlier "consumer starvation" was this, not DRAM.
+
+Measurement lesson: a first profiling build with runtime ablation branches spilled 348 B and
+ran 2x slow (invalid data). Ablations are now compile-time instantiations in a separate
+module (-DOKC_PROF), and `tools/sass.py moe_ws prof` checks the profiling build's main loop
+equals production's before any profile is trusted.
+
 ## Hopper facts used (per SM sub-partition = SMSP, per clock)
 
 | pipe | warp instructions / clk | what runs there |

@@ -1,0 +1,50 @@
+moe cuda: ready in 39 s
+moe bs1 ('cuda', 'k1'): not faster (56.4/50.6 us, 69.6/58.4 us)
+moe bs1 ('cuda', 'k2'): not faster (46.3/51.1 us, 76.1/58.2 us)
+moe bs1 ('cuda', 'm2'): not faster (56.8/51.1 us, 71.5/58.4 us)
+moe plan bs1   : ('fast', 8, True) 51.1 us (sglang 87.0 us)
+moe bs8 ('cuda', 'k1'): not faster (96.4/109.9 us, 120.2/121.0 us)
+moe bs8 ('cuda', 'k2'): not faster (140.2/110.0 us, 170.8/120.7 us)
+moe bs8 ('cuda', 'm2'): adopted over ('fast', 8, False) 104.2/110.2 us, 117.3/120.9 us
+moe plan bs8   : ('cuda', 'm2') 104.2 us (sglang 151.4 us)
+moe bs16 ('cuda', 'k1'): adopted over ('fast', 8, False) 133.0/140.0 us, 139.4/149.4 us
+moe bs16 ('cuda', 'k2'): not faster (203.2/133.3 us, 225.0/140.9 us)
+moe bs16 ('cuda', 'm2'): not faster (133.4/135.4 us, 139.9/141.1 us)
+moe plan bs16  : ('cuda', 'k1') 133.0 us (sglang 185.2 us)
+moe bs32 ('cuda', 'k1'): adopted over ('fast', 8, False) 184.0/210.8 us, 145.0/180.1 us
+moe bs32 ('cuda', 'k2'): not faster (304.5/183.6 us, 258.2/144.6 us)
+moe bs32 ('cuda', 'm2'): not faster (196.2/183.6 us, 168.6/144.7 us)
+moe plan bs32  : ('cuda', 'k1') 184.0 us (sglang 230.8 us)
+moe bs128 ('cuda', 'k1'): adopted over ('fast', 16, False) 312.7/352.8 us, 315.7/364.0 us
+moe bs128 ('cuda', 'k2'): not faster (619.4/314.7 us, 674.9/316.5 us)
+moe bs128 ('cuda', 'm2'): not faster (312.3/313.2 us, 300.6/316.0 us)
+moe plan bs128 : ('cuda', 'k1') 312.7 us (sglang 513.4 us)
+moe bs256 ('cuda', 'k1'): adopted over ('fast', 16, False) 364.1/401.4 us, 404.5/454.8 us
+moe bs256 ('cuda', 'k2'): not faster (787.6/364.6 us, 928.2/403.8 us)
+moe bs256 ('cuda', 'm2'): not faster (358.4/365.3 us, 388.4/404.6 us)
+moe plan bs256 : ('cuda', 'k1') 364.1 us (sglang 614.4 us)
+prepare: tuned in 47 s
+  prof bs16 k1         full gemm1 (14 exp): 896 items on 132 SMs, span 83.2 us, 3.18 TB/s; slot use 78%; 90% done at 79.6 us (tail 3.6); item 34.0 us med, 64.5 p90; consumer waits 25%, producer waits 46%; items/SM 7 max 6.8 mean
+  prof bs16 k1         full gemm2 (14 exp): 896 items on 132 SMs, span 53.0 us, 2.49 TB/s; slot use 71%; 90% done at 48.4 us (tail 4.6); item 22.8 us med, 27.1 p90; consumer waits 24%, producer waits 31%; items/SM 8 max 6.8 mean
+  prof bs16 k1    math only gemm1 (14 exp): 896 items on 132 SMs, span 69.6 us, 3.79 TB/s; slot use 82%; 90% done at 68.9 us (tail 0.8); item 25.6 us med, 62.0 p90; consumer waits 11%, producer waits 72%; items/SM 7 max 6.8 mean
+  prof bs16 k1    math only gemm2 (14 exp): 896 items on 132 SMs, span 43.5 us, 3.04 TB/s; slot use 83%; 90% done at 42.8 us (tail 0.8); item 23.0 us med, 26.6 p90; consumer waits 13%, producer waits 69%; items/SM 7 max 6.8 mean
+sim failed: Traceback (most recent call last):
+  File "/tmp/muse_moe_w4a16-exai5ejt/run/submission.py", line 2823, in prepare
+    run_moe_profile(weights, state, sizes=(16, 256), abls=(0, 4, 12, 20, 28))
+  File "/tmp/muse_moe_w4a16-exai5ejt/run/submission.py", line 2748, in run_moe_profile
+    _prof_report(f"bs{bs} {name} {ABLATIONS[abl]:>12} gemm{g + 1} ({ne} exp)", prof[g], n_items,
+                                  ~~~~~~~~~^^^^^
+KeyError: 12
+
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:57:25 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop

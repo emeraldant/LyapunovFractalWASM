@@ -136,6 +136,14 @@ def loops(instrs):
     return res
 
 
+def hmma_loops(instrs):
+    """Innermost loops containing HMMA (no other HMMA loop nested inside), in address order."""
+    ls = [(lo, hi) for lo, hi in loops(instrs)
+          if any(lo <= a <= hi and op.startswith("HMMA") for a, op, _ in instrs)]
+    inner = [(lo, hi) for lo, hi in ls if not any((l2, h2) != (lo, hi) and lo <= l2 and h2 <= hi for l2, h2 in ls)]
+    return [[i for i in instrs if lo <= i[0] <= hi] for lo, hi in sorted(set(inner))]
+
+
 def main_loop(instrs):
     best = None
     for lo, hi in loops(instrs):
@@ -164,13 +172,14 @@ def report(body, label, work_note=""):
 def moe_ws(args):
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "moe_cuda"))
     import kernel as K
-    insts = [(1, 1, 2, 4, 1), (2, 1, 1, 4, 1), (1, 1, 2, 4, 2), (2, 1, 1, 4, 2)]
-    names = [f"moe_gemm_ws_kernel<{m}, {t}, {g}, {s}, {k}>" for m, t, g, s, k in insts]
+    insts = [(1, 1, 2, 4, 1), (2, 1, 1, 4, 1), (1, 2, 2, 4, 1), (2, 2, 1, 4, 1)]
+    prof = "true, 0" if "prof" in args else "false, 0"
+    names = [f"moe_gemm_ws_kernel<{m}, {t}, {g}, {s}, {k}, {prof}>" for m, t, g, s, k in insts]
     src = NVRTC_PRELUDE + K.MOE_DEVICE_SRC.replace("#include <stdint.h>", "") + "\n" + "\n".join(
-        f"template __global__ void moe_gemm_ws_kernel<{m}, {t}, {g}, {s}, {k}>("
+        f"template __global__ void moe_gemm_ws_kernel<{m}, {t}, {g}, {s}, {k}, {prof}>("
         "const __nv_bfloat16*, const int32_t*, const uint8_t*, const uint8_t*, "
         "const float*, const int32_t*, const int32_t*, const int32_t*, "
-        "__nv_bfloat16*, int);" for m, t, g, s, k in insts)
+        "__nv_bfloat16*, int, long long*, int*);" for m, t, g, s, k in insts)
     log, sass = compile_sass(nvrtc_ptx(src, names))
     for line in log.splitlines():
         if "Used" in line or "spill" in line:
@@ -179,11 +188,13 @@ def moe_ws(args):
         if "ws_kernel" not in fname:
             continue
         instrs = parse(lines)
-        body = main_loop(instrs)
-        m = re.search(r"ILi(\d)ELi(\d)ELi(\d)ELi(\d)ELi(\d)E", fname)
+        m = re.search(r"ILi(\d)ELi(\d)ELi(\d)ELi(\d)ELi(\d)ELb\dELi\d+E", fname)
         ngw = int(m.group(3))
         print(f"\n== WS MODE {m.group(1)} MT {m.group(2)} NGW {ngw} STAGES {m.group(4)} KS {m.group(5)}: {len(instrs)} instructions")
-        report(body, "", f"(per {int(m.group(4)) // int(m.group(5))} chunks x {ngw * 1024} weights per warp)")
+        for body in hmma_loops(instrs):
+            n_hmma = sum(op.startswith("HMMA") for _, op, _ in body)
+            print(f"  -- loop with {n_hmma} HMMA")
+            report(body, "", f"(per {int(m.group(4)) // int(m.group(5))} chunks x {ngw * 1024} weights per warp)")
 
 
 def moe(args):

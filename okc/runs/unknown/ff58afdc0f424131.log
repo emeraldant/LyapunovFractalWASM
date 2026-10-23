@@ -1,0 +1,21 @@
+moe cuda: unavailable (RuntimeError: Error building extension 'okc_moe_gemm': [1/3] ccache /usr/local/cuda/bin/nvcc -MD -MF cuda.cuda.o.d -DTORCH_EXTENSION_NAME=okc_moe_gemm -DTORCH_API_INCLUDE_EXTENSION_H -isystem /opt/sglang/lib/python)
+moe plan bs1   : ('fast', 8, True) 51.2 us (sglang 86.8 us)
+moe plan bs8   : ('fast', 8, False) 109.7 us (sglang 151.2 us)
+moe plan bs16  : ('fast', 8, False) 170.7 us (sglang 217.2 us)
+moe plan bs32  : ('fast', 8, False) 211.1 us (sglang 221.3 us)
+moe plan bs128 : ('fast', 16, False) 258.7 us (sglang 356.6 us)
+moe plan bs256 : ('fast', 16, False) 413.3 us (sglang 600.9 us)
+prepare: tuned in 17 s
+moe prof: compile failed: /tmp/muse_moe_w4a16-wuqs4b8k/sandbox/cache/torch_extensions/okc_moe_gemm/okc_moe_gemm.so: cannot open shared object file: No such file or directory
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:28:20 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop

@@ -1,0 +1,68 @@
+moe cuda: ready in 37 s
+moe bs1 ('cuda', 'k1'): not faster (55.5/50.5 us, 69.2/57.8 us)
+moe bs1 ('cuda', 'k2'): not faster (45.9/50.4 us, 75.0/57.8 us)
+moe plan bs1   : ('fast', 8, True) 50.9 us (sglang 87.2 us)
+moe bs8 ('cuda', 'k1'): not faster (94.9/109.6 us, 120.4/120.5 us)
+moe bs8 ('cuda', 'k2'): not faster (139.3/109.4 us, 170.9/120.6 us)
+moe plan bs8   : ('fast', 8, False) 109.4 us (sglang 151.1 us)
+moe bs16 ('cuda', 'k1'): adopted over ('fast', 8, False) 132.9/139.6 us, 140.8/149.6 us
+moe bs16 ('cuda', 'k2'): not faster (203.2/134.8 us, 224.2/140.3 us)
+moe plan bs16  : ('cuda', 'k1') 132.9 us (sglang 183.8 us)
+moe bs32 ('cuda', 'k1'): adopted over ('fast', 8, False) 181.8/209.4 us, 143.3/178.9 us
+moe bs32 ('cuda', 'k2'): not faster (303.8/182.8 us, 258.0/144.2 us)
+moe plan bs32  : ('cuda', 'k1') 181.8 us (sglang 229.7 us)
+moe bs128 ('cuda', 'k1'): adopted over ('fast', 16, False) 308.2/350.7 us, 313.0/362.1 us
+moe bs128 ('cuda', 'k2'): not faster (616.8/310.2 us, 672.0/315.1 us)
+moe plan bs128 : ('cuda', 'k1') 308.2 us (sglang 512.5 us)
+moe bs256 ('cuda', 'k1'): adopted over ('fast', 16, False) 360.1/399.0 us, 400.7/451.4 us
+moe bs256 ('cuda', 'k2'): not faster (785.0/358.8 us, 926.2/401.5 us)
+moe plan bs256 : ('cuda', 'k1') 360.1 us (sglang 609.6 us)
+prepare: tuned in 45 s
+  prof bs1 k1         full gemm1 (2 exp): 128 items on 120 SMs, span 24.8 us, 1.52 TB/s; slot use 16%; 90% done at 21.8 us (tail 3.1); item 15.9 us med, 19.5 p90; consumer waits 20%, producer waits 33%; items/SM 2 max 1.1 mean
+  prof bs1 k1         full gemm2 (2 exp): 128 items on 120 SMs, span 17.4 us, 1.08 TB/s; slot use 18%; 90% done at 16.1 us (tail 1.3); item 13.1 us med, 14.6 p90; consumer waits 38%, producer waits 30%; items/SM 2 max 1.1 mean
+  prof bs8 k1         full gemm1 (6 exp): 384 items on 132 SMs, span 46.3 us, 2.44 TB/s; slot use 47%; 90% done at 37.9 us (tail 8.4); item 30.2 us med, 33.3 p90; consumer waits 26%, producer waits 45%; items/SM 4 max 2.9 mean
+  prof bs8 k1         full gemm2 (6 exp): 384 items on 132 SMs, span 28.4 us, 1.99 TB/s; slot use 51%; 90% done at 24.6 us (tail 3.8); item 20.5 us med, 22.0 p90; consumer waits 32%, producer waits 31%; items/SM 4 max 2.9 mean
+  prof bs16 k1         full gemm1 (10 exp): 640 items on 132 SMs, span 69.4 us, 2.72 TB/s; slot use 65%; 90% done at 59.9 us (tail 9.5); item 35.6 us med, 50.4 p90; consumer waits 27%, producer waits 47%; items/SM 6 max 4.8 mean
+  prof bs16 k1         full gemm2 (10 exp): 640 items on 132 SMs, span 43.0 us, 2.19 TB/s; slot use 63%; 90% done at 39.7 us (tail 3.3); item 22.3 us med, 26.9 p90; consumer waits 25%, producer waits 32%; items/SM 6 max 4.8 mean
+  prof bs32 k1         full gemm1 (15 exp): 1024 items on 132 SMs, span 98.0 us, 2.89 TB/s; slot use 76%; 90% done at 89.6 us (tail 8.4); item 31.2 us med, 65.6 p90; consumer waits 24%, producer waits 34%; items/SM 8 max 7.8 mean
+  prof bs32 k1         full gemm2 (15 exp): 1024 items on 132 SMs, span 59.6 us, 2.37 TB/s; slot use 75%; 90% done at 53.0 us (tail 6.7); item 21.5 us med, 30.0 p90; consumer waits 27%, producer waits 24%; items/SM 8 max 7.8 mean
+  prof bs128 k1         full gemm1 (23 exp): 1984 items on 132 SMs, span 190.7 us, 2.28 TB/s; slot use 83%; 90% done at 170.8 us (tail 20.0); item 41.5 us med, 57.9 p90; consumer waits 36%, producer waits 21%; items/SM 16 max 15.0 mean
+  prof bs128 k1         full gemm2 (23 exp): 1984 items on 132 SMs, span 132.1 us, 1.64 TB/s; slot use 80%; 90% done at 115.5 us (tail 16.6); item 27.1 us med, 37.4 p90; consumer waits 49%, producer waits 18%; items/SM 16 max 15.0 mean
+  prof bs256 k1         full gemm1 (23 exp): 2624 items on 132 SMs, span 250.4 us, 1.73 TB/s; slot use 87%; 90% done at 227.8 us (tail 22.5); item 43.3 us med, 58.4 p90; consumer waits 39%, producer waits 15%; items/SM 21 max 19.9 mean
+  prof bs256 k1         full gemm2 (23 exp): 2624 items on 132 SMs, span 176.9 us, 1.23 TB/s; slot use 85%; 90% done at 158.7 us (tail 18.2); item 31.5 us med, 37.1 p90; consumer waits 55%, producer waits 15%; items/SM 22 max 19.9 mean
+moe cuda: compiled in 0 s
+k1 dyn|s bs1|ok 3.4e-03 w3.4e-03|51.0 vs plan 46.0us x0.899 [0.89,0.91] vs sglang x1.59
+k1 dyn|s bs8|ok 3.4e-03 w3.5e-03|112.5 vs plan 115.0us x1.023 [1.02,1.03] vs sglang x1.38
+k1 dyn|s bs16|ok 3.4e-03 w3.5e-03|95.5 vs plan 95.6us x0.998 [0.99,1.01] vs sglang x1.55
+k1 dyn|s bs32|ok 3.4e-03 w3.6e-03|162.4 vs plan 161.0us x0.994 [0.98,1.00] vs sglang x1.24
+k1 dyn|s bs128|ok 3.4e-03 w3.5e-03|249.2 vs plan 248.9us x0.999 [1.00,1.00] vs sglang x1.67
+k1 dyn|s bs256|ok 3.4e-03 w3.5e-03|354.0 vs plan 354.7us x1.001 [1.00,1.01] vs sglang x1.74
+k1 dyn|n bs2|ok 3.3e-03 w3.3e-03|84.8 vs plan 83.9us x0.989 [0.98,0.99] vs sglang x1.40
+k1 dyn|n bs5|ok 3.4e-03 w3.5e-03|84.1 vs plan 82.9us x0.986 [0.98,1.00] vs sglang x1.46
+k1 dyn|n bs12|ok 3.4e-03 w3.5e-03|124.7 vs plan 121.0us x0.991 [0.97,1.00] vs sglang x1.45
+k1 dyn|n bs24|ok 3.3e-03 w3.4e-03|158.1 vs plan 158.0us x1.001 [0.99,1.01] vs sglang x1.49
+k1 dyn|n bs48|ok 3.4e-03 w3.5e-03|177.7 vs plan 177.8us x1.003 [1.00,1.02] vs sglang x1.22
+k1 dyn|n bs64|ok 3.4e-03 w3.6e-03|209.9 vs plan 209.4us x1.000 [0.99,1.01] vs sglang x1.53
+k1 dyn|n bs96|ok 3.4e-03 w3.5e-03|253.9 vs plan 252.7us x1.002 [0.99,1.01] vs sglang x1.41
+k1 dyn|n bs200|ok 3.4e-03 w3.5e-03|437.1 vs plan 437.4us x1.003 [1.00,1.01] vs sglang x1.56
+k1 dyn|n bs8 skew|ok 3.4e-03 w3.5e-03|70.8 vs plan 66.0us x0.927 [0.92,0.94] vs sglang x1.48
+k1 dyn|n bs32 skew|ok 3.4e-03 w3.5e-03|98.2 vs plan 98.1us x0.998 [0.99,1.01] vs sglang x1.10
+k1 dyn|n bs256 skew|ok 3.4e-03 w3.6e-03|419.4 vs plan 418.9us x0.998 [1.00,1.00] vs sglang x0.70
+k1 dyn|t bs3|ok 3.3e-03 w3.5e-03|82.3 vs plan 74.3us x0.904 [0.90,0.91] vs sglang x1.35
+k1 dyn|t bs33|ok 3.4e-03 w3.5e-03|220.9 vs plan 221.0us x1.004 [0.99,1.01] vs sglang x1.22
+k1 dyn|t bs257|ok 3.4e-03 w3.5e-03|356.1 vs plan 672.9us x1.890 [1.88,1.90] vs sglang x1.89
+k1 dyn|t bs1 skew|ok 3.3e-03 w3.3e-03|65.8 vs plan 66.7us x1.010 [1.00,1.02] vs sglang x1.50
+k1 dyn|t bs128 skew|ok 3.4e-03 w3.5e-03|253.1 vs plan 253.5us x1.001 [1.00,1.00] vs sglang x0.83
+GATE k1 dyn: FAIL | vs sglang scored 1.519 other 1.315 | wrong [] unstable [] regress ['s bs1 x0.90', 'n bs8 skew x0.93', 't bs3 x0.90']
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:47:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

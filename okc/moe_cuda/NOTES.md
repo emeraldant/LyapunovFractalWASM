@@ -361,3 +361,31 @@ at 4.06 TB/s the ALU needs 57% and issue 52%: the unpack has ~1.8x headroom; the
    width per expert.
 3. Fixed kernels 4-7 us (bs1 split-K post-norm 6 us; bs256 route+gather 5.2 us).
 4. Then overlap (bytes in flight, decode next chunk under current MMAs).
+
+## dualsab refuted; the small-batch GEMMs sit on the per-SM decode rate (run d89995c7, Oct 23)
+
+Stage profile self-hosted in an attention check (synthetic weights, judge routing seeds, cold L2):
+
+| bs | config | total | route / GEMM1 / GEMM2 / post (us) |
+|---|---|---|---|
+| 1 | s1k4 (adopted) | 42.7 | 0.8 / 19.0 / 11.6 / 5.9 |
+| 1 | s1dw2fp | **39.0** | 0.4 / 17.6 / 12.6 / 4.5 |
+| 8 | s1dw (adopted) | 98.5 | 0.6 / 58.8 / 40.7 / 3.1 |
+| 8 | s1dws8 | 104.3 | 0.6 / 61.7 / 39.2 / 3.1 |
+| 16 | s1dw (adopted) | 76.8 | 0.6 / 45.4 / 24.4 / 3.1 |
+| 16 | s1dws8 | 77.2 | 1.1 / 46.5 / 25.4 / 3.1 |
+| 32 | s2w (adopted) | 130.8 | 0.9 / 80.5 / 50.6 / 4.2 |
+| 32 | s1dws8 | 133.8 | 1.4 / 80.4 / 47.7 / 4.5 |
+| 128 | s2q (adopted) | 234.3 | 1.1 / 144.4 / 83.7 / 4.6 |
+| 128 | s1dws8 | 241.4 | 1.3 / 147.0 / 84.6 / 4.7 |
+
+- Refuted: hot-expert re-decode as the bs 16 cost. Decoding the 16-token expert once (16-token
+  tiles, flag 32 so the co-runner starts at once) leaves GEMM1 at 46.5 vs 45.4 us. s1dws8 dropped
+  from the gate (the dualsab option stays in moe_cuda_stages).
+- Model that fits: GEMM time ~ weights x 0.031 SM-clk (the real v6 loop) / 132 SMs / 1.76 GHz +
+  ~6 us: bs 8 GEMM1 378 M weights -> 50 + 6 vs 58.8 measured. The HBM budget is 0.0327: the decode
+  loop runs at ~95% of the bandwidth roofline, so any stall drops below it; rebalancing bytes
+  (stream-K, split K, dualsab) cannot help. Lever: the loop's 0.031 -> the 0.024 the
+  microbenchmark reaches with the MMA (loads / ldmatrix / barriers / stalls, ~23%).
+- s1dw2fp wins bs 1 by 8.7% here (the gate already carries it).
+- aaln's tip (compile-time ring stage indices) is already how v6's consumer runs (unrolled st).

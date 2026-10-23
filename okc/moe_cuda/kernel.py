@@ -336,18 +336,23 @@ struct WsCfg {
   static constexpr int STAGE = A_STAGE + W_STAGE + S_STAGE;
 };
 
-template <int MODE, int MT, int NGW, int STAGES>
-__global__ void __launch_bounds__(288) moe_gemm_ws_kernel(
+// KS > 1 (small batches, too few items to fill the SMs): KS groups of 8 consumer warps per CTA
+// split K, group g taking stages g, g + KS, ...; at the end of an item the partial
+// accumulators meet in shared memory and group 0 runs the epilogue.
+template <int MODE, int MT, int NGW, int STAGES, int KS>
+__global__ void __launch_bounds__(32 * (8 * KS + 1)) moe_gemm_ws_kernel(
     const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
     const uint8_t* __restrict__ wq, const uint8_t* __restrict__ ws, const float* __restrict__ gs,
     const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
     const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out, int n_blocks) {
   using C = WsCfg<MODE, MT, NGW>;
   constexpr int NCHUNK = KTOT / 128;
-  static_assert(NCHUNK % STAGES == 0, "chunks must divide into stages");
+  static_assert(NCHUNK % STAGES == 0 && STAGES % KS == 0, "chunks / stages / K groups must divide");
+  static_assert(8 * KS + 1 <= 32, "at most 1024 threads per CTA");
   extern __shared__ __align__(128) uint8_t smem[];
   const uint32_t base = (uint32_t)__cvta_generic_to_shared(smem);
   const uint32_t bar_full = base + STAGES * C::STAGE, bar_empty = bar_full + 8 * STAGES;
+  float* red = reinterpret_cast<float*>(smem + STAGES * (C::STAGE + 16));
   const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
   if (tid == 0) {
     for (int s = 0; s < STAGES; ++s) {
@@ -360,7 +365,7 @@ __global__ void __launch_bounds__(288) moe_gemm_ws_kernel(
   const int n_active = *n_active_ptr;
   const int total = n_active * n_blocks;
 
-  if (warp == 8) {
+  if (warp == 8 * KS) {
     // Producer. Fill f uses stage f % STAGES; before reusing a stage it waits for the
     // consumers' release of the previous fill there (empty-barrier phase (f / STAGES - 1) & 1).
     uint32_t f = 0;
@@ -401,16 +406,18 @@ __global__ void __launch_bounds__(288) moe_gemm_ws_kernel(
     return;
   }
 
-  // Consumers.
+  // Consumers: K group kg, slot warp ws.
+  const int kg = warp / 8, wsl = warp % 8;
   const int r = lane / 4, c = (lane % 4) * 2;
   uint32_t lds_off[8];
   {
     const int row = lane % 16, hi = lane / 16;
 #pragma unroll
-    for (int step = 0; step < 8; ++step) lds_off[step] = base + row * C::A_ROW + (step * 2 + hi) * 16;
+    for (int step = 0; step < 8; ++step) lds_off[step] = base + kg * C::STAGE + row * C::A_ROW + (step * 2 + hi) * 16;
   }
-  const uint32_t w_src = base + C::A_STAGE + ((warp * NGW) * 32 + lane) * 16;
-  const uint32_t s_src = base + C::A_STAGE + C::W_STAGE + (warp * NGW) * 64 + r * 8;
+  const uint32_t w_src = base + kg * C::STAGE + C::A_STAGE + ((wsl * NGW) * 32 + lane) * 16;
+  const uint32_t s_src = base + kg * C::STAGE + C::A_STAGE + C::W_STAGE + (wsl * NGW) * 64 + r * 8;
+  const uint32_t my_full = bar_full + 8 * kg, my_empty = bar_empty + 8 * kg;
   uint32_t f = 0;
   for (int item = blockIdx.x; item < total; item += gridDim.x) {
     const int nb = item % n_blocks;
@@ -435,8 +442,9 @@ __global__ void __launch_bounds__(288) moe_gemm_ws_kernel(
     for (int kc0 = 0; kc0 < NCHUNK; kc0 += STAGES, f += STAGES) {
       const uint32_t parity = (f / STAGES) & 1;
 #pragma unroll
-      for (int st = 0; st < STAGES; ++st) {
-        mbar_wait(bar_full + 8 * st, parity);
+      for (int jst = 0; jst < STAGES / KS; ++jst) {
+        const int st = jst * KS;   // + kg, folded into the base addresses
+        mbar_wait(my_full + 8 * st, parity);
         uint4 wv[NGW];
         uint2 sv[NGW];
 #pragma unroll
@@ -489,7 +497,7 @@ __global__ void __launch_bounds__(288) moe_gemm_ws_kernel(
             }
           }
         }
-        mbar_arrive(bar_empty + 8 * st);
+        mbar_arrive(my_empty + 8 * st);
       }
     }
     if (NACC == 2) {
@@ -499,6 +507,33 @@ __global__ void __launch_bounds__(288) moe_gemm_ws_kernel(
         for (int j = 0; j < NGW; ++j)
 #pragma unroll
           for (int i = 0; i < 4; ++i) acc[0][mt][j][i] += acc[NACC - 1][mt][j][i];
+    }
+    if (KS > 1) {
+      // red: [K group - 1][slot warp][accumulator index][lane] (lane-contiguous: conflict-free).
+      constexpr int NV = MT * NGW * 4;
+      if (kg > 0) {
+#pragma unroll
+        for (int mt = 0; mt < MT; ++mt)
+#pragma unroll
+          for (int j = 0; j < NGW; ++j)
+#pragma unroll
+            for (int i = 0; i < 4; ++i)
+              red[(((kg - 1) * 8 + wsl) * NV + (mt * NGW + j) * 4 + i) * 32 + lane] = acc[0][mt][j][i];
+      }
+      asm volatile("bar.sync 1, %0;\n" :: "n"(256 * KS) : "memory");
+      if (kg == 0) {
+#pragma unroll
+        for (int g = 1; g < KS; ++g)
+#pragma unroll
+          for (int mt = 0; mt < MT; ++mt)
+#pragma unroll
+            for (int j = 0; j < NGW; ++j)
+#pragma unroll
+              for (int i = 0; i < 4; ++i)
+                acc[0][mt][j][i] += red[(((g - 1) * 8 + wsl) * NV + (mt * NGW + j) * 4 + i) * 32 + lane];
+      }
+      asm volatile("bar.sync 1, %0;\n" :: "n"(256 * KS) : "memory");
+      if (kg > 0) continue;
     }
 #pragma unroll
     for (int mt = 0; mt < MT; ++mt) {
@@ -517,7 +552,7 @@ __global__ void __launch_bounds__(288) moe_gemm_ws_kernel(
           v0 = acc[0][mt][0][2 * h] * gsc;
           v1 = acc[0][mt][0][2 * h + 1] * gsc;
         }
-        const int n = 8 * (nb * 8 + warp) + c;
+        const int n = 8 * (nb * 8 + wsl) + c;
         __nv_bfloat162 pr = __floats2bfloat162_rn(v0, v1);
         *reinterpret_cast<__nv_bfloat162*>(out + (size_t)(row0 + orow) * KTOT + n) = pr;
       }
@@ -553,20 +588,21 @@ void launch(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torc
       reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks);
 }
 
-template <int MODE, int MT, int STAGES>
+template <int MODE, int MT, int STAGES, int KS>
 void launch_ws(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
                torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
                int n_blocks, int grid) {
   constexpr int NGW = MODE == 1 ? 2 : 1;
-  size_t smem = (size_t)STAGES * (WsCfg<MODE, MT, NGW>::STAGE + 16);
-  auto k = moe_gemm_ws_kernel<MODE, MT, NGW, STAGES>;
+  constexpr int THREADS = 32 * (8 * KS + 1);
+  size_t smem = (size_t)STAGES * (WsCfg<MODE, MT, NGW>::STAGE + 16) + (size_t)(KS - 1) * 8 * MT * NGW * 4 * 32 * 4;
+  auto k = moe_gemm_ws_kernel<MODE, MT, NGW, STAGES, KS>;
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   int per_sm = 0, sms = 0, dev = 0;
   cudaGetDevice(&dev);
   cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
-  cudaOccupancyMaxActiveBlocksPerMultiprocessor(&per_sm, k, 288, smem);
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(&per_sm, k, THREADS, smem);
   grid = std::min(grid, std::max(1, per_sm) * sms);
-  k<<<grid, 288, smem, at::cuda::getCurrentCUDAStream()>>>(
+  k<<<grid, THREADS, smem, at::cuda::getCurrentCUDAStream()>>>(
       reinterpret_cast<const __nv_bfloat16*>(a_src.data_ptr()), row_route.data_ptr<int32_t>(),
       wq.data_ptr<uint8_t>(), ws.data_ptr<uint8_t>(), gs.data_ptr<float>(),
       active.data_ptr<int32_t>(), n_active.data_ptr<int32_t>(), exp_start.data_ptr<int32_t>(),
@@ -575,9 +611,10 @@ void launch_ws(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, t
 
 void moe_gemm_ws(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
-                 torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid) {
-#define WCASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch_ws<M_, T_, S_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid); return; }
-  WCASE(1, 1, 4) WCASE(2, 1, 4) WCASE(1, 2, 4) WCASE(2, 2, 4) WCASE(1, 1, 8) WCASE(2, 1, 8) WCASE(1, 2, 8) WCASE(2, 2, 8)
+                 torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, int64_t ks) {
+#define WCASE(M_, T_, S_, K_) if (mode == M_ && mt == T_ && stages == S_ && ks == K_) { launch_ws<M_, T_, S_, K_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid); return; }
+  WCASE(1, 1, 4, 1) WCASE(2, 1, 4, 1) WCASE(1, 2, 4, 1) WCASE(2, 2, 4, 1) WCASE(1, 1, 8, 1) WCASE(2, 1, 8, 1)
+  WCASE(1, 1, 8, 2) WCASE(2, 1, 8, 2) WCASE(1, 1, 4, 2) WCASE(2, 1, 4, 2)   // KS * 8 + 1 warps <= 32
   TORCH_CHECK(false, "moe_gemm_ws: unsupported mode / m tiles / stages");
 }
 
@@ -596,7 +633,7 @@ MOE_CUDA_SRC = MOE_HOST_SRC.replace("#include <ATen/cuda/CUDAContext.h>\n", "#in
 MOE_CUDA_CPP = """
 void moe_gemm_ws(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
-                 torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid);
+                 torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, int64_t ks);
 void moe_gemm(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
               torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
               torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid);
@@ -776,7 +813,7 @@ def ws_layout(bank):
 
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
-                    ws=False):
+                    ws=False, ks=1):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order."""
     mod = moe_cuda_module()
@@ -802,7 +839,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
         _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, mt * 16,
                                         NE=256, E=count, CHUNK=256, num_warps=4)
 
-    gemm = mod.moe_gemm_ws if ws else mod.moe_gemm
+    gemm = (lambda *a: mod.moe_gemm_ws(*a, ks)) if ws else mod.moe_gemm
     sfx = "_ws" if ws else ""
 
     def gemm1():

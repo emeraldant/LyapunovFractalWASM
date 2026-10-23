@@ -1,0 +1,72 @@
+moe plan bs1   : ('fast', 8, True) 50.5 us (sglang 87.6 us)
+moe plan bs8   : ('fast', 8, False) 109.0 us (sglang 151.3 us)
+moe plan bs16  : ('fast', 8, False) 169.6 us (sglang 217.7 us)
+moe plan bs32  : ('fast', 16, False) 210.1 us (sglang 219.6 us)
+moe plan bs128 : ('fast', 16, False) 259.3 us (sglang 354.0 us)
+moe plan bs256 : ('fast', 16, False) 412.7 us (sglang 600.8 us)
+prepare: tuned in 6 s
+moe cuda: compiled in 37 s
+ws mt1s4c4|s bs1|ok 3.4e-03 w3.4e-03|48.1 vs plan 46.5us x0.967 [0.96,0.98] vs sglang x1.71
+  stages bs1: route 1.6 gemm1 24.3 (38% of 9) gemm2 16.0 (29% of 5) post 2.3 us, 2 experts, 2 chunks (x1.00 weight reads), max 1 rows/expert
+v4 mt1s4|s bs1|ok 3.4e-03 w3.4e-03|52.7 vs plan 46.2us x0.880 [0.87,0.88] vs sglang x1.56
+ws mt1s4c4|s bs8|ok 3.4e-03 w3.5e-03|108.7 vs plan 115.5us x1.067 [1.06,1.07] vs sglang x1.44
+  stages bs8: route 1.9 gemm1 61.2 (68% of 42) gemm2 40.0 (52% of 21) post 3.1 us, 9 experts, 9 chunks (x1.00 weight reads), max 2 rows/expert
+v4 mt1s4|s bs8|ok 3.4e-03 w3.5e-03|115.4 vs plan 115.6us x1.001 [1.00,1.01] vs sglang x1.35
+ws mt1s4c4|s bs16|ok 3.4e-03 w3.5e-03|91.4 vs plan 105.5us x1.151 [1.14,1.17] vs sglang x1.64
+  stages bs16: route 1.9 gemm1 53.0 (70% of 37) gemm2 29.5 (63% of 19) post 4.1 us, 8 experts, 8 chunks (x1.00 weight reads), max 8 rows/expert
+v4 mt1s4|s bs16|ok 3.4e-03 w3.5e-03|104.7 vs plan 105.7us x1.009 [1.00,1.02] vs sglang x1.44
+ws mt1s4c4|s bs32|ok 3.4e-03 w3.5e-03|157.7 vs plan 194.0us x1.231 [1.22,1.24] vs sglang x1.29
+  stages bs32: route 1.7 gemm1 96.9 (77% of 74) gemm2 53.5 (70% of 37) post 3.8 us, 16 experts, 16 chunks (x1.00 weight reads), max 9 rows/expert
+v4 mt1s4|s bs32|ok 3.4e-03 w3.5e-03|182.0 vs plan 194.3us x1.067 [1.06,1.07] vs sglang x1.12
+ws mt1s4c4|s bs128|ok 3.4e-03 w3.5e-03|251.1 vs plan 276.1us x1.099 [1.10,1.10] vs sglang x1.68
+  stages bs128: route 5.2 gemm1 151.3 (65% of 98) gemm2 86.2 (57% of 49) post 5.2 us, 21 experts, 23 chunks (x1.10 weight reads), max 24 rows/expert
+v4 mt1s4|s bs128|ok 3.4e-03 w3.5e-03|251.2 vs plan 276.2us x1.100 [1.10,1.10] vs sglang x1.68
+ws mt1s4c4|s bs256|ok 3.4e-03 w3.6e-03|360.0 vs plan 396.8us x1.103 [1.10,1.11] vs sglang x1.73
+  stages bs256: route 9.6 gemm1 213.6 (54% of 116) gemm2 130.3 (45% of 58) post 5.0 us, 25 experts, 34 chunks (x1.36 weight reads), max 67 rows/expert
+v4 mt1s4|s bs256|ok 3.4e-03 w3.6e-03|364.4 vs plan 397.0us x1.089 [1.09,1.09] vs sglang x1.71
+ws mt1s4c4|n bs2|ok 3.4e-03 w3.4e-03|79.4 vs plan 84.8us x1.065 [1.06,1.08] vs sglang x1.50
+v4 mt1s4|n bs2|ok 3.4e-03 w3.4e-03|82.5 vs plan 84.7us x1.031 [1.02,1.04] vs sglang x1.45
+ws mt1s4c4|n bs5|ok 3.4e-03 w3.4e-03|78.3 vs plan 83.9us x1.070 [1.06,1.08] vs sglang x1.59
+v4 mt1s4|n bs5|ok 3.4e-03 w3.4e-03|81.1 vs plan 83.6us x1.028 [1.02,1.04] vs sglang x1.53
+ws mt1s4c4|n bs12|ok 3.4e-03 w3.5e-03|120.4 vs plan 134.6us x1.118 [1.11,1.12] vs sglang x1.48
+v4 mt1s4|n bs12|ok 3.4e-03 w3.5e-03|131.7 vs plan 133.9us x1.017 [1.01,1.02] vs sglang x1.34
+ws mt1s4c4|n bs24|ok 3.4e-03 w3.5e-03|156.8 vs plan 193.6us x1.233 [1.23,1.24] vs sglang x1.50
+v4 mt1s4|n bs24|ok 3.4e-03 w3.5e-03|181.2 vs plan 193.5us x1.068 [1.06,1.07] vs sglang x1.30
+ws mt1s4c4|n bs48|ok 3.4e-03 w3.5e-03|179.7 vs plan 207.2us x1.154 [1.15,1.16] vs sglang x1.22
+v4 mt1s4|n bs48|ok 3.4e-03 w3.5e-03|192.8 vs plan 207.4us x1.077 [1.07,1.08] vs sglang x1.14
+ws mt1s4c4|n bs64|ok 3.4e-03 w3.5e-03|206.1 vs plan 240.7us x1.169 [1.17,1.17] vs sglang x1.57
+v4 mt1s4|n bs64|ok 3.4e-03 w3.5e-03|225.5 vs plan 240.3us x1.067 [1.06,1.07] vs sglang x1.44
+ws mt1s4c4|n bs96|ok 3.4e-03 w3.6e-03|245.4 vs plan 284.3us x1.157 [1.15,1.16] vs sglang x1.46
+v4 mt1s4|n bs96|ok 3.4e-03 w3.6e-03|253.1 vs plan 284.7us x1.127 [1.12,1.13] vs sglang x1.42
+ws mt1s4c4|n bs200|ok 3.4e-03 w3.6e-03|440.7 vs plan 492.4us x1.117 [1.11,1.12] vs sglang x1.54
+v4 mt1s4|n bs200|ok 3.4e-03 w3.6e-03|438.4 vs plan 492.9us x1.125 [1.12,1.13] vs sglang x1.55
+ws mt1s4c4|n bs8 skew|ok 3.4e-03 w3.4e-03|66.9 vs plan 66.4us x0.988 [0.98,1.00] vs sglang x1.60
+v4 mt1s4|n bs8 skew|ok 3.4e-03 w3.4e-03|70.7 vs plan 65.8us x0.930 [0.92,0.94] vs sglang x1.51
+ws mt1s4c4|n bs32 skew|ok 3.4e-03 w3.5e-03|95.0 vs plan 100.5us x1.060 [1.05,1.07] vs sglang x1.16
+v4 mt1s4|n bs32 skew|ok 3.4e-03 w3.5e-03|89.6 vs plan 99.8us x1.117 [1.11,1.12] vs sglang x1.22
+ws mt1s4c4|n bs256 skew|ok 3.4e-03 w3.6e-03|430.2 vs plan 445.3us x1.035 [1.03,1.04] vs sglang x0.68
+v4 mt1s4|n bs256 skew|ok 3.4e-03 w3.6e-03|390.2 vs plan 445.3us x1.141 [1.14,1.14] vs sglang x0.75
+ws mt1s4c4|t bs3|ok 3.4e-03 w3.4e-03|76.3 vs plan 74.1us x0.969 [0.96,0.98] vs sglang x1.46
+v4 mt1s4|t bs3|ok 3.4e-03 w3.4e-03|77.4 vs plan 74.4us x0.959 [0.95,0.97] vs sglang x1.44
+ws mt1s4c4|t bs33|ok 3.4e-03 w3.5e-03|218.7 vs plan 257.6us x1.178 [1.17,1.18] vs sglang x1.22
+v4 mt1s4|t bs33|ok 3.4e-03 w3.5e-03|246.1 vs plan 257.5us x1.045 [1.04,1.05] vs sglang x1.08
+ws mt1s4c4|t bs257|ok 3.4e-03 w3.6e-03|364.1 vs plan 672.8us x1.848 [1.85,1.85] vs sglang x1.85
+v4 mt1s4|t bs257|ok 3.4e-03 w3.6e-03|361.3 vs plan 673.2us x1.861 [1.86,1.86] vs sglang x1.86
+ws mt1s4c4|t bs1 skew|ok 3.4e-03 w3.4e-03|62.3 vs plan 66.9us x1.078 [1.07,1.09] vs sglang x1.59
+v4 mt1s4|t bs1 skew|ok 3.4e-03 w3.4e-03|70.8 vs plan 66.8us x0.944 [0.94,0.95] vs sglang x1.39
+ws mt1s4c4|t bs128 skew|ok 3.4e-03 w3.5e-03|262.5 vs plan 258.0us x0.983 [0.98,0.99] vs sglang x0.79
+v4 mt1s4|t bs128 skew|ok 3.4e-03 w3.5e-03|240.7 vs plan 257.7us x1.071 [1.07,1.07] vs sglang x0.87
+GATE ws mt1s4c4: FAIL | vs sglang scored 1.575 other 1.350 | wrong [] unstable [] regress ['s bs1 x0.97', 't bs3 x0.97']
+GATE v4 mt1s4: FAIL | vs sglang scored 1.462 other 1.302 | wrong [] unstable [] regress ['s bs1 x0.88', 'n bs8 skew x0.93', 't bs3 x0.96', 't bs1 skew x0.94']
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-22 23:54:35 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

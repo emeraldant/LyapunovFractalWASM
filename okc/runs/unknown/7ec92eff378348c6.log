@@ -1,0 +1,32 @@
+moe cuda: ready in 44 s
+moe bs1 ('cuda', 'k1'): not faster (53.3/52.7 us, 67.1/59.9 us)
+moe bs1 ('cuda', 'k2'): not faster (43.4/52.4 us, 71.4/60.0 us)
+moe plan bs1   : ('fast', 16, True) 50.0 us (sglang 81.0 us)
+moe bs8 ('cuda', 'k1'): adopted over ('fast', 8, False) 90.9/110.4 us, 116.4/120.6 us
+moe bs8 ('cuda', 'k2'): not faster (132.8/90.9 us, 164.6/116.3 us)
+moe plan bs8   : ('cuda', 'k1') 90.9 us (sglang 151.9 us)
+moe bs16 ('cuda', 'k1'): adopted over ('fast', 8, False) 132.8/139.6 us, 145.1/150.7 us
+moe bs16 ('cuda', 'k2'): not faster (195.3/133.9 us, 215.2/143.6 us)
+moe plan bs16  : ('cuda', 'k1') 132.8 us (sglang 185.2 us)
+moe bs32 ('cuda', 'k1'): adopted over ('fast', 8, False) 195.3/212.0 us, 155.0/180.2 us
+moe bs32 ('cuda', 'k2'): not faster (294.0/195.0 us, 253.1/155.4 us)
+moe plan bs32  : ('cuda', 'k1') 195.3 us (sglang 231.1 us)
+moe bs128 ('cuda', 'k1'): adopted over ('fast', 16, False) 314.9/353.7 us, 332.3/364.6 us
+moe bs128 ('cuda', 'k2'): not faster (625.5/315.0 us, 692.4/331.9 us)
+moe plan bs128 : ('cuda', 'k1') 314.9 us (sglang 516.2 us)
+moe bs256 ('cuda', 'k1'): adopted over ('fast', 16, False) 365.7/400.0 us, 435.1/457.0 us
+moe bs256 ('cuda', 'k2'): not faster (836.9/365.1 us, 912.4/431.9 us)
+moe plan bs256 : ('cuda', 'k1') 365.7 us (sglang 613.0 us)
+prepare: tuned in 54 s
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 00:08:00 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

@@ -106,6 +106,26 @@ binding constraint is no longer issue. Open questions, to answer before the next
   the same weights (MT 1 = 16 rows); are those re-reads hitting L2 or DRAM?
 - bs 1 (2-3 experts, ~165 items on 132 SMs x 4 CTAs) is parallelism-bound: split K.
 
+### The gate (sim_src.py) and what it caught
+
+Every candidate now runs on 19 cases (6 scored, 11 nearby / skewed, 5 odd tests): correct
+(judge bounds vs FP32), bitwise repeatable (second run equal: catches pipeline races), and
+timed paired against the CURRENT plan per shape; one regression fails the gate.
+- v5 (k1): correct and repeatable everywhere; regressions bs 1 (x0.94-0.97), bs 3, bs 128
+  skewed (x0.97). Skewed big batches are weak for everything we have (x0.67-0.79 vs SGLang):
+  hot experts with 60+ rows re-stream weights per 16-row chunk.
+- In-CTA split K (k2: 2 groups of 8 consumer warps, partials met in smem): bs 1 38.2 us
+  (x1.20 vs plan, x2.17 vs SGLang) but regresses every other shape (as low as x0.41): at 1
+  CTA/SM it has 16 consumer warps vs k1's 32, which only pays when items < SMs.
+- KS 4 (33 warps) is illegal: 1056 threads > 1024.
+
+Integration: prepare() adds CUDA configs as candidates per bucket; adopted only if correct on
+the bucket routing + odd smaller batch + 2 fresh routings, bitwise repeatable, and <= 98% of
+the incumbent on TWO routings. Judge check 7ec92eff: 1.427 (current submission 1.337). bs 1
+kept Marlin: k2 won the first routing (43 vs 52 us) and lost the second (71 vs 60 us), the
+gate doing its job; bs 1's best plan depends on how many experts the routing touches, which
+only the device knows -> next: choose split K on the device from the item count.
+
 ### Why v3 is still ~1.8x off the roofline
 
 Measured per-CTA chunk times (0.5-1.2 µs per 9.2 KB chunk) would need ~3.6 µs of DRAM

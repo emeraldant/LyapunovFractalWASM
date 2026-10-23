@@ -599,8 +599,8 @@ ATTN_DEVICE_SRC = r"""
 struct AttnParams {
   const __nv_bfloat16* qkv; const float* inv_freq; const int32_t* seq_lens; const int32_t* page_table;
   const int64_t* cache_loc; uint8_t* k_cache; uint8_t* v_cache; const float* k_scale; const float* v_scale;
-  __nv_bfloat16* out; float* ws_acc; float* ws_ml; int32_t* counters;
-  int qkv_w, pt_stride, B, HQ, HKV, page_shift, window, rope, n_ctas;
+  __nv_bfloat16* out; float* ws_acc; float* ws_ml; float* ws2_acc; float* ws2_ml; int32_t* counters;
+  int qkv_w, pt_stride, B, HQ, HKV, page_shift, window, rope, n_ctas, max_groups;
   float qk_factor, sm_scale_log2, eps;
 };
 
@@ -648,6 +648,45 @@ __device__ __forceinline__ int att_swz(int key) {
 // The CTA owning virtual key u of T split over n CTAs: start(i) = floor(T i / n).
 __device__ __forceinline__ int att_cta_of(long long u, long long T, int n) {
   return (int)(((u + 1) * n - 1) / T);
+}
+
+#define ATT_GROUP 16
+
+// Merges `count` partials (m, l, acc) at slots slot0 .. slot0 + count - 1 for this thread's
+// (head h, row r, 8 d values from 8 dc): loads four partials ahead of their merges.
+__device__ __forceinline__ void att_merge(const float* ws_acc, const float* ws_ml, size_t slot0, int count, int h,
+                                          int r, int dc, float& M, float& L, float o[8]) {
+  for (int k0 = 0; k0 < count; k0 += 4) {
+    float2 ml[4];
+    float4 a0[4], a1[4];
+#pragma unroll
+    for (int u = 0; u < 4; ++u) {
+      size_t slot = slot0 + min(k0 + u, count - 1);
+      ml[u] = __ldcg(reinterpret_cast<const float2*>(ws_ml) + (slot * 2 + h) * 8 + r);
+      const float4* wa = reinterpret_cast<const float4*>(ws_acc + ((slot * 2 + h) * 8 + r) * 64 + 8 * dc);
+      a0[u] = __ldcg(wa); a1[u] = __ldcg(wa + 1);
+    }
+#pragma unroll
+    for (int u = 0; u < 4; ++u) {
+      if (k0 + u < count) {
+        float mn = fmaxf(M, ml[u].x);
+        float fa = ex2(M - mn), fb = ex2(ml[u].x - mn);
+        M = mn;
+        L = L * fa + ml[u].y * fb;
+        o[0] = o[0] * fa + a0[u].x * fb; o[1] = o[1] * fa + a0[u].y * fb; o[2] = o[2] * fa + a0[u].z * fb;
+        o[3] = o[3] * fa + a0[u].w * fb; o[4] = o[4] * fa + a1[u].x * fb; o[5] = o[5] * fa + a1[u].y * fb;
+        o[6] = o[6] * fa + a1[u].z * fb; o[7] = o[7] * fa + a1[u].w * fb;
+      }
+    }
+  }
+}
+
+__device__ __forceinline__ void att_store_partial(float* ws_acc, float* ws_ml, size_t slot, int h, int r, int dc,
+                                                  float M, float L, const float o[8]) {
+  float* wa = ws_acc + ((slot * 2 + h) * 8 + r) * 64 + 8 * dc;
+  reinterpret_cast<float4*>(wa)[0] = make_float4(o[0], o[1], o[2], o[3]);
+  reinterpret_cast<float4*>(wa)[1] = make_float4(o[4], o[5], o[6], o[7]);
+  if (dc == 0) reinterpret_cast<float2*>(ws_ml)[(slot * 2 + h) * 8 + r] = make_float2(M, L);
 }
 
 template <int STAGES>
@@ -756,9 +795,13 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
         cp_async16(dst + 8192, p.v_cache + go, bytes);
       }
       int b = s_sb[s];
-      if (k == 0) {  // the request's 16 query heads of this pair (2 KB)
+      if (k == 0) {  // the request's 16 query heads of this pair (2 KB); its gate rows to L2
         const uint8_t* q = reinterpret_cast<const uint8_t*>(p.qkv + (size_t)b * p.qkv_w + pair * 16 * 64);
         cp_async16(st + 16384 + tid * 16, q + tid * 16, 16u);
+        if (tid < 16) {
+          const uint8_t* gp = reinterpret_cast<const uint8_t*>(p.qkv + (size_t)b * p.qkv_w + (HQ + 2 * HKV) * 64 + pair * 16 * 64);
+          asm volatile("prefetch.global.L2 [%0];" :: "l"(gp + tid * 128));
+        }
       }
       if (k == s_stiles[s] - 1 && s_snew[s] && tid < 32) {  // the new token's K and V rows (bf16)
         int kv = tid >> 4, c = tid & 15;
@@ -771,10 +814,13 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   };
 
   // Prologue: page rows of tiles 0..STAGES (gathers of 0..STAGES-2 issued now).
-  for (int j = 0; j < STAGES - 1; ++j) {
-    PageSet ps;
-    load_page(ix_s, ix_k, ps); advance(ix_s, ix_k);
-    issue(is_s, is_k, ps, j); advance(is_s, is_k);
+  {
+    // all of the prologue's page loads first: one DRAM round trip, not one per tile
+    PageSet pre[STAGES - 1];
+#pragma unroll
+    for (int j = 0; j < STAGES - 1; ++j) { load_page(ix_s, ix_k, pre[j]); advance(ix_s, ix_k); }
+#pragma unroll
+    for (int j = 0; j < STAGES - 1; ++j) { issue(is_s, is_k, pre[j], j); advance(is_s, is_k); }
   }
   PageSet ps0, ps1;
   load_page(ix_s, ix_k, ps0); advance(ix_s, ix_k);
@@ -1015,41 +1061,51 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
           for (int i = 0; i < 8; ++i) o[i] += sw[2 + 8 * dc + i] * f;
         }
         const size_t slot = (size_t)pair * (p.n_ctas + B) + cta + b;
-        float* wa = p.ws_acc + ((slot * 2 + h) * 8 + r) * 64 + 8 * dc;
-        reinterpret_cast<float4*>(wa)[0] = make_float4(o[0], o[1], o[2], o[3]);
-        reinterpret_cast<float4*>(wa)[1] = make_float4(o[4], o[5], o[6], o[7]);
-        if (dc == 0) reinterpret_cast<float2*>(p.ws_ml)[(slot * 2 + h) * 8 + r] = make_float2(M, L);
+        att_store_partial(p.ws_acc, p.ws_ml, slot, h, r, dc, M, L, o);
       }
       __threadfence();
       __syncthreads();
+      // Merge: the last of each group of up to 16 partials merges its group; the last group
+      // (or, with one group, the last partial) merges into the output.
       const long long vb0 = s_pref[b], vb1 = s_pref[b + 1];
       const int i_first = att_cta_of(vb0, T, N), i_last = att_cta_of(vb1 - 1, T, N);
+      const int c = i_last - i_first + 1, ng = (c + ATT_GROUP - 1) / ATT_GROUP;
+      const int gi = (cta - i_first) / ATT_GROUP, gs = min(ATT_GROUP, c - gi * ATT_GROUP);
+      int* cnt_final = p.counters + b * gridDim.y + pair;
+      int* cnt_group = p.counters + B * gridDim.y + (size_t)(b * gridDim.y + pair) * p.max_groups + gi;
+      const size_t g_slot0 = ((size_t)pair * B + b) * p.max_groups;
       if (tid == 0) {
-        int old = atomicAdd(p.counters + b * gridDim.y + pair, 1);
-        int last = old == i_last - i_first;
-        if (last) p.counters[b * gridDim.y + pair] = 0;
-        s_last = last;
+        int mode = 0;
+        if (ng == 1) {
+          if (atomicAdd(cnt_final, 1) == c - 1) { *cnt_final = 0; mode = 2; }
+        } else if (atomicAdd(cnt_group, 1) == gs - 1) {
+          *cnt_group = 0; mode = 1;
+        }
+        s_last = mode;
       }
       __syncthreads();
-      if (s_last) {
+      const int h = tid >> 6, r = (tid >> 3) & 7, dc = tid & 7;
+      if (s_last == 1) {
         __threadfence();
-        const int h = tid >> 6, r = (tid >> 3) & 7, dc = tid & 7;
+        float M = -ATT_INF, L = 0.f, o[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        att_merge(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + gi * ATT_GROUP + b, gs, h, r, dc, M, L, o);
+        att_store_partial(p.ws2_acc, p.ws2_ml, g_slot0 + gi, h, r, dc, M, L, o);
+        __threadfence();
+        __syncthreads();
+        if (tid == 0) {
+          int mode = 0;
+          if (atomicAdd(cnt_final, 1) == ng - 1) { *cnt_final = 0; mode = 3; }
+          s_last = mode;
+        }
+        __syncthreads();
+      }
+      if (s_last >= 2) {
+        __threadfence();
         const int qh = (2 * pair + h) * 8 + r;
         const uint4 gw = *reinterpret_cast<const uint4*>(p.qkv + (size_t)b * p.qkv_w + (HQ + 2 * HKV) * 64 + qh * 64 + 8 * dc);
         float M = -ATT_INF, L = 0.f, o[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        for (int i = i_first; i <= i_last; ++i) {
-          const size_t slot = (size_t)pair * (p.n_ctas + B) + i + b;
-          float2 ml = __ldcg(reinterpret_cast<const float2*>(p.ws_ml) + (slot * 2 + h) * 8 + r);
-          const float4* wa = reinterpret_cast<const float4*>(p.ws_acc + ((slot * 2 + h) * 8 + r) * 64 + 8 * dc);
-          float4 a0 = __ldcg(wa), a1 = __ldcg(wa + 1);
-          float mn = fmaxf(M, ml.x);
-          float fa = ex2(M - mn), fb = ex2(ml.x - mn);
-          M = mn;
-          L = L * fa + ml.y * fb;
-          o[0] = o[0] * fa + a0.x * fb; o[1] = o[1] * fa + a0.y * fb; o[2] = o[2] * fa + a0.z * fb;
-          o[3] = o[3] * fa + a0.w * fb; o[4] = o[4] * fa + a1.x * fb; o[5] = o[5] * fa + a1.y * fb;
-          o[6] = o[6] * fa + a1.z * fb; o[7] = o[7] * fa + a1.w * fb;
-        }
+        if (s_last == 2) att_merge(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + b, c, h, r, dc, M, L, o);
+        else att_merge(p.ws2_acc, p.ws2_ml, g_slot0, ng, h, r, dc, M, L, o);
         float sc = v_scale / L, ss = 0.f;
 #pragma unroll
         for (int i = 0; i < 8; ++i) { o[i] *= sc; ss += o[i] * o[i]; }
@@ -1099,7 +1155,7 @@ static void launch_dec(const AttnParams& p, int grid_x, int grid_y) {
 void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens, torch::Tensor page_table,
               torch::Tensor cache_loc, torch::Tensor k_cache, torch::Tensor v_cache, torch::Tensor k_scale,
               torch::Tensor v_scale, torch::Tensor out, torch::Tensor ws_acc, torch::Tensor ws_ml,
-              torch::Tensor counters, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
+              torch::Tensor ws2_acc, torch::Tensor ws2_ml, torch::Tensor counters, int64_t max_groups, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
               int64_t rope, double qk_factor, double sm_scale_log2, double eps, int64_t n_ctas, int64_t stages) {
   AttnParams p;
   p.qkv = reinterpret_cast<const __nv_bfloat16*>(qkv.data_ptr());
@@ -1114,7 +1170,10 @@ void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens,
   p.out = reinterpret_cast<__nv_bfloat16*>(out.data_ptr());
   p.ws_acc = ws_acc.data_ptr<float>();
   p.ws_ml = ws_ml.data_ptr<float>();
+  p.ws2_acc = ws2_acc.data_ptr<float>();
+  p.ws2_ml = ws2_ml.data_ptr<float>();
   p.counters = counters.data_ptr<int32_t>();
+  p.max_groups = (int)max_groups;
   p.qkv_w = (int)qkv.size(-1);
   p.pt_stride = (int)page_table.stride(0);
   p.B = (int)B; p.HQ = (int)HQ; p.HKV = (int)HKV; p.page_shift = (int)page_shift; p.window = (int)window;
@@ -1137,7 +1196,7 @@ ATTN_CUDA_CPP = """
 void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens, torch::Tensor page_table,
               torch::Tensor cache_loc, torch::Tensor k_cache, torch::Tensor v_cache, torch::Tensor k_scale,
               torch::Tensor v_scale, torch::Tensor out, torch::Tensor ws_acc, torch::Tensor ws_ml,
-              torch::Tensor counters, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
+              torch::Tensor ws2_acc, torch::Tensor ws2_ml, torch::Tensor counters, int64_t max_groups, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
               int64_t rope, double qk_factor, double sm_scale_log2, double eps, int64_t n_ctas, int64_t stages);
 """
 
@@ -1178,17 +1237,20 @@ def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=25
     span = min(window, capacity) if window else capacity
     n = max(1, min(max(1, n_ctas // pairs), -(-batch * span // min_keys)))
     device = qkv.device
-    key = (device, batch * pairs)
+    max_groups = n // 16 + 2
+    key = (device, batch * pairs * (1 + max_groups))
     counters = _ATTN_COUNTERS.get(key)
     if counters is None:
-        counters = _ATTN_COUNTERS[key] = torch.zeros(batch * pairs, dtype=torch.int32, device=device)
+        counters = _ATTN_COUNTERS[key] = torch.zeros(key[1], dtype=torch.int32, device=device)
     slots = pairs * (n + batch)
     ws_acc = torch.empty((slots, 2, 8, 64), dtype=torch.float32, device=device)
     ws_ml = torch.empty((slots, 2, 8, 2), dtype=torch.float32, device=device)
+    ws2_acc = torch.empty((pairs * batch * max_groups, 2, 8, 64), dtype=torch.float32, device=device)
+    ws2_ml = torch.empty((pairs * batch * max_groups, 2, 8, 2), dtype=torch.float32, device=device)
     out = torch.empty((batch, hq * 64), dtype=torch.bfloat16, device=device)
     attn_cuda_module().attn_dec(
         qkv, inv_freq, data["seq_lens"], page_table, data["cache_loc"], data["k_cache"], data["v_cache"],
-        data["k_scale"], data["v_scale"], out, ws_acc, ws_ml, counters, batch, hq, hkv, page.bit_length() - 1,
+        data["k_scale"], data["v_scale"], out, ws_acc, ws_ml, ws2_acc, ws2_ml, counters, max_groups, batch, hq, hkv, page.bit_length() - 1,
         window, int(bool(cfg["rope_theta"])), cfg["qk_scale_factor"], cfg["sm_scale"] * 1.4426950408889634, 1e-5,
         n, stages)
     return out
@@ -2308,7 +2370,7 @@ def run_attention_sim(variants, budget_s=240.0, seed=7_000_000, groups=("tests",
 
 
 try:
-    run_attention_sim({'v3': _kernel_v3, 'v4': _attn_v4, 'v4n132s6': lambda d: _attn_v4(d, n_ctas=132, stages=6), 'v4n396s3': lambda d: _attn_v4(d, n_ctas=396, stages=3), 'v4mk128': lambda d: _attn_v4(d, min_keys=128)}, budget_s=240.0, only=lambda c: c.get('q_len', 1) == 1)
+    run_attention_sim({'v3': _kernel_v3, 'v4': _attn_v4, 'v4n396s3': lambda d: _attn_v4(d, n_ctas=396, stages=3), 'v4mk64': lambda d: _attn_v4(d, min_keys=64), 'v4n396s3mk128': lambda d: _attn_v4(d, n_ctas=396, stages=3, min_keys=128)}, budget_s=240.0, only=lambda c: c.get('q_len', 1) == 1)
 except Exception:  # the sim must never break the submission
     import traceback
     print('sim failed:', traceback.format_exc()[-1500:])

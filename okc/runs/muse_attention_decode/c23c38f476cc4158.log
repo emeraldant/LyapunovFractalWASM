@@ -1,0 +1,155 @@
+sim attention: replay overhead 5.0 us
+attention v3|t|B1 ctx10 L1 slid tp8 norm p64|ok 1.1e-03/0.08
+attention v4|t|B1 ctx10 L1 slid tp8 norm p64|ok 7.4e-05/0.08
+ion v4n132s6|t|B1 ctx10 L1 slid tp8 norm p64|ok 7.4e-05/0.08
+ion v4n396s3|t|B1 ctx10 L1 slid tp8 norm p64|ok 7.4e-05/0.08
+tion v4mk128|t|B1 ctx10 L1 slid tp8 norm p64|ok 7.4e-05/0.08
+attention v3|t|B3 ctx2047 L1 slid tp8 norm p64|ok 5.3e-04/0.15
+attention v4|t|B3 ctx2047 L1 slid tp8 norm p64|ok 1.6e-04/0.15
+ion v4n132s6|t|B3 ctx2047 L1 slid tp8 norm p64|ok 1.6e-04/0.15
+ion v4n396s3|t|B3 ctx2047 L1 slid tp8 norm p64|ok 1.6e-04/0.15
+tion v4mk128|t|B3 ctx2047 L1 slid tp8 norm p64|ok 1.5e-04/0.15
+attention v3|t|B4 ctx3000 L1 full tp8 norm p64|ok 7.8e-04/0.15
+attention v4|t|B4 ctx3000 L1 full tp8 norm p64|ok 1.3e-04/0.15
+ion v4n132s6|t|B4 ctx3000 L1 full tp8 norm p64|ok 1.3e-04/0.15
+ion v4n396s3|t|B4 ctx3000 L1 full tp8 norm p64|ok 1.3e-04/0.15
+tion v4mk128|t|B4 ctx3000 L1 full tp8 norm p64|ok 6.3e-05/0.15
+attention v3|t|B8 ctx8192 L1 full dp norm p64|ok 1.0e-03/0.15
+attention v4|t|B8 ctx8192 L1 full dp norm p64|ok 2.2e-04/0.15
+ion v4n132s6|t|B8 ctx8192 L1 full dp norm p64|ok 2.4e-04/0.15
+ion v4n396s3|t|B8 ctx8192 L1 full dp norm p64|ok 2.3e-04/0.15
+tion v4mk128|t|B8 ctx8192 L1 full dp norm p64|ok 2.2e-04/0.15
+attention v3|t|B4 ctx6000 L1 slid tp8 edge p1|ok 5.4e-04/0.15
+attention v4|t|B4 ctx6000 L1 slid tp8 edge p1|ok 9.2e-05/0.15
+ion v4n132s6|t|B4 ctx6000 L1 slid tp8 edge p1|ok 9.2e-05/0.15
+ion v4n396s3|t|B4 ctx6000 L1 slid tp8 edge p1|ok 9.2e-05/0.15
+tion v4mk128|t|B4 ctx6000 L1 slid tp8 edge p1|ok 8.3e-05/0.15
+attention v3|t|B2 ctx9000 L1 full tp8 norm p64 s0.0156|ok 4.6e-04/0.15
+attention v4|t|B2 ctx9000 L1 full tp8 norm p64 s0.0156|ok 1.6e-04/0.15
+ion v4n132s6|t|B2 ctx9000 L1 full tp8 norm p64 s0.0156|ok 1.6e-04/0.15
+ion v4n396s3|t|B2 ctx9000 L1 full tp8 norm p64 s0.0156|ok 1.6e-04/0.15
+tion v4mk128|t|B2 ctx9000 L1 full tp8 norm p64 s0.0156|ok 1.6e-04/0.15
+attention v3|t|B4 ctx80000 L1 full tp8 soft p64|ok 1.1e-03/0.15
+attention v4|t|B4 ctx80000 L1 full tp8 soft p64|ok 1.8e-04/0.15
+ion v4n132s6|t|B4 ctx80000 L1 full tp8 soft p64|ok 3.1e-04/0.15
+ion v4n396s3|t|B4 ctx80000 L1 full tp8 soft p64|ok 3.4e-04/0.15
+tion v4mk128|t|B4 ctx80000 L1 full tp8 soft p64|ok 1.8e-04/0.15
+attention v3|t|B4 ctx80000 L1 full tp8 cohe p1|ok 5.5e-04/0.12
+attention v4|t|B4 ctx80000 L1 full tp8 cohe p1|ok 3.2e-05/0.12
+ion v4n132s6|t|B4 ctx80000 L1 full tp8 cohe p1|ok 3.3e-05/0.12
+ion v4n396s3|t|B4 ctx80000 L1 full tp8 cohe p1|ok 6.6e-06/0.12
+tion v4mk128|t|B4 ctx80000 L1 full tp8 cohe p1|ok 3.2e-05/0.12
+attention v3|s|B1 ctx80000 L1 slid tp8 soft p1|ok 8.9e-04/0.15|13.5/22.1us x1.631 [1.61,1.66]
+attention v4|s|B1 ctx80000 L1 slid tp8 soft p1|ok 1.6e-04/0.15|22.1/21.9us x1.034 [0.97,1.56]
+ion v4n132s6|s|B1 ctx80000 L1 slid tp8 soft p1|ok 1.6e-04/0.15|22.5/21.7us x0.999 [0.94,1.55]
+ion v4n396s3|s|B1 ctx80000 L1 slid tp8 soft p1|ok 1.6e-04/0.15|22.0/22.2us x1.038 [0.98,1.58]
+tion v4mk128|s|B1 ctx80000 L1 slid tp8 soft p1|ok 2.0e-04/0.15|20.4/22.1us x1.098 [1.07,1.20]
+attention v3|s|B1 ctx80000 L1 full tp8 cohe p1|ok 4.2e-04/0.13|23.4/35.4us x1.490 [1.48,1.52]
+attention v4|s|B1 ctx80000 L1 full tp8 cohe p1|ok 1.1e-04/0.13|58.2/34.8us x0.604 [0.59,0.63]
+ion v4n132s6|s|B1 ctx80000 L1 full tp8 cohe p1|ok 1.1e-04/0.13|44.0/35.2us x0.822 [0.80,0.91]
+ion v4n396s3|s|B1 ctx80000 L1 full tp8 cohe p1|ok 0.0e+00/0.13|62.7/35.3us x0.576 [0.56,0.60]
+tion v4mk128|s|B1 ctx80000 L1 full tp8 cohe p1|ok 1.1e-04/0.13|58.1/34.7us x0.604 [0.59,0.63]
+attention v3|s|B16 ctx80000 L1 slid tp8 soft p1|ok 9.9e-04/0.15|18.2/27.9us x1.518 [1.50,1.55]
+attention v4|s|B16 ctx80000 L1 slid tp8 soft p1|ok 1.8e-04/0.15|22.2/27.5us x1.303 [1.19,1.68]
+ion v4n132s6|s|B16 ctx80000 L1 slid tp8 soft p1|ok 1.8e-04/0.15|23.1/27.6us x1.224 [1.19,1.68]
+ion v4n396s3|s|B16 ctx80000 L1 slid tp8 soft p1|ok 1.8e-04/0.15|22.8/27.1us x1.214 [1.17,1.68]
+tion v4mk128|s|B16 ctx80000 L1 slid tp8 soft p1|ok 1.6e-04/0.15|21.5/27.9us x1.303 [1.26,1.70]
+attention v3|s|B16 ctx80000 L1 full tp8 cohe p1|ok 6.2e-04/0.13|178.1/208.7us x1.172 [1.17,1.18]
+attention v4|s|B16 ctx80000 L1 full tp8 cohe p1|ok 1.5e-04/0.13|124.5/208.5us x1.695 [1.67,1.73]
+ion v4n132s6|s|B16 ctx80000 L1 full tp8 cohe p1|ok 1.9e-04/0.13|164.0/208.5us x1.280 [1.27,1.31]
+ion v4n396s3|s|B16 ctx80000 L1 full tp8 cohe p1|ok 1.2e-04/0.13|118.5/208.9us x1.772 [1.74,1.82]
+tion v4mk128|s|B16 ctx80000 L1 full tp8 cohe p1|ok 1.5e-04/0.13|123.4/209.1us x1.708 [1.68,1.74]
+attention v3|s|B32 ctx80000 L1 slid tp8 soft p1|ok 1.3e-03/0.15|23.2/31.3us x1.344 [1.33,1.37]
+attention v4|s|B32 ctx80000 L1 slid tp8 soft p1|ok 3.2e-04/0.15|23.9/31.6us x1.325 [1.30,1.61]
+ion v4n132s6|s|B32 ctx80000 L1 slid tp8 soft p1|ok 3.7e-04/0.15|34.7/33.7us x0.965 [0.95,1.07]
+ion v4n396s3|s|B32 ctx80000 L1 slid tp8 soft p1|ok 3.2e-04/0.15|25.3/34.1us x1.347 [1.31,1.82]
+tion v4mk128|s|B32 ctx80000 L1 slid tp8 soft p1|ok 3.4e-04/0.15|33.3/34.2us x1.033 [1.02,1.06]
+attention v3|s|B32 ctx80000 L1 full tp8 cohe p1|ok 6.7e-04/0.14|408.0/389.2us x0.953 [0.95,0.96]
+attention v4|s|B32 ctx80000 L1 full tp8 cohe p1|ok 2.0e-04/0.14|221.3/390.0us x1.777 [1.76,1.82]
+ion v4n132s6|s|B32 ctx80000 L1 full tp8 cohe p1|ok 2.7e-04/0.14|295.3/389.9us x1.328 [1.32,1.34]
+ion v4n396s3|s|B32 ctx80000 L1 full tp8 cohe p1|ok 2.0e-04/0.14|209.9/390.3us x1.863 [1.85,1.89]
+tion v4mk128|s|B32 ctx80000 L1 full tp8 cohe p1|ok 2.0e-04/0.14|220.8/389.7us x1.773 [1.76,1.82]
+attention v3|n|B2 ctx80000 L1 slid tp8 soft p1|ok 6.8e-04/0.15|14.1/22.8us x1.612 [1.59,1.63]
+attention v4|n|B2 ctx80000 L1 slid tp8 soft p1|ok 1.2e-04/0.15|21.4/22.8us x1.098 [1.05,1.15]
+ion v4n132s6|n|B2 ctx80000 L1 slid tp8 soft p1|ok 1.2e-04/0.15|21.5/22.6us x1.067 [1.02,1.12]
+ion v4n396s3|n|B2 ctx80000 L1 slid tp8 soft p1|ok 1.2e-04/0.15|22.4/22.8us x1.036 [1.01,1.22]
+tion v4mk128|n|B2 ctx80000 L1 slid tp8 soft p1|ok 1.2e-04/0.15|20.2/22.4us x1.135 [1.10,1.19]
+attention v3|n|B8 ctx80000 L1 full tp8 cohe p1|ok 5.9e-04/0.14|95.2/115.6us x1.220 [1.21,1.23]
+attention v4|n|B8 ctx80000 L1 full tp8 cohe p1|ok 2.2e-04/0.14|77.7/115.4us x1.494 [1.47,1.56]
+ion v4n132s6|n|B8 ctx80000 L1 full tp8 cohe p1|ok 2.6e-04/0.14|96.9/116.0us x1.211 [1.19,1.24]
+ion v4n396s3|n|B8 ctx80000 L1 full tp8 cohe p1|ok 1.4e-04/0.14|76.8/116.0us x1.522 [1.49,1.61]
+tion v4mk128|n|B8 ctx80000 L1 full tp8 cohe p1|ok 2.2e-04/0.14|77.7/116.2us x1.508 [1.47,1.57]
+attention v3|n|B24 ctx80000 L1 slid tp8 soft p1|ok 1.1e-03/0.15|21.2/35.8us x1.683 [1.65,1.72]
+attention v4|n|B24 ctx80000 L1 slid tp8 soft p1|ok 2.3e-04/0.15|23.1/35.9us x1.544 [1.50,1.96]
+ion v4n132s6|n|B24 ctx80000 L1 slid tp8 soft p1|ok 2.6e-04/0.15|40.6/36.4us x0.896 [0.88,0.99]
+ion v4n396s3|n|B24 ctx80000 L1 slid tp8 soft p1|ok 2.3e-04/0.15|24.3/35.7us x1.480 [1.43,1.97]
+tion v4mk128|n|B24 ctx80000 L1 slid tp8 soft p1|ok 2.3e-04/0.15|23.2/36.4us x1.610 [1.51,2.02]
+attention v3|n|B40 ctx80000 L1 full tp8 cohe p1|ok 7.4e-04/0.13|492.2/669.6us x1.358 [1.36,1.36]
+attention v4|n|B40 ctx80000 L1 full tp8 cohe p1|ok 1.9e-04/0.13|267.0/669.7us x2.523 [2.49,2.57]
+ion v4n132s6|n|B40 ctx80000 L1 full tp8 cohe p1|ok 2.6e-04/0.13|361.4/669.5us x1.861 [1.85,1.88]
+ion v4n396s3|n|B40 ctx80000 L1 full tp8 cohe p1|ok 2.1e-04/0.13|257.6/670.3us x2.630 [2.59,2.65]
+tion v4mk128|n|B40 ctx80000 L1 full tp8 cohe p1|ok 1.9e-04/0.13|267.6/671.2us x2.528 [2.50,2.57]
+attention v3|n|B16 ctx20000 L1 full tp8 soft p1|ok 8.5e-04/0.15|54.1/73.0us x1.351 [1.33,1.36]
+attention v4|n|B16 ctx20000 L1 full tp8 soft p1|ok 1.9e-04/0.15|52.1/73.7us x1.428 [1.40,1.54]
+ion v4n132s6|n|B16 ctx20000 L1 full tp8 soft p1|ok 2.4e-04/0.15|60.4/73.2us x1.218 [1.19,1.26]
+ion v4n396s3|n|B16 ctx20000 L1 full tp8 soft p1|ok 1.6e-04/0.15|48.7/73.2us x1.506 [1.48,1.61]
+tion v4mk128|n|B16 ctx20000 L1 full tp8 soft p1|ok 1.9e-04/0.15|52.8/73.5us x1.409 [1.38,1.51]
+attention v3|n|B16 ctx160000 L1 full tp8 cohe p1|ok 5.4e-04/0.08|356.1/392.8us x1.103 [1.10,1.10]
+attention v4|n|B16 ctx160000 L1 full tp8 cohe p1|ok 1.8e-04/0.08|225.5/393.3us x1.746 [1.73,1.79]
+ion v4n132s6|n|B16 ctx160000 L1 full tp8 cohe p1|ok 2.0e-04/0.08|299.7/392.6us x1.319 [1.31,1.33]
+ion v4n396s3|n|B16 ctx160000 L1 full tp8 cohe p1|ok 1.6e-04/0.08|214.0/392.2us x1.835 [1.82,1.86]
+tion v4mk128|n|B16 ctx160000 L1 full tp8 cohe p1|ok 1.8e-04/0.08|226.6/393.4us x1.747 [1.73,1.78]
+attention v3|n|B4 ctx300000 L1 full tp8 norm p1|ok 5.3e-04/0.15|171.2/192.5us x1.125 [1.12,1.13]
+attention v4|n|B4 ctx300000 L1 full tp8 norm p1|ok 7.5e-05/0.15|119.6/192.3us x1.621 [1.59,1.64]
+ion v4n132s6|n|B4 ctx300000 L1 full tp8 norm p1|ok 1.4e-04/0.15|154.6/192.4us x1.255 [1.24,1.27]
+ion v4n396s3|n|B4 ctx300000 L1 full tp8 norm p1|ok 9.1e-05/0.15|121.7/192.8us x1.593 [1.57,1.62]
+tion v4mk128|n|B4 ctx300000 L1 full tp8 norm p1|ok 7.5e-05/0.15|118.4/192.0us x1.621 [1.61,1.64]
+attention v3|n|B32 ctx2500 L1 slid tp8 edge p1|ok 7.7e-04/0.15|23.4/34.0us x1.443 [1.43,1.46]
+attention v4|n|B32 ctx2500 L1 slid tp8 edge p1|ok 1.9e-04/0.15|24.5/33.8us x1.401 [1.36,1.72]
+ion v4n132s6|n|B32 ctx2500 L1 slid tp8 edge p1|ok 2.1e-04/0.15|34.6/33.2us x0.993 [0.96,1.07]
+ion v4n396s3|n|B32 ctx2500 L1 slid tp8 edge p1|ok 1.9e-04/0.15|25.1/33.9us x1.395 [1.32,1.80]
+tion v4mk128|n|B32 ctx2500 L1 slid tp8 edge p1|ok 1.5e-04/0.15|32.6/33.4us x1.029 [1.02,1.08]
+sim attention v3: 22 cases in 72 s
+sim tests: 8 cases, 0 wrong
+sim scored: 6 cases, 0 wrong, speedup geomean 1.330, min 0.953 (B32 ctx80000 L1 full tp8 cohe p1)
+sim nearby: 8 cases, 0 wrong, speedup geomean 1.348, min 1.103 (B16 ctx160000 L1 full tp8 cohe p1)
+sim attention v4: 22 cases in 72 s
+sim tests: 8 cases, 0 wrong
+sim scored: 6 cases, 0 wrong, speedup geomean 1.217, min 0.604 (B1 ctx80000 L1 full tp8 cohe p1)
+sim nearby: 8 cases, 0 wrong, speedup geomean 1.566, min 1.098 (B2 ctx80000 L1 slid tp8 soft p1)
+sim attention v4n132s6: 22 cases in 72 s
+sim tests: 8 cases, 0 wrong
+sim scored: 6 cases, 0 wrong, speedup geomean 1.087, min 0.822 (B1 ctx80000 L1 full tp8 cohe p1)
+sim nearby: 8 cases, 0 wrong, speedup geomean 1.200, min 0.896 (B24 ctx80000 L1 slid tp8 soft p1)
+sim attention v4n396s3: 22 cases in 72 s
+sim tests: 8 cases, 0 wrong
+sim scored: 6 cases, 0 wrong, speedup geomean 1.216, min 0.576 (B1 ctx80000 L1 full tp8 cohe p1)
+sim nearby: 8 cases, 0 wrong, speedup geomean 1.574, min 1.036 (B2 ctx80000 L1 slid tp8 soft p1)
+sim attention v4mk128: 22 cases in 72 s
+sim tests: 8 cases, 0 wrong
+sim scored: 6 cases, 0 wrong, speedup geomean 1.180, min 0.604 (B1 ctx80000 L1 full tp8 cohe p1)
+sim nearby: 8 cases, 0 wrong, speedup geomean 1.521, min 1.029 (B32 ctx2500 L1 slid tp8 edge p1)
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:14:07 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

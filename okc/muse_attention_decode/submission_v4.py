@@ -2124,9 +2124,9 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
     wg_e4m3_64(sacc, qa[0][0], qa[1][0], qa[0][1], qa[1][1], dk + ((uint64_t)(64 * hw) >> 4));
     wg_e4m3_64(sacc, qa[0][2], qa[1][2], qa[0][3], qa[1][3], dk + ((uint64_t)(64 * hw + 32) >> 4));
     asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
-    if (tci < 4) ATT_STAMP(36 + tci);
+    if (tci < 3) ATT_STAMP(36 + tci);
     asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
-    if (tci < 4) ATT_STAMP(44 + 4 * tci);
+    if (tci < 3) ATT_STAMP(44 + 4 * tci);
     // softmax on rows ra (e = 0, 1) and rb (e = 2, 3); key of sacc[4 jj + e] = 8 jj + 2 t + (e & 1)
     float al[2];
 #pragma unroll
@@ -2174,7 +2174,7 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
       *reinterpret_cast<uint32_t*>(pbuf_g + (ra + 8) * 128 + co) = pack_h2(sacc[4 * jj + 2], sacc[4 * jj + 3]);
     }
     if (t == 0) { s_alpha[hw][ra] = al[0]; s_alpha[hw][ra + 8] = al[1]; }
-    if (tci < 4) ATT_STAMP(45 + 4 * tci);
+    if (tci < 3) ATT_STAMP(45 + 4 * tci);
     asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
     asm volatile("bar.sync %0, 128;\n" :: "r"(1 + hw) : "memory");
     // rescale O^T: column (row) 8 jj + 2 t (+1)
@@ -2205,9 +2205,9 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
 #pragma unroll
     for (int kk = 0; kk < 4; ++kk) wg_f16_64(o, va[kk][0], va[kk][1], va[kk][2], va[kk][3], dp + ((uint64_t)(32 * kk) >> 4));
     asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
-    if (tci < 4) ATT_STAMP(46 + 4 * tci);
+    if (tci < 3) ATT_STAMP(46 + 4 * tci);
     asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
-    if (tci < 4) ATT_STAMP(47 + 4 * tci);
+    if (tci < 3) ATT_STAMP(47 + 4 * tci);
     asm volatile("bar.sync %0, 128;\n" :: "r"(1 + hw) : "memory");   // P / alpha reused by the next tile
   };
 
@@ -2298,6 +2298,7 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
         __syncthreads();
         tile(st, stg, L, 1, -1, true);
       }
+      ATT_STAMP(56);
       // partial (slot cta + b): acc [slot][h][d][row], d = 8 g + w (rows g) / 8 g + 4 + w (g + 8)
       const size_t slot = (size_t)pair * (p.n_ctas + B) + cta + b;
       {
@@ -2335,8 +2336,10 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
 #pragma unroll
         for (int i = 0; i < 32; ++i) o[i] = 0.f;
       }
+      ATT_STAMP(57);
       __threadfence();
       __syncthreads();
+      ATT_STAMP(58);
       const long long vb0 = s_pref[b], vb1 = s_pref[b + 1];
       const int i_first = att_cta_of(vb0, T, N), i_last = att_cta_of(vb1 - 1, T, N);
       const int c = i_last - i_first + 1, ng = (c + ATT_GROUP - 1) / ATT_GROUP;
@@ -2387,6 +2390,7 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
         for (int d = 0; d < 32; ++d) oo[d] = 0.f;
         if (s_last == 2) att_merge_h(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + b, c, h, row, half, M, Ls, oo);
         else att_merge_h(p.ws2_acc, p.ws2_ml, g_slot0, ng, h, row, half, M, Ls, oo);
+        ATT_STAMP(59);
         const float sc = v_scale / Ls;
         float ss = 0.f;
 #pragma unroll

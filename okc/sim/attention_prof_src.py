@@ -3,7 +3,7 @@
 # CTAs of its time since the CTA's start, plus the kernel's span and the CTAs' start skew.
 
 ATT_EVENTS = {0: "start", 1: "lengths", 2: "segments", 3: "prologue", 40: "seg end", 41: "partial+atomic",
-              42: "merged", 61: "end"}
+              42: "merged", 56: "newtok done", 57: "partial stored", 58: "fenced", 59: "merge loaded", 61: "end"}
 
 
 def run_attn_prof(cases, variants, seed=7_300_000):
@@ -40,7 +40,7 @@ def run_attn_prof(cases, variants, seed=7_300_000):
                     continue
                 if 36 <= k < 40:
                     nm = f"T{k - 36}:qk-issued"
-                elif 44 <= k < 60:
+                elif 44 <= k < 56:
                     nm = f"T{(k - 44) // 4}:" + ("qk", "smax", "pv-issued", "pv-done")[(k - 44) % 4]
                 else:
                     nm = ATT_EVENTS.get(k, (f"t{(k - 4) // 2} ready" if k % 2 == 0 else f"t{(k - 4) // 2} done"))

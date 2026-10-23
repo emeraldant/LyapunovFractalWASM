@@ -59,13 +59,13 @@ def submit(problem, path, mode):
     return job
 
 
-def wait(job_id, poll=10):
+def wait(job_id, poll=10, problem=None):
     while True:
         j = call("GET", f"/jobs/{job_id}")
         if j.get("status") in ("done", "failed", "rejected", "duplicate", "timeout", "error"):
             break
         time.sleep(poll)
-    problem = j.get("problem") or "unknown"
+    problem = j.get("problem") or j.get("board") or problem or "unknown"
     os.makedirs(os.path.join(RUNS, problem), exist_ok=True)
     base = os.path.join(RUNS, problem, job_id)
     log = j.pop("log_tail", None) or j.get("result", {}).pop("log_tail", None) if isinstance(j.get("result"), dict) else j.pop("log_tail", None)
@@ -82,7 +82,7 @@ def main():
     if cmd in ("check", "submit"):
         problem, path = args
         job = submit(problem, path, "check" if cmd == "check" else "run")
-        j = wait(job["job_id"])
+        j = wait(job["job_id"], problem=problem)
         print(json.dumps({k: v for k, v in j.items() if k != "log_tail"}, indent=1)[:6000])
     elif cmd == "status":
         j = wait(args[0])

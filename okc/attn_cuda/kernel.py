@@ -78,6 +78,8 @@ __device__ __forceinline__ void mma_f16(float c[4], uint32_t a0, uint32_t a1, ui
                : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
 }
 
+struct PageSet { int pg[4]; int off[4]; };
+
 // 16 B chunk swizzle of a 128 B key row: conflict-free for the K reads (rows 2m, 2m+1 x four
 // chunks of one head) and the V reads (rows 2t, t = 0..3, x two chunks).
 __device__ __forceinline__ int att_swz(int key) {
@@ -153,33 +155,47 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   const uint32_t smem_u32 = (uint32_t)__cvta_generic_to_shared(smem);
   const int pmask = (1 << p.page_shift) - 1;
   const size_t row_bytes = (size_t)HKV * 64;
-  const int my_key = tid >> 1, my_kv = tid & 1;   // gather role: key of the tile, K or V
+  (void)row_bytes;
+  // Gather roles, coalesced: lanes 8r..8r+7 copy the eight 16 B granules of one 128 B row, so a
+  // warp instruction moves four whole rows (a row per thread made every instruction touch 32
+  // rows with 16 B each: DRAM served scattered sectors at ~0.8 TB/s). Thread rows: K and V of
+  // keys rs + 16q, q = 0..3.
+  const int rs = tid >> 3, gr = tid & 7;
 
   // Tile iterators (segment, tile within it) for: page-index loads, gathers, compute.
   int ix_s = 0, ix_k = 0, is_s = 0, is_k = 0;
   auto advance = [&](int& s, int& k) { if (s < nseg && ++k == s_stiles[s]) { ++s; k = 0; } };
-  // A tile's page entry for this thread's key: loaded two tiles before its gather, and only
-  // combined with the in-page offset at the gather (no register move waits on the load).
-  auto load_page = [&](int s, int k, int& pg, int& off) {
-    pg = -1; off = 0;
+  // A tile's page entries for this thread's four keys: loaded two tiles before their gather,
+  // and only combined with the in-page offsets at the gather (no register move waits on them).
+  auto load_page = [&](int s, int k, PageSet& ps) {
+#pragma unroll
+    for (int q = 0; q < 4; ++q) { ps.pg[q] = -1; ps.off[q] = 0; }
     if (s >= nseg) return;
     int b = s_sb[s];
-    int u = s_su0[s] + k * ATT_TILE + my_key;
-    if (u >= s_suc[s]) return;
-    int pos = s_first[b] + u;
-    off = pos & pmask;
-    pg = __ldg(p.page_table + (size_t)b * p.pt_stride + (pos >> p.page_shift));
-  };
-  auto issue = [&](int s, int k, int pg, int off, int stage) {
-    if (s < nseg) {
-      long long row = pg < 0 ? -1 : ((long long)pg << p.page_shift) + off;
-      uint32_t st = smem_u32 + stage * ATT_STAGE_BYTES;
-      const uint8_t* src = (my_kv ? p.v_cache : p.k_cache) + (row < 0 ? 0 : row) * row_bytes + pair * 128;
-      uint32_t dst = st + my_kv * 8192 + my_key * 128;
-      uint32_t bytes = row < 0 ? 0u : 16u;
-      int sw = att_swz(my_key);
+    const int32_t* pt = p.page_table + (size_t)b * p.pt_stride;
 #pragma unroll
-      for (int j = 0; j < 8; ++j) cp_async16(dst + ((j ^ sw) << 4), src + j * 16, bytes);
+    for (int q = 0; q < 4; ++q) {
+      int u = s_su0[s] + k * ATT_TILE + rs + 16 * q;
+      if (u < s_suc[s]) {
+        int pos = s_first[b] + u;
+        ps.off[q] = pos & pmask;
+        ps.pg[q] = __ldg(pt + (pos >> p.page_shift));
+      }
+    }
+  };
+  auto issue = [&](int s, int k, const PageSet& ps, int stage) {
+    if (s < nseg) {
+      uint32_t st = smem_u32 + stage * ATT_STAGE_BYTES;
+#pragma unroll
+      for (int q = 0; q < 4; ++q) {
+        int key = rs + 16 * q;
+        long long row = ps.pg[q] < 0 ? 0 : ((long long)ps.pg[q] << p.page_shift) + ps.off[q];
+        uint32_t bytes = ps.pg[q] < 0 ? 0u : 16u;
+        size_t go = row * row_bytes + pair * 128 + gr * 16;
+        uint32_t dst = st + key * 128 + ((gr ^ att_swz(key)) << 4);
+        cp_async16(dst, p.k_cache + go, bytes);
+        cp_async16(dst + 8192, p.v_cache + go, bytes);
+      }
       int b = s_sb[s];
       if (k == 0) {  // the request's 16 query heads of this pair (2 KB)
         const uint8_t* q = reinterpret_cast<const uint8_t*>(p.qkv + (size_t)b * p.qkv_w + pair * 16 * 64);
@@ -197,13 +213,13 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
 
   // Prologue: page rows of tiles 0..STAGES (gathers of 0..STAGES-2 issued now).
   for (int j = 0; j < STAGES - 1; ++j) {
-    int pg, off;
-    load_page(ix_s, ix_k, pg, off); advance(ix_s, ix_k);
-    issue(is_s, is_k, pg, off, j); advance(is_s, is_k);
+    PageSet ps;
+    load_page(ix_s, ix_k, ps); advance(ix_s, ix_k);
+    issue(is_s, is_k, ps, j); advance(is_s, is_k);
   }
-  int pg0, off0, pg1, off1;
-  load_page(ix_s, ix_k, pg0, off0); advance(ix_s, ix_k);
-  load_page(ix_s, ix_k, pg1, off1); advance(ix_s, ix_k);
+  PageSet ps0, ps1;
+  load_page(ix_s, ix_k, ps0); advance(ix_s, ix_k);
+  load_page(ix_s, ix_k, ps1); advance(ix_s, ix_k);
 
   const float k_scale = *p.k_scale, v_scale = *p.v_scale;
   const float c_log2 = p.sm_scale_log2 * k_scale;
@@ -212,11 +228,11 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   float m_r[2], l_r[2], acc[2][4][4];
   int cs = 0, ck = 0;  // compute iterator
   // Two tiles per iteration so the two page registers alternate without moves.
-  auto step = [&](int j, int& pg, int& off) {
+  auto step = [&](int j, PageSet& ps) {
     cp_wait<STAGES - 2>();
     __syncthreads();
-    issue(is_s, is_k, pg, off, (j + STAGES - 1) % STAGES); advance(is_s, is_k);
-    load_page(ix_s, ix_k, pg, off); advance(ix_s, ix_k);
+    issue(is_s, is_k, ps, (j + STAGES - 1) % STAGES); advance(is_s, is_k);
+    load_page(ix_s, ix_k, ps); advance(ix_s, ix_k);
 
     const uint8_t* st = smem + (j % STAGES) * ATT_STAGE_BYTES;
     const int b = s_sb[cs];
@@ -501,8 +517,8 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
     }
   };
   for (int j = 0; j < ntiles; j += 2) {
-    step(j, pg0, off0);
-    if (j + 1 < ntiles) step(j + 1, pg1, off1);
+    step(j, ps0);
+    if (j + 1 < ntiles) step(j + 1, ps1);
   }
   cp_wait<0>();
 }

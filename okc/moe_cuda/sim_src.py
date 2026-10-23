@@ -229,7 +229,76 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
 _SIM_EPS = globals().get("POST_NORM_EPS", 1e-8)   # the MoE host defines POST_NORM_EPS; other hosts do not
 
 
-def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7, timed=True, stage_detail=False, seed_base=8_800_000):
+@triton.jit
+def _stamp_kernel(buf_ptr, IDX: tl.constexpr):
+    tl.store(buf_ptr + IDX, tl.extra.cuda.globaltimer())
+
+
+def _launch_probe(bank, state, cfgs, bs, seed, reps=7):
+    """Where a GEMM stage's time goes around its CTAs: [stamp] -> GEMM -> [stamp] in one CUDA graph
+    after a cold-L2 flush, with the profiling build's per-CTA entry / exit stamps. Also an empty
+    GEMM (no local routes) and a stamp-only graph for the bare boundary cost."""
+    ls = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flush = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int32, device="cuda")
+    stamps = torch.zeros(4, dtype=torch.int64, device="cuda")
+    stream = torch.cuda.Stream()
+    data = generate_input(bs=bs, sharding="ep8", seed=seed, device="cuda")
+    empty_ids = torch.full_like(data["topk_ids"], 100)   # no local expert: zero items
+    pcta = 2048
+    med = lambda v: sorted(v)[len(v) // 2]
+
+    def timeline(fn, pfull, tag):
+        fn()   # warm (compile, module load)
+        torch.cuda.synchronize()
+        with torch.cuda.stream(stream):
+            g = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(g, stream=stream):
+                _stamp_kernel[(1,)](stamps, 0)
+                fn()
+                _stamp_kernel[(1,)](stamps, 1)
+        rows = []
+        for _ in range(reps):
+            if pfull is not None:
+                pfull.zero_()
+            flush.zero_()
+            torch.cuda.synchronize()
+            g.replay()
+            torch.cuda.synchronize()
+            st = stamps.cpu().double()
+            r = [float(st[1] - st[0]) / 1e3]
+            if pfull is not None:
+                cta = pfull[:pcta].view(-1, 2).cpu().double()
+                cta = cta[cta[:, 0] > 0]
+                r += [float(cta[:, 0].min() - st[0]) / 1e3, float(cta[:, 1].max() - cta[:, 0].min()) / 1e3,
+                      float(st[1] - cta[:, 1].max()) / 1e3]
+            rows.append(r)
+        cols = list(zip(*rows))
+        if pfull is None:
+            print(f"  launch bs{bs} {tag}: stamp -> stamp {med(cols[0]):.1f} us", flush=True)
+        else:
+            print(f"  launch bs{bs} {tag}: stamp -> stamp {med(cols[0]):.1f} us = stamp -> first CTA entry "
+                  f"{med(cols[1]):.1f} + CTA life {med(cols[2]):.1f} + last exit -> stamp {med(cols[3]):.1f}", flush=True)
+
+    timeline(lambda: None, None, "no kernel")
+    for name, kw in cfgs.items():
+        if not kw.get("sab"):
+            continue
+        for ids, label in ((data["topk_ids"], ""), (empty_ids, " (no items)")):
+            maxi = (32 + bs * 8 // (8 * kw["mt"]) + 1) * 64 * max(kw.get("kparts", 1), kw.get("kparts2") or 1)
+            pf = (torch.zeros(pcta + maxi * 12, dtype=torch.int64, device="cuda"),
+                  torch.zeros(pcta + maxi * 12, dtype=torch.int64, device="cuda"))
+            fns, _ = moe_cuda_stages(data["hidden_states"], ids, data["topk_weights"], ls, bank, state["norm_w"],
+                                     _SIM_EPS, prof=(pf[0][pcta:], pf[1][pcta:]), abl=0, **kw)
+            for fn in fns:
+                fn()
+            torch.cuda.synchronize()
+            for gi in (0, 1):
+                timeline(fns[1 + gi], pf[gi], f"{name} gemm{gi + 1}{label}")
+            timeline(fns[0], None, f"{name} route{label}")
+
+
+def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7, timed=True, stage_detail=False, seed_base=8_800_000,
+                          launch=False):
     """run_moe_profile on random NVFP4 weights for the 32 local experts: runs inside ANY
     problem's host (the kernels' speed does not depend on the weight values), so kernel
     experiments do not spend the MoE problem's checks."""
@@ -257,6 +326,14 @@ def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7, timed=True, 
     if bank is None:
         bank = build_cuda_bank(weights)
         ws_layout(bank)
+    if launch:
+        try:
+            moe_cuda_module(prof=True)
+            for i, bs in enumerate(sizes):
+                _launch_probe(bank, state, cfgs, bs, seed_base + i)
+        except Exception as e:
+            import traceback
+            print("launch probe failed:", traceback.format_exc()[-1500:], flush=True)
     ls = torch.zeros(1, dtype=torch.int32, device="cuda")
     bench = SimBench() if timed else None
     for i, bs in enumerate(sizes):

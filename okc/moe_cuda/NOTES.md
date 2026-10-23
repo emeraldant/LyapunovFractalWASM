@@ -339,3 +339,25 @@ one wave) but loses at bs 16 (2 warps per scheduler on far more items).
   GEMMs at bs 8 / 32 / 256, full and math-only alike (1.76 typical; 1.70 in bs 256 GEMM2), not
   the 1.98 spec (matches Guild post #12, power cap). Static instruction counts converted at
   1.98 GHz were ~11% optimistic; µs-based conclusions unchanged.
+
+## Bottleneck table, judge stage profile (prefill-host check, Oct 23 evening)
+
+Each stage as its own CUDA graph, cold L2, adopted configs; % of 4.06 TB/s:
+
+| bs | experts (max tok) | GEMM1 | GEMM2 | route | post | total |
+|---|---|---|---|---|---|---|
+| 1 | 2 (1) | 19.1 us 1.98 TB/s | 11.2 us 1.69 TB/s | 1.0 | 6.0 | 41.3 |
+| 8 | 10 (3) | 59.7 us 78% | 40.6 us 57% | 0.5 | 3.1 | 99.4 |
+| 16 | 6 (16) | 45.7 us 61% | 24.4 us 57% | 0.7 | 3.1 | 77.0 |
+| 32 | 14 (24) | 80.5 us 81% | 51.3 us 64% | 0.8 | 4.0 | 131.2 |
+| 128 | 27 (56) | 144.2 us 87% | 81.2 us 77% | 1.4 | 4.9 | 234.6 |
+| 256 | 27 (46) | 154.6 us 81% | 94.6 us 66% | 5.2 | 4.9 | 265.3 |
+
+SASS (v6 main loop, 8192 weights/warp/iteration): 544 issue, 300 ALU (600 clk), 128 HMUL2 ->
+at 4.06 TB/s the ALU needs 57% and issue 52%: the unpack has ~1.8x headroom; the gap is overlap.
+
+1. GEMM2 57-77% everywhere (half the bytes: its ramp/tail weigh double; starts cold after GEMM1).
+2. Hot experts re-decoded per 8-token tile (bs16: one 16-token expert, GEMM1 61%): pick the tile
+   width per expert.
+3. Fixed kernels 4-7 us (bs1 split-K post-norm 6 us; bs256 route+gather 5.2 us).
+4. Then overlap (bytes in flight, decode next chunk under current MMAs).

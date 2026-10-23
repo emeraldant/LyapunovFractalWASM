@@ -1,0 +1,2299 @@
+# okc: problem=muse_attention_decode
+"""Gated attention decode for Muse Spark Open: our Triton kernels on decode steps (v1 on
+sliding-window layers, v3 on full-attention layers), SGLang's FA3 path on verify blocks
+(see kernel_fn).
+
+SGLang runs five or six kernels per call (QK-norm + RoPE, the cache store, the query's FP8
+cast, FA3 and its split combine, the gated norm). At these sizes most of that is launch
+latency, so here:
+
+1. _attn_split_kernel, one program per (split of the keys, KV head, request): normalizes its
+   group's queries from the fused projection output (RMSNorm, the 5.473 factor and
+   interleaved RoPE in registers, kept BF16, like the reference), streams its share of the
+   paged FP8 cache with an online softmax, and the last split also builds the block's new
+   keys and values, stores them to the cache in FP8 and attends to them straight from
+   registers. With one split it finishes the row itself (step 2's norm and gate).
+2. _attn_combine_kernel merges the splits and applies RMSNorm x sigmoid(gate).
+
+The split count depends only on shapes (batch, heads, window or the page table's capacity),
+so the launch is CUDA-graph safe; each program reads the request's real length on device.
+"""
+
+import math
+from typing import TypedDict
+
+import torch
+import triton
+import triton.language as tl
+from sgl_kernel.flash_attn import flash_attn_with_kvcache
+
+from sglang.kernels.ops.kvcache.kvcache import store_cache
+from sglang.kernels.ops.muse_spark_v12.fused_qk_norm import FusedQKNorm
+from sglang.kernels.ops.muse_spark_v12.norm_gate import rms_norm_gate
+
+
+class Config(TypedDict):
+    batch: int            # B
+    q_len: int            # L: 1 for decode, 8 for a speculative verify block (causal inside it)
+    num_q_heads: int      # Hq: 16 per GPU under TP8
+    num_kv_heads: int     # Hkv: 2; each serves Hq / Hkv query heads
+    head_dim: int         # 64
+    page_size: int        # 1 in the scored cases (as SGLang serves Muse on H200), 64 in some tests
+    window: int           # 2048 on sliding-window layers (a token and the 2,047 before it); 0 = all
+    rope_theta: float     # 500000 on sliding-window layers; 0 = no RoPE
+    qk_scale_factor: float
+    sm_scale: float       # 1/8
+    kv_scale: float       # the cache scales' value: 1 in the scored cases (SGLang leaves them unset)
+
+
+class Inputs(TypedDict):
+    qkv: torch.Tensor          # bfloat16 [B, L, (2*Hq + 2*Hkv)*64]
+    positions: torch.Tensor    # int64 [B*L], each new token's position
+    cache_loc: torch.Tensor    # int64 [B*L], each new token's flat cache row
+    cache_seqlens: torch.Tensor  # int32 [B], seq_lens + L
+    cu_seqlens_q: torch.Tensor   # int32 [B+1], 0, L, 2L, ...
+    scheduler_metadata: torch.Tensor | None
+    k_cache: torch.Tensor     # float8_e4m3fn [pages, page_size, Hkv, 64], written in place
+    v_cache: torch.Tensor     # float8_e4m3fn [pages, page_size, Hkv, 64], written in place
+    k_scale: torch.Tensor     # float32 [], key = e4m3 * k_scale
+    v_scale: torch.Tensor     # float32 [], value = e4m3 * v_scale
+    page_table: torch.Tensor  # int32 [B, max_pages], physical page of each logical page (-1 unused)
+    seq_lens: torch.Tensor    # int32 [B], cached tokens per request; the block starts at this position
+    config: Config
+
+
+RMS_EPS = 1e-5
+LOG2E = 1.4426950408889634
+NUM_SMS = 132
+_INV_FREQ = {}
+
+
+def _inv_freq(theta, d, device):
+    """RoPE frequencies computed exactly as SGLang's / the reference's (FP32)."""
+    key = (theta, d, device)
+    t = _INV_FREQ.get(key)
+    if t is None:
+        if theta:
+            t = 1.0 / (theta ** (torch.arange(0, d, 2, dtype=torch.float, device=device) / d))
+        else:
+            t = torch.zeros(d // 2, dtype=torch.float, device=device)
+        _INV_FREQ[key] = t = t.contiguous()
+    return t
+
+
+@triton.jit
+def _load_heads(qkv_ptr, inv_freq_ptr, tok0, pos0, col0, rows, QKV_W, eps, factor,
+                G: tl.constexpr, NROWS: tl.constexpr, HD: tl.constexpr, ROPE: tl.constexpr, NORM: tl.constexpr):
+    """[R, HD] fp32 rows r = j * G + g: head (col0 / HD + g) of token tok0 + j (position pos0 + j),
+    RMS-normalized and rotated (interleaved RoPE) when asked. Rows >= NROWS are zero."""
+    d = tl.arange(0, HD)
+    j = rows // G
+    g = rows % G
+    rmask = rows < NROWS
+    base = qkv_ptr + (tok0 + j)[:, None].to(tl.int64) * QKV_W + col0 + g[:, None] * HD
+    x = tl.load(base + d[None, :], mask=rmask[:, None], other=0.0).to(tl.float32)
+    if NORM:
+        inv = tl.rsqrt(tl.sum(x * x, axis=1) / HD + eps)
+        x = x * (inv * factor)[:, None]
+    if ROPE:
+        # out[2i] = x[2i] cos - x[2i+1] sin, out[2i+1] = x[2i+1] cos + x[2i] sin
+        xp = tl.load(base + (d ^ 1)[None, :], mask=rmask[:, None], other=0.0).to(tl.float32)
+        if NORM:
+            xp = xp * (inv * factor)[:, None]
+        freq = tl.load(inv_freq_ptr + d // 2)
+        ang = (pos0 + j).to(tl.float32)[:, None] * freq[None, :]
+        sign = tl.where(d % 2 == 0, -1.0, 1.0)
+        x = x * tl.cos(ang) + sign[None, :] * xp * tl.sin(ang)
+    return x
+
+
+@triton.jit
+def _attn_split_kernel(
+        qkv_ptr, inv_freq_ptr, seq_lens_ptr, page_table_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr,
+        k_scale_ptr, v_scale_ptr, out_ptr, ws_acc_ptr, ws_ml_ptr,
+        QKV_W, PT_STRIDE, CHUNK, sm_scale_log2, qk_factor, eps,
+        HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr, G: tl.constexpr,
+        R: tl.constexpr, RN: tl.constexpr, PAGE: tl.constexpr, WINDOW: tl.constexpr, ROPE: tl.constexpr,
+        SPLITS: tl.constexpr, BLOCK_N: tl.constexpr, DIRECT: tl.constexpr):
+    s = tl.program_id(0)
+    h = tl.program_id(1)
+    b = tl.program_id(2)
+    seq = tl.load(seq_lens_ptr + b)
+    rows = tl.arange(0, R)
+    jrow = rows // G
+    qpos = seq + jrow  # each row's query position
+    d = tl.arange(0, HD)
+    tok0 = b * L
+
+    # Queries: RMSNorm x 5.473 (+ RoPE), rounded to BF16 as the reference does.
+    q = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, h * G * HD, rows, QKV_W, eps, qk_factor,
+                    G, G * L, HD, ROPE, True).to(tl.bfloat16)
+
+    k_scale = tl.load(k_scale_ptr)
+    v_scale = tl.load(v_scale_ptr)
+    qk_scale = sm_scale_log2 * k_scale  # scores in log2 units
+
+    # This split's share of the cached keys [lo, seq).
+    if WINDOW > 0:
+        first = tl.maximum(seq - WINDOW + 1, 0)
+    else:
+        first = seq * 0
+    lo = first + s * CHUNK
+    hi = tl.minimum(lo + CHUNK, seq)
+
+    m_i = tl.full((R,), float("-inf"), tl.float32)
+    l_i = tl.zeros((R,), tl.float32)
+    acc = tl.zeros((R, HD), tl.float32)
+    offs_n = tl.arange(0, BLOCK_N)
+    for start in range(lo, hi, BLOCK_N):
+        kpos = start + offs_n
+        kmask = kpos < hi
+        page = tl.load(page_table_ptr + b.to(tl.int64) * PT_STRIDE + kpos // PAGE, mask=kmask, other=0)
+        row = page.to(tl.int64) * PAGE + kpos % PAGE
+        kv_off = (row * HKV + h)[:, None] * HD + d[None, :]
+        k = tl.load(k_cache_ptr + kv_off, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        v = tl.load(v_cache_ptr + kv_off, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        sc = tl.dot(q, tl.trans(k)) * qk_scale
+        valid = kmask[None, :]
+        if WINDOW > 0:
+            valid = valid & (kpos[None, :] > qpos[:, None] - WINDOW)
+        sc = tl.where(valid, sc, float("-inf"))
+        m_new = tl.maximum(m_i, tl.max(sc, axis=1))
+        m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+        alpha = tl.exp2(m_i - m_safe)
+        p = tl.exp2(sc - m_safe[:, None])
+        l_i = l_i * alpha + tl.sum(p, axis=1)
+        acc = acc * alpha[:, None] + tl.dot(p.to(tl.bfloat16), v)
+        m_i = m_new
+
+    if s == SPLITS - 1:
+        # The block's own L keys and values: normalized (+ RoPE), FP8 like the cache, stored to
+        # their rows, and attended from registers (causal inside the block).
+        nrows = tl.arange(0, RN)
+        nmask = nrows < L
+        kn = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, HQ * HD + h * HD, nrows, QKV_W, eps, 1.0,
+                         1, L, HD, ROPE, True)
+        vn = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, (HQ + HKV) * HD + h * HD, nrows, QKV_W, eps, 1.0,
+                         1, L, HD, False, False)
+        kq = (kn / k_scale).to(k_cache_ptr.dtype.element_ty)
+        vq = (vn / v_scale).to(v_cache_ptr.dtype.element_ty)
+        loc = tl.load(cache_loc_ptr + tok0 + nrows, mask=nmask, other=0).to(tl.int64)
+        new_off = (loc * HKV + h)[:, None] * HD + d[None, :]
+        tl.store(k_cache_ptr + new_off, kq, mask=nmask[:, None])
+        tl.store(v_cache_ptr + new_off, vq, mask=nmask[:, None])
+        k = kq.to(tl.bfloat16)
+        v = vq.to(tl.bfloat16)
+        sc = tl.dot(q, tl.trans(k)) * qk_scale
+        valid = nmask[None, :] & (nrows[None, :] <= jrow[:, None])
+        sc = tl.where(valid, sc, float("-inf"))
+        m_new = tl.maximum(m_i, tl.max(sc, axis=1))
+        m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+        alpha = tl.exp2(m_i - m_safe)
+        p = tl.exp2(sc - m_safe[:, None])
+        l_i = l_i * alpha + tl.sum(p, axis=1)
+        acc = acc * alpha[:, None] + tl.dot(p.to(tl.bfloat16), v)
+        m_i = m_new
+
+    rmask = rows < G * L
+    if DIRECT:
+        o = acc / tl.where(l_i == 0.0, 1.0, l_i)[:, None] * v_scale
+        _norm_gate_store(o, qkv_ptr, out_ptr, tok0, h, rows, rmask, QKV_W, eps, HQ, HKV, HD, G)
+    else:
+        base = ((b * HKV + h) * SPLITS + s).to(tl.int64) * R
+        tl.store(ws_acc_ptr + (base + rows)[:, None] * HD + d[None, :], acc)
+        tl.store(ws_ml_ptr + (base + rows) * 2, m_i)
+        tl.store(ws_ml_ptr + (base + rows) * 2 + 1, l_i)
+
+
+@triton.jit
+def _norm_gate_store(o, qkv_ptr, out_ptr, tok0, h, rows, rmask, QKV_W, eps,
+                     HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, G: tl.constexpr):
+    """out[token, head] = RMSNorm(o) * sigmoid(gate) for rows r = j * G + g of KV head h."""
+    d = tl.arange(0, HD)
+    j = rows // G
+    head = h * G + rows % G
+    inv = tl.rsqrt(tl.sum(o * o, axis=1) / HD + eps)
+    tok = (tok0 + j).to(tl.int64)
+    gate = tl.load(qkv_ptr + tok[:, None] * QKV_W + (HQ + 2 * HKV) * HD + head[:, None] * HD + d[None, :],
+                   mask=rmask[:, None], other=0.0).to(tl.float32)
+    y = o * inv[:, None] * tl.sigmoid(gate)
+    tl.store(out_ptr + tok[:, None] * (HQ * HD) + head[:, None] * HD + d[None, :], y.to(tl.bfloat16),
+             mask=rmask[:, None])
+
+
+@triton.jit
+def _attn_combine_kernel(qkv_ptr, out_ptr, ws_acc_ptr, ws_ml_ptr, v_scale_ptr, QKV_W, eps,
+                         HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr,
+                         G: tl.constexpr, R: tl.constexpr, SPLITS: tl.constexpr):
+    h = tl.program_id(0)
+    b = tl.program_id(1)
+    rows = tl.arange(0, R)
+    d = tl.arange(0, HD)
+    m_i = tl.full((R,), float("-inf"), tl.float32)
+    l_i = tl.zeros((R,), tl.float32)
+    acc = tl.zeros((R, HD), tl.float32)
+    for s in range(SPLITS):
+        base = ((b * HKV + h) * SPLITS + s).to(tl.int64) * R
+        m_s = tl.load(ws_ml_ptr + (base + rows) * 2)
+        l_s = tl.load(ws_ml_ptr + (base + rows) * 2 + 1)
+        a_s = tl.load(ws_acc_ptr + (base + rows)[:, None] * HD + d[None, :])
+        m_new = tl.maximum(m_i, m_s)
+        m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+        alpha = tl.exp2(m_i - m_safe)
+        beta = tl.exp2(m_s - m_safe)
+        l_i = l_i * alpha + l_s * beta
+        acc = acc * alpha[:, None] + a_s * beta[:, None]
+        m_i = m_new
+    o = acc / tl.where(l_i == 0.0, 1.0, l_i)[:, None] * tl.load(v_scale_ptr)
+    _norm_gate_store(o, qkv_ptr, out_ptr, b * L, h, rows, rows < G * L, QKV_W, eps, HQ, HKV, HD, G)
+
+
+def _plan(batch, hkv, span, length):
+    """(splits, block_n): enough programs to keep the GPU's memory system busy, with at
+    least a few key blocks per split."""
+    block_n = 64
+    want = 2 * NUM_SMS
+    splits = max(1, min(triton.cdiv(want, batch * hkv), triton.cdiv(span, 2 * block_n)))
+    return splits, block_n
+
+
+def _fused_attention(qkv, data, cfg):
+    """Attention between the QKV and output projections: qkv [T, (2Hq + 2Hkv) * 64] BF16 (the
+    fused projection output, request-major), returns [T, Hq * 64] BF16. Writes the new keys
+    and values into data's caches."""
+    batch, length = cfg["batch"], cfg["q_len"]
+    hq, hkv, hd = cfg["num_q_heads"], cfg["num_kv_heads"], cfg["head_dim"]
+    group = hq // hkv
+    page = cfg["page_size"]
+    window = cfg["window"]
+    if not qkv.is_contiguous():
+        qkv = qkv.contiguous()
+    device = qkv.device
+    page_table = data["page_table"]
+    capacity = page_table.shape[1] * page
+    span = min(window, capacity) if window else capacity
+    splits, block_n = _plan(batch, hkv, span, length)
+    chunk = triton.cdiv(span, splits)
+    chunk = triton.cdiv(chunk, block_n) * block_n
+    splits = triton.cdiv(span, chunk)
+    rows = max(16, triton.next_power_of_2(group * length))
+    rows_new = max(16, triton.next_power_of_2(length))
+    out = torch.empty((batch * length, hq * hd), device=device, dtype=torch.bfloat16)
+    direct = splits == 1
+    if direct:
+        ws_acc = ws_ml = out  # unused
+    else:
+        ws_acc = torch.empty((batch, hkv, splits, rows, hd), device=device, dtype=torch.float32)
+        ws_ml = torch.empty((batch, hkv, splits, rows, 2), device=device, dtype=torch.float32)
+    rope = bool(cfg["rope_theta"])
+    inv_freq = _inv_freq(cfg["rope_theta"], hd, device)
+    qkv_w = qkv.shape[-1]
+    _attn_split_kernel[(splits, hkv, batch)](
+        qkv, inv_freq, data["seq_lens"], page_table, data["cache_loc"], data["k_cache"], data["v_cache"],
+        data["k_scale"], data["v_scale"], out, ws_acc, ws_ml,
+        qkv_w, page_table.stride(0), chunk, cfg["sm_scale"] * LOG2E, cfg["qk_scale_factor"], RMS_EPS,
+        HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, RN=rows_new, PAGE=page, WINDOW=window, ROPE=rope,
+        SPLITS=splits, BLOCK_N=block_n, DIRECT=direct, num_warps=4, num_stages=2)
+    if not direct:
+        _attn_combine_kernel[(hkv, batch)](
+            qkv, out, ws_acc, ws_ml, data["v_scale"], qkv_w, RMS_EPS,
+            HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, SPLITS=splits, num_warps=4)
+    return out
+
+
+# ---------------------------------------------------------------------------------------
+# v3: memory-first. The probe run (8433b3e3) measured random 128 B rows at 4.03 TB/s, the
+# same as streaming, while FA3 reaches 1.3-1.7 TB/s on full layers and v1 1.1 TB/s (each
+# step waited on its page-table load, then its KV load, with few keys in flight). Here one
+# program covers a key range for a pair of KV heads (each key's 128 B K and V rows are read
+# by one program, and page indices once), the grid is sized to ~4 programs per SM, and a
+# separate combine reduces the splits per query head in parallel.
+
+
+@triton.jit
+def _attn3_step(q, k, v, valid, m_i, l_i, acc, qk_scale):
+    """One online-softmax step: scores of q [R, HD] against k [N, HD], masked by valid [R, N]."""
+    sc = tl.dot(q, tl.trans(k)) * qk_scale
+    sc = tl.where(valid, sc, float("-inf"))
+    m_new = tl.maximum(m_i, tl.max(sc, axis=1))
+    m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+    alpha = tl.exp2(m_i - m_safe)
+    p = tl.exp2(sc - m_safe[:, None])
+    l_i = l_i * alpha + tl.sum(p, axis=1)
+    acc = acc * alpha[:, None] + tl.dot(p.to(tl.bfloat16), v)
+    return m_new, l_i, acc
+
+
+@triton.jit
+def _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q, m_i, l_i, acc,
+                    tok0, seq, h, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
+                    HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr, RN: tl.constexpr,
+                    ROPE: tl.constexpr):
+    """The block's own L keys and values for KV head h: normalized (+ RoPE), stored to the
+    cache in FP8, and attended from registers (causal inside the block)."""
+    d = tl.arange(0, HD)
+    nrows = tl.arange(0, RN)
+    nmask = nrows < L
+    kn = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, HQ * HD + h * HD, nrows, QKV_W, eps, 1.0,
+                     1, L, HD, ROPE, True)
+    vn = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, (HQ + HKV) * HD + h * HD, nrows, QKV_W, eps, 1.0,
+                     1, L, HD, False, False)
+    kq = (kn / k_scale).to(k_cache_ptr.dtype.element_ty)
+    vq = (vn / v_scale).to(v_cache_ptr.dtype.element_ty)
+    loc = tl.load(cache_loc_ptr + tok0 + nrows, mask=nmask, other=0).to(tl.int64)
+    off = (loc * HKV + h)[:, None] * HD + d[None, :]
+    tl.store(k_cache_ptr + off, kq, mask=nmask[:, None])
+    tl.store(v_cache_ptr + off, vq, mask=nmask[:, None])
+    valid = nmask[None, :] & (nrows[None, :] <= jrow[:, None])
+    return _attn3_step(q, kq.to(tl.bfloat16), vq.to(tl.bfloat16), valid, m_i, l_i, acc, qk_scale)
+
+
+@triton.jit
+def _attn3_split_kernel(
+        qkv_ptr, inv_freq_ptr, seq_lens_ptr, page_table_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr,
+        k_scale_ptr, v_scale_ptr, ws_acc_ptr, ws_ml_ptr,
+        QKV_W, PT_STRIDE, CHUNK, sm_scale_log2, qk_factor, eps,
+        HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr, G: tl.constexpr,
+        R: tl.constexpr, RN: tl.constexpr, PAGE: tl.constexpr, WINDOW: tl.constexpr, ROPE: tl.constexpr,
+        SPLITS: tl.constexpr, BLOCK_N: tl.constexpr, HP: tl.constexpr):
+    s = tl.program_id(0)
+    h0 = tl.program_id(1) * HP
+    h1 = h0 + HP - 1  # == h0 when HP == 1 (its work is skipped)
+    b = tl.program_id(2)
+    seq = tl.load(seq_lens_ptr + b)
+    rows = tl.arange(0, R)
+    jrow = rows // G
+    qpos = seq + jrow
+    d = tl.arange(0, HD)
+    tok0 = b * L
+    q0 = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, h0 * G * HD, rows, QKV_W, eps, qk_factor,
+                     G, G * L, HD, ROPE, True).to(tl.bfloat16)
+    q1 = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, h1 * G * HD, rows, QKV_W, eps, qk_factor,
+                     G, G * L, HD, ROPE, True).to(tl.bfloat16)
+    k_scale = tl.load(k_scale_ptr)
+    v_scale = tl.load(v_scale_ptr)
+    qk_scale = sm_scale_log2 * k_scale
+    if WINDOW > 0:
+        first = tl.maximum(seq - WINDOW + 1, 0)
+    else:
+        first = seq * 0
+    lo = first + s * CHUNK
+    hi = tl.minimum(lo + CHUNK, seq)
+
+    m0 = tl.full((R,), float("-inf"), tl.float32)
+    l0 = tl.zeros((R,), tl.float32)
+    a0 = tl.zeros((R, HD), tl.float32)
+    m1 = tl.full((R,), float("-inf"), tl.float32)
+    l1 = tl.zeros((R,), tl.float32)
+    a1 = tl.zeros((R, HD), tl.float32)
+    offs_n = tl.arange(0, BLOCK_N)
+    pt_row = page_table_ptr + b.to(tl.int64) * PT_STRIDE
+    for start in range(lo, hi, BLOCK_N):
+        kpos = start + offs_n
+        kmask = kpos < hi
+        page = tl.load(pt_row + kpos // PAGE, mask=kmask, other=0)
+        base = (page.to(tl.int64) * PAGE + kpos % PAGE) * HKV
+        off0 = (base + h0)[:, None] * HD + d[None, :]
+        off1 = off0 + HD
+        k0 = tl.load(k_cache_ptr + off0, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        v0 = tl.load(v_cache_ptr + off0, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        valid = kmask[None, :]
+        if WINDOW > 0:
+            valid = valid & (kpos[None, :] > qpos[:, None] - WINDOW)
+        m0, l0, a0 = _attn3_step(q0, k0, v0, valid, m0, l0, a0, qk_scale)
+        if HP == 2:
+            k1 = tl.load(k_cache_ptr + off1, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+            v1 = tl.load(v_cache_ptr + off1, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+            m1, l1, a1 = _attn3_step(q1, k1, v1, valid, m1, l1, a1, qk_scale)
+
+    if s == SPLITS - 1:
+        m0, l0, a0 = _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q0, m0, l0, a0,
+                                     tok0, seq, h0, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
+                                     HQ, HKV, HD, L, RN, ROPE)
+        if HP == 2:
+            m1, l1, a1 = _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q1, m1, l1,
+                                         a1, tok0, seq, h1, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
+                                         HQ, HKV, HD, L, RN, ROPE)
+    for hh in tl.static_range(HP):
+        if hh == 0:
+            m_i, l_i, acc, h = m0, l0, a0, h0
+        else:
+            m_i, l_i, acc, h = m1, l1, a1, h1
+        base_ws = ((b * HKV + h) * SPLITS + s).to(tl.int64) * R
+        tl.store(ws_acc_ptr + (base_ws + rows)[:, None] * HD + d[None, :], acc)
+        tl.store(ws_ml_ptr + (base_ws + rows) * 2, m_i)
+        tl.store(ws_ml_ptr + (base_ws + rows) * 2 + 1, l_i)
+
+
+@triton.jit
+def _attn3_combine_kernel(qkv_ptr, out_ptr, ws_acc_ptr, ws_ml_ptr, v_scale_ptr, QKV_W, eps,
+                          HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr,
+                          G: tl.constexpr, R: tl.constexpr, SPLITS: tl.constexpr, SC: tl.constexpr):
+    """One program per (query head, request, block token): merges that row's splits in
+    vectorized chunks of SC, then RMSNorm x sigmoid(gate)."""
+    hq = tl.program_id(0)
+    b = tl.program_id(1)
+    j = tl.program_id(2)
+    h = hq // G
+    r = j * G + hq % G
+    d = tl.arange(0, HD)
+    sc = tl.arange(0, SC)
+    m_run = tl.full((1,), float("-inf"), tl.float32)
+    l_run = tl.zeros((1,), tl.float32)
+    acc = tl.zeros((HD,), tl.float32)
+    for c0 in range(0, SPLITS, SC):
+        si = c0 + sc
+        smask = si < SPLITS
+        idx = ((b * HKV + h) * SPLITS + si).to(tl.int64) * R + r
+        m_s = tl.load(ws_ml_ptr + idx * 2, mask=smask, other=float("-inf"))
+        l_s = tl.load(ws_ml_ptr + idx * 2 + 1, mask=smask, other=0.0)
+        a_s = tl.load(ws_acc_ptr + idx[:, None] * HD + d[None, :], mask=smask[:, None], other=0.0)
+        m_new = tl.maximum(m_run, tl.max(m_s, axis=0))
+        m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+        alpha = tl.exp2(m_run - m_safe)
+        beta = tl.exp2(m_s - m_safe)
+        l_run = l_run * alpha + tl.sum(l_s * beta, axis=0)
+        acc = acc * alpha + tl.sum(a_s * beta[:, None], axis=0)
+        m_run = m_new
+    o = acc / tl.where(l_run == 0.0, 1.0, l_run) * tl.load(v_scale_ptr)
+    inv = tl.rsqrt(tl.sum(o * o, axis=0) / HD + eps)
+    tok = (b * L + j).to(tl.int64)
+    gate = tl.load(qkv_ptr + tok * QKV_W + (HQ + 2 * HKV) * HD + hq * HD + d).to(tl.float32)
+    tl.store(out_ptr + tok * (HQ * HD) + hq * HD + d, (o * inv * tl.sigmoid(gate)).to(tl.bfloat16))
+
+
+def _attn3(qkv, data, cfg, block_n=64, warps=4, stages=3, per_sm=4, min_chunk=256, hp=2):
+    """v3 attention: qkv [T, W] -> [T, Hq * 64]; writes the new cache entries."""
+    batch, length = cfg["batch"], cfg["q_len"]
+    hq, hkv, hd = cfg["num_q_heads"], cfg["num_kv_heads"], cfg["head_dim"]
+    group = hq // hkv
+    page, window = cfg["page_size"], cfg["window"]
+    if not qkv.is_contiguous():
+        qkv = qkv.contiguous()
+    device = qkv.device
+    page_table = data["page_table"]
+    capacity = page_table.shape[1] * page
+    span = min(window, capacity) if window else capacity
+    if hkv % hp:
+        hp = 1
+    pairs = hkv // hp
+    splits = max(1, min(triton.cdiv(per_sm * NUM_SMS, batch * pairs), triton.cdiv(span, min_chunk)))
+    chunk = triton.cdiv(triton.cdiv(span, splits), block_n) * block_n
+    splits = triton.cdiv(span, chunk)
+    rows = max(16, triton.next_power_of_2(group * length))
+    rows_new = max(16, triton.next_power_of_2(length))
+    ws_acc = torch.empty((batch, hkv, splits, rows, hd), device=device, dtype=torch.float32)
+    ws_ml = torch.empty((batch, hkv, splits, rows, 2), device=device, dtype=torch.float32)
+    out = torch.empty((batch * length, hq * hd), device=device, dtype=torch.bfloat16)
+    inv_freq = _inv_freq(cfg["rope_theta"], hd, device)
+    qkv_w = qkv.shape[-1]
+    _attn3_split_kernel[(splits, pairs, batch)](
+        qkv, inv_freq, data["seq_lens"], page_table, data["cache_loc"], data["k_cache"], data["v_cache"],
+        data["k_scale"], data["v_scale"], ws_acc, ws_ml,
+        qkv_w, page_table.stride(0), chunk, cfg["sm_scale"] * LOG2E, cfg["qk_scale_factor"], RMS_EPS,
+        HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, RN=rows_new, PAGE=page, WINDOW=window,
+        ROPE=bool(cfg["rope_theta"]), SPLITS=splits, BLOCK_N=block_n, HP=hp, num_warps=warps,
+        num_stages=stages)
+    _attn3_combine_kernel[(hq, batch, length)](
+        qkv, out, ws_acc, ws_ml, data["v_scale"], qkv_w, RMS_EPS,
+        HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, SPLITS=splits,
+        SC=min(64, triton.next_power_of_2(splits)), num_warps=4)
+    return out
+
+
+# ---------------------------------------------------------------------------------------
+# SGLang's path (baseline.py), for the shapes where FA3 is faster: measured on the judge's
+# H200 (check run 6047873c), the fused kernel wins decode steps on sliding layers (18.3 vs
+# 25.5 µs at B 1, 23.3 vs 32.1 at B 16, 28.8 vs 38.8 at B 32) and loses verify blocks and
+# full-attention layers, where FA3 streams the scattered cache better.
+
+FP8 = torch.float8_e4m3fn
+_NORMS = {}
+_ROPE = {}
+ROPE_POSITIONS = 1 << 21
+
+
+def _qk_norm(hq, hkv, d):
+    key = (hq, hkv, d)
+    if key not in _NORMS:
+        _NORMS[key] = FusedQKNorm(head_dim=d, num_q_heads=hq, num_kv_heads=hkv, eps=RMS_EPS)
+    return _NORMS[key]
+
+
+def _cos_sin(theta, d, device):
+    """[2^21, d] float32 cos | sin, as SGLang's RotaryEmbedding builds it, cached per theta."""
+    cache = _ROPE.get(theta)
+    if cache is None:
+        inv_freq = 1.0 / (theta ** (torch.arange(0, d, 2, dtype=torch.float, device=device) / d))
+        freqs = torch.einsum("i,j -> ij", torch.arange(ROPE_POSITIONS, dtype=torch.float, device=device), inv_freq)
+        cache = _ROPE[theta] = torch.cat((freqs.cos(), freqs.sin()), dim=-1)
+    return cache
+
+
+def _sglang_attention(data):
+    cfg = data["config"]
+    batch, length = cfg["batch"], cfg["q_len"]
+    hq, hkv, d = cfg["num_q_heads"], cfg["num_kv_heads"], cfg["head_dim"]
+    tokens = batch * length
+    qkv = data["qkv"].view(tokens, -1)
+    device = qkv.device
+
+    if cfg["rope_theta"]:
+        q, k = _qk_norm(hq, hkv, d)(qkv, data["positions"], _cos_sin(cfg["rope_theta"], d, device))
+    else:
+        q, k = _qk_norm(hq, hkv, d)(qkv)
+    v = qkv[:, (hq + hkv) * d:(hq + 2 * hkv) * d]
+
+    k_cache, v_cache = data["k_cache"], data["v_cache"]
+    scaled = cfg["kv_scale"] != 1.0
+    k = k.reshape(tokens, hkv * d)
+    if scaled:
+        k, v = k / data["k_scale"], v / data["v_scale"]
+    # The pool keeps FP8 rows as bytes; slot 0 is a live row here (SGLang reserves it for padding).
+    store_cache(k.to(FP8).view(torch.uint8), v.to(FP8).view(torch.uint8),
+                k_cache.view(-1, hkv * d).view(torch.uint8), v_cache.view(-1, hkv * d).view(torch.uint8),
+                data["cache_loc"], reserved_skip_index=-1)
+
+    window = cfg["window"]
+    descale = {}
+    if scaled:
+        descale = dict(k_descale=data["k_scale"].reshape(1, 1).expand(batch, hkv),
+                       v_descale=data["v_scale"].reshape(1, 1).expand(batch, hkv))
+    out = flash_attn_with_kvcache(
+        q=q.view(tokens, hq, d).to(FP8),
+        k_cache=k_cache,
+        v_cache=v_cache,
+        page_table=data["page_table"],
+        cache_seqlens=data["cache_seqlens"],
+        cu_seqlens_q=data["cu_seqlens_q"],
+        max_seqlen_q=length,
+        # The 5.473 query factor is folded into the softmax scale, as SGLang does.
+        softmax_scale=cfg["sm_scale"] * cfg["qk_scale_factor"],
+        causal=True,
+        window_size=(window - 1, 0) if window else (-1, -1),
+        scheduler_metadata=data["scheduler_metadata"],
+        **descale,
+    )
+    if isinstance(out, tuple):
+        out = out[0]
+    gate = qkv[:, (hq + 2 * hkv) * d:]
+    o = rms_norm_gate(out.reshape(tokens, hq * d).to(torch.bfloat16), gate, None, head_dim=d, eps=RMS_EPS,
+                      has_norm=True)
+    return o.view(batch, length, hq * d)
+
+
+# ---------------------------------------------------------------------------------------
+# v4: CUDA, one launch per decode step (okc/attn_cuda/kernel.py, bundled below).
+
+ATTN_DEVICE_SRC = r"""
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <cuda_fp8.h>
+#include <stdint.h>
+
+#define ATT_TILE 64
+#define ATT_INF __int_as_float(0x7f800000)
+#define ATT_MAXB 64
+#define ATT_STAGE_BYTES (8192 * 2 + 2048 + 512)
+
+struct AttnParams {
+  const __nv_bfloat16* qkv; const float* inv_freq; const int32_t* seq_lens; const int32_t* page_table;
+  const int64_t* cache_loc; uint8_t* k_cache; uint8_t* v_cache; const float* k_scale; const float* v_scale;
+  __nv_bfloat16* out; float* ws_acc; float* ws_ml; int32_t* counters;
+  int qkv_w, pt_stride, B, HQ, HKV, page_shift, window, rope, n_ctas;
+  float qk_factor, sm_scale_log2, eps;
+};
+
+__device__ __forceinline__ void cp_async16(uint32_t dst, const void* src, uint32_t bytes) {
+  asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" :: "r"(dst), "l"(src), "r"(bytes));
+}
+__device__ __forceinline__ void cp_commit() { asm volatile("cp.async.commit_group;\n"); }
+template <int N> __device__ __forceinline__ void cp_wait() { asm volatile("cp.async.wait_group %0;\n" :: "n"(N)); }
+
+__device__ __forceinline__ uint32_t e4m3x2_f16x2(uint32_t pair16) {
+  uint32_t r;
+  asm("{\n .reg .b16 lo, hi;\n mov.b32 {lo, hi}, %1;\n cvt.rn.f16x2.e4m3x2 %0, lo;\n}\n" : "=r"(r) : "r"(pair16));
+  return r;
+}
+__device__ __forceinline__ uint32_t cvt_lo(uint32_t w) { return e4m3x2_f16x2(w & 0xFFFFu); }
+__device__ __forceinline__ uint32_t cvt_hi(uint32_t w) { return e4m3x2_f16x2(w >> 16); }
+
+__device__ __forceinline__ float ex2(float x) {
+  float y;
+  asm("ex2.approx.ftz.f32 %0, %1;\n" : "=f"(y) : "f"(x));
+  return y;
+}
+
+__device__ __forceinline__ uint32_t pack_h2(float a, float b) {
+  __half2 h = __floats2half2_rn(a, b);
+  return *reinterpret_cast<uint32_t*>(&h);
+}
+
+__device__ __forceinline__ void mma_f16(float c[4], uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
+                                        uint32_t b0, uint32_t b1) {
+  asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 "
+               "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
+               : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
+               : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
+}
+
+// 16 B chunk swizzle of a 128 B key row: conflict-free for the K reads (rows 2m, 2m+1 x four
+// chunks of one head) and the V reads (rows 2t, t = 0..3, x two chunks).
+__device__ __forceinline__ int att_swz(int key) {
+  return ((((key >> 1) & 3) ^ ((key & 1) << 1)) << 1);
+}
+
+// The CTA owning virtual key u of T split over n CTAs: start(i) = floor(T i / n).
+__device__ __forceinline__ int att_cta_of(long long u, long long T, int n) {
+  return (int)(((u + 1) * n - 1) / T);
+}
+
+template <int STAGES>
+__global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
+  extern __shared__ __align__(128) uint8_t smem[];
+  // per stage: K [64][128] | V [64][128] | Q [16][64] bf16 | new K, V [2][2][64] bf16
+  float* s_scr = reinterpret_cast<float*>(smem + STAGES * ATT_STAGE_BYTES);  // [4 warps][2][8][66]
+  __shared__ int s_pref[ATT_MAXB + 1], s_first[ATT_MAXB], s_n[ATT_MAXB];
+  __shared__ int s_sb[ATT_MAXB], s_su0[ATT_MAXB], s_suc[ATT_MAXB], s_snew[ATT_MAXB], s_stiles[ATT_MAXB];
+  __shared__ int s_nseg, s_last;
+  __shared__ float s_knew[2][64];
+
+  const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+  const int g = lane >> 2, t = lane & 3;
+  const int pair = blockIdx.y;
+  const int B = p.B, HKV = p.HKV, HQ = p.HQ;
+
+  // Lengths: each request's attended cached keys n_b (its window) and the prefix of v_b = n_b + 1.
+  if (warp == 0) {
+    int carry = 0;
+    for (int b0 = 0; b0 < B; b0 += 32) {
+      int b = b0 + lane;
+      int len = b < B ? p.seq_lens[b] : 0;
+      int n = p.window > 0 ? min(len, p.window - 1) : len;
+      int v = b < B ? n + 1 : 0;
+      int x = v;
+#pragma unroll
+      for (int o = 1; o < 32; o <<= 1) {
+        int y = __shfl_up_sync(0xffffffffu, x, o);
+        if (lane >= o) x += y;
+      }
+      if (b < B) { s_pref[b] = carry + x - v; s_first[b] = len - n; s_n[b] = n; }
+      carry += __shfl_sync(0xffffffffu, x, 31);
+    }
+    if (lane == 0) s_pref[B] = carry;
+  }
+  __syncthreads();
+  const long long T = s_pref[B];
+  const int N = (int)min((long long)p.n_ctas, T);
+  const int cta = blockIdx.x;
+  if (cta >= N) return;
+  const long long r0 = T * cta / N, r1 = T * (cta + 1) / N;
+
+  // This CTA's segments: (request, cached range [u0, uc), holds the new token, tiles).
+  if (tid == 0) {
+    int ns = 0;
+    for (int b = 0; b < B; ++b) {
+      long long lo = s_pref[b], hi = s_pref[b + 1];
+      if (hi <= r0 || lo >= r1) continue;
+      int u0 = (int)max(r0 - lo, 0LL), u1 = (int)min(r1 - lo, hi - lo);
+      int n = s_n[b];
+      int uc = min(u1, n);
+      s_sb[ns] = b; s_su0[ns] = u0; s_suc[ns] = max(uc, u0); s_snew[ns] = u1 > n;
+      s_stiles[ns] = uc > u0 ? (uc - u0 + ATT_TILE - 1) / ATT_TILE : 1;
+      ++ns;
+    }
+    s_nseg = ns;
+  }
+  __syncthreads();
+  const int nseg = s_nseg;
+  int ntiles = 0;
+  for (int s = 0; s < nseg; ++s) ntiles += s_stiles[s];
+
+  const uint32_t smem_u32 = (uint32_t)__cvta_generic_to_shared(smem);
+  const int pmask = (1 << p.page_shift) - 1;
+  const size_t row_bytes = (size_t)HKV * 64;
+  const int my_key = tid >> 1, my_kv = tid & 1;   // gather role: key of the tile, K or V
+
+  // Tile iterators (segment, tile within it) for: page-index loads, gathers, compute.
+  int ix_s = 0, ix_k = 0, is_s = 0, is_k = 0;
+  auto advance = [&](int& s, int& k) { if (s < nseg && ++k == s_stiles[s]) { ++s; k = 0; } };
+  // A tile's page entry for this thread's key: loaded two tiles before its gather, and only
+  // combined with the in-page offset at the gather (no register move waits on the load).
+  auto load_page = [&](int s, int k, int& pg, int& off) {
+    pg = -1; off = 0;
+    if (s >= nseg) return;
+    int b = s_sb[s];
+    int u = s_su0[s] + k * ATT_TILE + my_key;
+    if (u >= s_suc[s]) return;
+    int pos = s_first[b] + u;
+    off = pos & pmask;
+    pg = __ldg(p.page_table + (size_t)b * p.pt_stride + (pos >> p.page_shift));
+  };
+  auto issue = [&](int s, int k, int pg, int off, int stage) {
+    if (s < nseg) {
+      long long row = pg < 0 ? -1 : ((long long)pg << p.page_shift) + off;
+      uint32_t st = smem_u32 + stage * ATT_STAGE_BYTES;
+      const uint8_t* src = (my_kv ? p.v_cache : p.k_cache) + (row < 0 ? 0 : row) * row_bytes + pair * 128;
+      uint32_t dst = st + my_kv * 8192 + my_key * 128;
+      uint32_t bytes = row < 0 ? 0u : 16u;
+      int sw = att_swz(my_key);
+#pragma unroll
+      for (int j = 0; j < 8; ++j) cp_async16(dst + ((j ^ sw) << 4), src + j * 16, bytes);
+      int b = s_sb[s];
+      if (k == 0) {  // the request's 16 query heads of this pair (2 KB)
+        const uint8_t* q = reinterpret_cast<const uint8_t*>(p.qkv + (size_t)b * p.qkv_w + pair * 16 * 64);
+        cp_async16(st + 16384 + tid * 16, q + tid * 16, 16u);
+      }
+      if (k == s_stiles[s] - 1 && s_snew[s] && tid < 32) {  // the new token's K and V rows (bf16)
+        int kv = tid >> 4, c = tid & 15;
+        const uint8_t* src2 = reinterpret_cast<const uint8_t*>(
+            p.qkv + (size_t)b * p.qkv_w + (HQ + kv * HKV) * 64 + pair * 128);
+        cp_async16(st + 16384 + 2048 + kv * 256 + c * 16, src2 + c * 16, 16u);
+      }
+    }
+    cp_commit();
+  };
+
+  // Prologue: page rows of tiles 0..STAGES (gathers of 0..STAGES-2 issued now).
+  for (int j = 0; j < STAGES - 1; ++j) {
+    int pg, off;
+    load_page(ix_s, ix_k, pg, off); advance(ix_s, ix_k);
+    issue(is_s, is_k, pg, off, j); advance(is_s, is_k);
+  }
+  int pg0, off0, pg1, off1;
+  load_page(ix_s, ix_k, pg0, off0); advance(ix_s, ix_k);
+  load_page(ix_s, ix_k, pg1, off1); advance(ix_s, ix_k);
+
+  const float k_scale = *p.k_scale, v_scale = *p.v_scale;
+  const float c_log2 = p.sm_scale_log2 * k_scale;
+
+  uint32_t qa[2][4][2];
+  float m_r[2], l_r[2], acc[2][4][4];
+  int cs = 0, ck = 0;  // compute iterator
+  // Two tiles per iteration so the two page registers alternate without moves.
+  auto step = [&](int j, int& pg, int& off) {
+    cp_wait<STAGES - 2>();
+    __syncthreads();
+    issue(is_s, is_k, pg, off, (j + STAGES - 1) % STAGES); advance(is_s, is_k);
+    load_page(ix_s, ix_k, pg, off); advance(ix_s, ix_k);
+
+    const uint8_t* st = smem + (j % STAGES) * ATT_STAGE_BYTES;
+    const int b = s_sb[cs];
+    if (ck == 0) {
+      // Queries: RMSNorm x factor (+ RoPE at the token's position), rounded to BF16, as f16
+      // A fragments: k-step c holds d = 16t + 4c + {0,1} (a0) and {2,3} (a2) of head row g.
+      const __nv_bfloat16* qs = reinterpret_cast<const __nv_bfloat16*>(st + 16384);
+      const int pos = s_first[b] + s_n[b];
+#pragma unroll
+      for (int h = 0; h < 2; ++h) {
+        float x[16];
+        const uint4* src = reinterpret_cast<const uint4*>(qs + (8 * h + g) * 64 + 16 * t);
+        uint4 w0 = src[0], w1 = src[1];
+        const __nv_bfloat162* hw0 = reinterpret_cast<const __nv_bfloat162*>(&w0);
+        const __nv_bfloat162* hw1 = reinterpret_cast<const __nv_bfloat162*>(&w1);
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+          float2 f0 = __bfloat1622float2(hw0[i]), f1 = __bfloat1622float2(hw1[i]);
+          x[2 * i] = f0.x; x[2 * i + 1] = f0.y; x[8 + 2 * i] = f1.x; x[8 + 2 * i + 1] = f1.y;
+        }
+        float ss = 0.f;
+#pragma unroll
+        for (int i = 0; i < 16; ++i) ss += x[i] * x[i];
+        ss += __shfl_xor_sync(0xffffffffu, ss, 1);
+        ss += __shfl_xor_sync(0xffffffffu, ss, 2);
+        float sc = rsqrtf(ss / 64.f + p.eps) * p.qk_factor;
+#pragma unroll
+        for (int i = 0; i < 16; ++i) x[i] *= sc;
+        if (p.rope) {
+#pragma unroll
+          for (int i = 0; i < 8; ++i) {
+            float sn, cn;
+            sincosf((float)pos * __ldg(p.inv_freq + 8 * t + i), &sn, &cn);
+            float e = x[2 * i], o = x[2 * i + 1];
+            x[2 * i] = e * cn - o * sn;
+            x[2 * i + 1] = o * cn + e * sn;
+          }
+        }
+#pragma unroll
+        for (int i = 0; i < 16; ++i) x[i] = __bfloat162float(__float2bfloat16_rn(x[i]));
+#pragma unroll
+        for (int c = 0; c < 4; ++c) {
+          qa[h][c][0] = pack_h2(x[4 * c], x[4 * c + 1]);
+          qa[h][c][1] = pack_h2(x[4 * c + 2], x[4 * c + 3]);
+        }
+        m_r[h] = -ATT_INF; l_r[h] = 0.f;
+#pragma unroll
+        for (int i = 0; i < 4; ++i) { acc[h][i][0] = acc[h][i][1] = acc[h][i][2] = acc[h][i][3] = 0.f; }
+      }
+    }
+
+    const int nvalid = min(s_suc[cs] - (s_su0[cs] + ck * ATT_TILE) - 16 * warp, 16);
+    if (nvalid > 0) {
+      const uint8_t* sK = st + (16 * warp) * 128;
+      const uint8_t* sV = st + 8192 + (16 * warp) * 128;
+#pragma unroll
+      for (int h = 0; h < 2; ++h) {
+        // S = Q K^T: two n8 tiles (keys g, g + 8 of this warp's 16)
+        float s[2][4];
+#pragma unroll
+        for (int nt = 0; nt < 2; ++nt) {
+          int key = 8 * nt + g;
+          uint4 kw = *reinterpret_cast<const uint4*>(sK + key * 128 + (((4 * h + t) ^ att_swz(key)) << 4));
+          uint32_t kws[4] = {kw.x, kw.y, kw.z, kw.w};
+          s[nt][0] = s[nt][1] = s[nt][2] = s[nt][3] = 0.f;
+#pragma unroll
+          for (int c = 0; c < 4; ++c)
+            mma_f16(s[nt], qa[h][c][0], 0u, qa[h][c][1], 0u, cvt_lo(kws[c]), cvt_hi(kws[c]));
+        }
+        // online softmax on row g (keys 2t, 2t+1 of each n tile), log2 units
+        float x0 = 2 * t < nvalid ? s[0][0] * c_log2 : -ATT_INF;
+        float x1 = 2 * t + 1 < nvalid ? s[0][1] * c_log2 : -ATT_INF;
+        float x2 = 8 + 2 * t < nvalid ? s[1][0] * c_log2 : -ATT_INF;
+        float x3 = 9 + 2 * t < nvalid ? s[1][1] * c_log2 : -ATT_INF;
+        float mt = fmaxf(fmaxf(x0, x1), fmaxf(x2, x3));
+        mt = fmaxf(mt, __shfl_xor_sync(0xffffffffu, mt, 1));
+        mt = fmaxf(mt, __shfl_xor_sync(0xffffffffu, mt, 2));
+        float mn = fmaxf(m_r[h], mt);
+        float alpha = ex2(m_r[h] - mn);
+        m_r[h] = mn;
+        float p0 = ex2(x0 - mn), p1 = ex2(x1 - mn), p2 = ex2(x2 - mn), p3 = ex2(x3 - mn);
+        l_r[h] = l_r[h] * alpha + (p0 + p1) + (p2 + p3);
+        float al_a = __shfl_sync(0xffffffffu, alpha, 8 * t);
+        float al_b = __shfl_sync(0xffffffffu, alpha, 8 * t + 4);
+        uint32_t pb0 = pack_h2(p0, p1), pb1 = pack_h2(p2, p3);
+        // O^T += V^T P^T: m tile i holds d = 8g + i (rows g) and 8g + 4 + i (rows g + 8)
+        const int vo = ((4 * h + (g >> 1)) << 4) | ((g & 1) << 3);
+        uint2 va = *reinterpret_cast<const uint2*>(sV + (2 * t) * 128 + (vo ^ (att_swz(2 * t) << 4)));
+        uint2 vb = *reinterpret_cast<const uint2*>(sV + (2 * t + 1) * 128 + (vo ^ (att_swz(2 * t + 1) << 4)));
+        uint2 vc = *reinterpret_cast<const uint2*>(sV + (2 * t + 8) * 128 + (vo ^ (att_swz(2 * t + 8) << 4)));
+        uint2 vd = *reinterpret_cast<const uint2*>(sV + (2 * t + 9) * 128 + (vo ^ (att_swz(2 * t + 9) << 4)));
+        uint32_t lo01 = __byte_perm(va.x, vb.x, 0x5140), lo23 = __byte_perm(va.x, vb.x, 0x7362);
+        uint32_t hi01 = __byte_perm(va.y, vb.y, 0x5140), hi23 = __byte_perm(va.y, vb.y, 0x7362);
+        uint32_t clo01 = __byte_perm(vc.x, vd.x, 0x5140), clo23 = __byte_perm(vc.x, vd.x, 0x7362);
+        uint32_t chi01 = __byte_perm(vc.y, vd.y, 0x5140), chi23 = __byte_perm(vc.y, vd.y, 0x7362);
+        uint32_t A0[4] = {cvt_lo(lo01), cvt_hi(lo01), cvt_lo(lo23), cvt_hi(lo23)};
+        uint32_t A1[4] = {cvt_lo(hi01), cvt_hi(hi01), cvt_lo(hi23), cvt_hi(hi23)};
+        uint32_t A2[4] = {cvt_lo(clo01), cvt_hi(clo01), cvt_lo(clo23), cvt_hi(clo23)};
+        uint32_t A3[4] = {cvt_lo(chi01), cvt_hi(chi01), cvt_lo(chi23), cvt_hi(chi23)};
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+          acc[h][i][0] *= al_a; acc[h][i][1] *= al_b; acc[h][i][2] *= al_a; acc[h][i][3] *= al_b;
+          mma_f16(acc[h][i], A0[i], A1[i], A2[i], A3[i], pb0, pb1);
+        }
+      }
+    }
+
+    if (ck == s_stiles[cs] - 1) {
+      // ---- end of this request's share: the new token, then this CTA's partial ----
+      if (s_snew[cs] && warp == 0) {
+        const __nv_bfloat16* kn = reinterpret_cast<const __nv_bfloat16*>(st + 16384 + 2048);
+        const int pos = s_first[b] + s_n[b];
+        const long long loc = p.cache_loc[b];
+        // lane: head lane >> 4, d = 4 (lane & 15) .. + 3
+        const int hh = lane >> 4, d0 = 4 * (lane & 15);
+        float k4[4], v4[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+          k4[i] = __bfloat162float(kn[hh * 64 + d0 + i]);
+          v4[i] = __bfloat162float(kn[128 + hh * 64 + d0 + i]);
+        }
+        float ss = k4[0] * k4[0] + k4[1] * k4[1] + k4[2] * k4[2] + k4[3] * k4[3];
+#pragma unroll
+        for (int o = 1; o < 16; o <<= 1) ss += __shfl_xor_sync(0xffffffffu, ss, o);
+        float inv = rsqrtf(ss / 64.f + p.eps);
+#pragma unroll
+        for (int i = 0; i < 4; ++i) k4[i] *= inv;
+        if (p.rope) {
+#pragma unroll
+          for (int i = 0; i < 2; ++i) {
+            float sn, cn;
+            sincosf((float)pos * __ldg(p.inv_freq + d0 / 2 + i), &sn, &cn);
+            float e = k4[2 * i], o = k4[2 * i + 1];
+            k4[2 * i] = e * cn - o * sn;
+            k4[2 * i + 1] = o * cn + e * sn;
+          }
+        }
+        uint32_t kq = 0, vq = 0;
+        float kd[4], vdq[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+          __nv_fp8_e4m3 a(k4[i] / k_scale), c(v4[i] / v_scale);
+          kq |= (uint32_t)a.__x << (8 * i);
+          vq |= (uint32_t)c.__x << (8 * i);
+          kd[i] = (float)a; vdq[i] = (float)c;
+        }
+        size_t off = ((size_t)loc * HKV + 2 * pair + hh) * 64 + d0;
+        *reinterpret_cast<uint32_t*>(p.k_cache + off) = kq;
+        *reinterpret_cast<uint32_t*>(p.v_cache + off) = vq;
+#pragma unroll
+        for (int i = 0; i < 4; ++i) { s_knew[hh][d0 + i] = kd[i]; }
+        __syncwarp();
+        // scores of rows g (query heads 8h + g) against the new key: q holds d = 16t + 4c + {0..3}
+        float sc[2];
+#pragma unroll
+        for (int h = 0; h < 2; ++h) {
+          float a = 0.f;
+#pragma unroll
+          for (int c = 0; c < 4; ++c) {
+            float2 q01 = __half22float2(*reinterpret_cast<__half2*>(&qa[h][c][0]));
+            float2 q23 = __half22float2(*reinterpret_cast<__half2*>(&qa[h][c][1]));
+            const float* kk = &s_knew[h][16 * t + 4 * c];
+            a += q01.x * kk[0] + q01.y * kk[1] + q23.x * kk[2] + q23.y * kk[3];
+          }
+          a += __shfl_xor_sync(0xffffffffu, a, 1);
+          a += __shfl_xor_sync(0xffffffffu, a, 2);
+          sc[h] = a * c_log2;
+        }
+        __syncwarp();
+        // reuse s_knew for the new value (dequantized FP8, v_scale applied at the end)
+#pragma unroll
+        for (int i = 0; i < 4; ++i) s_knew[hh][d0 + i] = vdq[i];
+        __syncwarp();
+#pragma unroll
+        for (int h = 0; h < 2; ++h) {
+          float mn = fmaxf(m_r[h], sc[h]);
+          float alpha = ex2(m_r[h] - mn), pn = ex2(sc[h] - mn);
+          m_r[h] = mn;
+          l_r[h] = l_r[h] * alpha + (t == 0 ? pn : 0.f);
+          float al_a = __shfl_sync(0xffffffffu, alpha, 8 * t), al_b = __shfl_sync(0xffffffffu, alpha, 8 * t + 4);
+          float pa = __shfl_sync(0xffffffffu, pn, 8 * t), pbb = __shfl_sync(0xffffffffu, pn, 8 * t + 4);
+#pragma unroll
+          for (int i = 0; i < 4; ++i) {
+            float v0 = s_knew[h][8 * g + i], v1 = s_knew[h][8 * g + 4 + i];
+            acc[h][i][0] = acc[h][i][0] * al_a + pa * v0;
+            acc[h][i][1] = acc[h][i][1] * al_b + pbb * v0;
+            acc[h][i][2] = acc[h][i][2] * al_a + pa * v1;
+            acc[h][i][3] = acc[h][i][3] * al_b + pbb * v1;
+          }
+        }
+      }
+      // warps -> scratch [warp][h][row][66]: m, l, acc[64]
+#pragma unroll
+      for (int h = 0; h < 2; ++h) {
+        float l = l_r[h];
+        l += __shfl_xor_sync(0xffffffffu, l, 1);
+        l += __shfl_xor_sync(0xffffffffu, l, 2);
+        float* sw = s_scr + ((warp * 2 + h) * 8) * 66;
+        if (t == 0) { sw[g * 66] = m_r[h]; sw[g * 66 + 1] = l; }
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+          sw[(2 * t) * 66 + 2 + 8 * g + i] = acc[h][i][0];
+          sw[(2 * t + 1) * 66 + 2 + 8 * g + i] = acc[h][i][1];
+          sw[(2 * t) * 66 + 2 + 8 * g + 4 + i] = acc[h][i][2];
+          sw[(2 * t + 1) * 66 + 2 + 8 * g + 4 + i] = acc[h][i][3];
+        }
+      }
+      __syncthreads();
+      {
+        const int h = tid >> 6, r = (tid >> 3) & 7, dc = tid & 7;
+        float M = -ATT_INF;
+#pragma unroll
+        for (int w = 0; w < 4; ++w) M = fmaxf(M, s_scr[((w * 2 + h) * 8 + r) * 66]);
+        float L = 0.f, o[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+#pragma unroll
+        for (int w = 0; w < 4; ++w) {
+          const float* sw = s_scr + ((w * 2 + h) * 8 + r) * 66;
+          float f = ex2(sw[0] - M);
+          L += sw[1] * f;
+#pragma unroll
+          for (int i = 0; i < 8; ++i) o[i] += sw[2 + 8 * dc + i] * f;
+        }
+        const size_t slot = (size_t)pair * (p.n_ctas + B) + cta + b;
+        float* wa = p.ws_acc + ((slot * 2 + h) * 8 + r) * 64 + 8 * dc;
+        reinterpret_cast<float4*>(wa)[0] = make_float4(o[0], o[1], o[2], o[3]);
+        reinterpret_cast<float4*>(wa)[1] = make_float4(o[4], o[5], o[6], o[7]);
+        if (dc == 0) reinterpret_cast<float2*>(p.ws_ml)[(slot * 2 + h) * 8 + r] = make_float2(M, L);
+      }
+      __threadfence();
+      __syncthreads();
+      const long long vb0 = s_pref[b], vb1 = s_pref[b + 1];
+      const int i_first = att_cta_of(vb0, T, N), i_last = att_cta_of(vb1 - 1, T, N);
+      if (tid == 0) {
+        int old = atomicAdd(p.counters + b * gridDim.y + pair, 1);
+        int last = old == i_last - i_first;
+        if (last) p.counters[b * gridDim.y + pair] = 0;
+        s_last = last;
+      }
+      __syncthreads();
+      if (s_last) {
+        __threadfence();
+        const int h = tid >> 6, r = (tid >> 3) & 7, dc = tid & 7;
+        const int qh = (2 * pair + h) * 8 + r;
+        const uint4 gw = *reinterpret_cast<const uint4*>(p.qkv + (size_t)b * p.qkv_w + (HQ + 2 * HKV) * 64 + qh * 64 + 8 * dc);
+        float M = -ATT_INF, L = 0.f, o[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        for (int i = i_first; i <= i_last; ++i) {
+          const size_t slot = (size_t)pair * (p.n_ctas + B) + i + b;
+          float2 ml = __ldcg(reinterpret_cast<const float2*>(p.ws_ml) + (slot * 2 + h) * 8 + r);
+          const float4* wa = reinterpret_cast<const float4*>(p.ws_acc + ((slot * 2 + h) * 8 + r) * 64 + 8 * dc);
+          float4 a0 = __ldcg(wa), a1 = __ldcg(wa + 1);
+          float mn = fmaxf(M, ml.x);
+          float fa = ex2(M - mn), fb = ex2(ml.x - mn);
+          M = mn;
+          L = L * fa + ml.y * fb;
+          o[0] = o[0] * fa + a0.x * fb; o[1] = o[1] * fa + a0.y * fb; o[2] = o[2] * fa + a0.z * fb;
+          o[3] = o[3] * fa + a0.w * fb; o[4] = o[4] * fa + a1.x * fb; o[5] = o[5] * fa + a1.y * fb;
+          o[6] = o[6] * fa + a1.z * fb; o[7] = o[7] * fa + a1.w * fb;
+        }
+        float sc = v_scale / L, ss = 0.f;
+#pragma unroll
+        for (int i = 0; i < 8; ++i) { o[i] *= sc; ss += o[i] * o[i]; }
+        ss += __shfl_xor_sync(0xffffffffu, ss, 1);
+        ss += __shfl_xor_sync(0xffffffffu, ss, 2);
+        ss += __shfl_xor_sync(0xffffffffu, ss, 4);
+        float inv = rsqrtf(ss / 64.f + p.eps);
+        const __nv_bfloat162* gh = reinterpret_cast<const __nv_bfloat162*>(&gw);
+        uint4 ow;
+        __nv_bfloat162* oh = reinterpret_cast<__nv_bfloat162*>(&ow);
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+          float2 gf = __bfloat1622float2(gh[i]);
+          float y0 = o[2 * i] * inv / (1.f + __expf(-gf.x));
+          float y1 = o[2 * i + 1] * inv / (1.f + __expf(-gf.y));
+          oh[i] = __floats2bfloat162_rn(y0, y1);
+        }
+        *reinterpret_cast<uint4*>(p.out + (size_t)b * HQ * 64 + qh * 64 + 8 * dc) = ow;
+      }
+      __syncthreads();
+      ++cs; ck = 0;
+    } else {
+      ++ck;
+    }
+  };
+  for (int j = 0; j < ntiles; j += 2) {
+    step(j, pg0, off0);
+    if (j + 1 < ntiles) step(j + 1, pg1, off1);
+  }
+  cp_wait<0>();
+}
+"""
+
+
+ATTN_HOST_SRC = r"""
+#include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
+
+template <int S>
+static void launch_dec(const AttnParams& p, int grid_x, int grid_y) {
+  size_t smem = (size_t)S * ATT_STAGE_BYTES + 4 * 2 * 8 * 66 * sizeof(float);
+  auto kern = attn_dec_kernel<S>;
+  cudaFuncSetAttribute(kern, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+  kern<<<dim3(grid_x, grid_y), 128, smem, at::cuda::getCurrentCUDAStream()>>>(p);
+}
+
+void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens, torch::Tensor page_table,
+              torch::Tensor cache_loc, torch::Tensor k_cache, torch::Tensor v_cache, torch::Tensor k_scale,
+              torch::Tensor v_scale, torch::Tensor out, torch::Tensor ws_acc, torch::Tensor ws_ml,
+              torch::Tensor counters, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
+              int64_t rope, double qk_factor, double sm_scale_log2, double eps, int64_t n_ctas, int64_t stages) {
+  AttnParams p;
+  p.qkv = reinterpret_cast<const __nv_bfloat16*>(qkv.data_ptr());
+  p.inv_freq = inv_freq.data_ptr<float>();
+  p.seq_lens = seq_lens.data_ptr<int32_t>();
+  p.page_table = page_table.data_ptr<int32_t>();
+  p.cache_loc = cache_loc.data_ptr<int64_t>();
+  p.k_cache = reinterpret_cast<uint8_t*>(k_cache.data_ptr());
+  p.v_cache = reinterpret_cast<uint8_t*>(v_cache.data_ptr());
+  p.k_scale = k_scale.data_ptr<float>();
+  p.v_scale = v_scale.data_ptr<float>();
+  p.out = reinterpret_cast<__nv_bfloat16*>(out.data_ptr());
+  p.ws_acc = ws_acc.data_ptr<float>();
+  p.ws_ml = ws_ml.data_ptr<float>();
+  p.counters = counters.data_ptr<int32_t>();
+  p.qkv_w = (int)qkv.size(-1);
+  p.pt_stride = (int)page_table.stride(0);
+  p.B = (int)B; p.HQ = (int)HQ; p.HKV = (int)HKV; p.page_shift = (int)page_shift; p.window = (int)window;
+  p.rope = (int)rope; p.n_ctas = (int)n_ctas;
+  p.qk_factor = (float)qk_factor; p.sm_scale_log2 = (float)sm_scale_log2; p.eps = (float)eps;
+  int pairs = (int)HKV / 2;
+  if (stages == 3) launch_dec<3>(p, (int)n_ctas, pairs);
+  else if (stages == 4) launch_dec<4>(p, (int)n_ctas, pairs);
+  else if (stages == 6) launch_dec<6>(p, (int)n_ctas, pairs);
+  else TORCH_CHECK(false, "attn_dec: unsupported stages");
+}
+"""
+
+
+ATTN_CUDA_SRC = ATTN_HOST_SRC.replace("#include <ATen/cuda/CUDAContext.h>\n",
+                                      "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC, 1)
+
+
+ATTN_CUDA_CPP = """
+void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens, torch::Tensor page_table,
+              torch::Tensor cache_loc, torch::Tensor k_cache, torch::Tensor v_cache, torch::Tensor k_scale,
+              torch::Tensor v_scale, torch::Tensor out, torch::Tensor ws_acc, torch::Tensor ws_ml,
+              torch::Tensor counters, int64_t B, int64_t HQ, int64_t HKV, int64_t page_shift, int64_t window,
+              int64_t rope, double qk_factor, double sm_scale_log2, double eps, int64_t n_ctas, int64_t stages);
+"""
+
+
+_ATTN_MODULES = {}
+
+
+_ATTN_COUNTERS = {}
+
+
+def attn_cuda_module():
+    if "m" not in _ATTN_MODULES:
+        from torch.utils.cpp_extension import load_inline
+        _ATTN_MODULES["m"] = load_inline(
+            name="okc_attn_dec", cpp_sources=ATTN_CUDA_CPP, cuda_sources=ATTN_CUDA_SRC, functions=["attn_dec"],
+            extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"], verbose=False)
+    return _ATTN_MODULES["m"]
+
+
+def attn_cuda_supported(cfg, page_table):
+    """Shapes the CUDA path covers (others take the Triton / SGLang paths)."""
+    page = cfg["page_size"]
+    return (cfg["q_len"] == 1 and cfg["head_dim"] == 64 and cfg["num_kv_heads"] % 2 == 0
+            and cfg["num_q_heads"] == 8 * cfg["num_kv_heads"] and cfg["batch"] <= 64
+            and page & (page - 1) == 0)
+
+
+def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=256):
+    """qkv [B, W] bf16 -> [B, Hq * 64] bf16; writes the new cache entries. n_ctas: CTAs per
+    KV-head pair at most (fewer when the batch has fewer than min_keys keys per CTA)."""
+    batch = cfg["batch"]
+    hq, hkv = cfg["num_q_heads"], cfg["num_kv_heads"]
+    pairs = hkv // 2
+    page = cfg["page_size"]
+    window = cfg["window"]
+    page_table = data["page_table"]
+    capacity = page_table.shape[1] * page
+    span = min(window, capacity) if window else capacity
+    n = max(1, min(max(1, n_ctas // pairs), -(-batch * span // min_keys)))
+    device = qkv.device
+    key = (device, batch * pairs)
+    counters = _ATTN_COUNTERS.get(key)
+    if counters is None:
+        counters = _ATTN_COUNTERS[key] = torch.zeros(batch * pairs, dtype=torch.int32, device=device)
+    slots = pairs * (n + batch)
+    ws_acc = torch.empty((slots, 2, 8, 64), dtype=torch.float32, device=device)
+    ws_ml = torch.empty((slots, 2, 8, 2), dtype=torch.float32, device=device)
+    out = torch.empty((batch, hq * 64), dtype=torch.bfloat16, device=device)
+    attn_cuda_module().attn_dec(
+        qkv, inv_freq, data["seq_lens"], page_table, data["cache_loc"], data["k_cache"], data["v_cache"],
+        data["k_scale"], data["v_scale"], out, ws_acc, ws_ml, counters, batch, hq, hkv, page.bit_length() - 1,
+        window, int(bool(cfg["rope_theta"])), cfg["qk_scale_factor"], cfg["sm_scale"] * 1.4426950408889634, 1e-5,
+        n, stages)
+    return out
+
+
+
+
+def _attn_v4(data, n_ctas=264, stages=4, min_keys=256):
+    cfg = data["config"]
+    batch = cfg["batch"]
+    qkv = data["qkv"].reshape(batch, -1)
+    if not qkv.is_contiguous():
+        qkv = qkv.contiguous()
+    inv_freq = _inv_freq(cfg["rope_theta"], cfg["head_dim"], qkv.device)
+    out = attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=n_ctas, stages=stages, min_keys=min_keys)
+    return out.view(batch, 1, -1)
+
+
+def _kernel_v3(data):
+    """The previous routing (sim run 3c2e9a7a): sliding decode -> v1, full decode -> v3,
+    verify blocks -> FA3."""
+    cfg = data["config"]
+    batch, length = cfg["batch"], cfg["q_len"]
+    if length != 1 or cfg["num_kv_heads"] % 2:
+        return _sglang_attention(data)
+    qkv = data["qkv"].reshape(batch, -1)
+    if cfg["window"]:
+        return _fused_attention(qkv, data, cfg).view(batch, 1, -1)
+    return _attn3(qkv, data, cfg, block_n=64, warps=4, stages=3, per_sm=4).view(batch, 1, -1)
+
+
+def kernel_fn(data: Inputs) -> torch.Tensor:
+    """Decode steps -> v4 (CUDA); verify blocks -> FA3 for now."""
+    cfg = data["config"]
+    if attn_cuda_supported(cfg, data["page_table"]):
+        return _attn_v4(data)
+    return _kernel_v3(data)
+
+
+# ---------------------------------------------------------------------------------------
+# Sim (okc/sim/attention_sim_src.py), run once at import
+
+# Attention sim: bundled into a host submission (tools/make_host.py). Generates inputs exactly
+# as the judge does (its generate_input and reference math, copied from
+# muse_attention_decode/reference.py), on seeds the scored runs never use, and checks and
+# times attention variants against SGLang's path.
+
+import math
+import random
+import time
+
+import torch
+import triton
+import triton.language as tl
+from sgl_kernel.flash_attn import flash_attn_with_kvcache
+from sglang.kernels.ops.kvcache.kvcache import store_cache
+from sglang.kernels.ops.muse_spark_v12.fused_qk_norm import FusedQKNorm
+from sglang.kernels.ops.muse_spark_v12.norm_gate import rms_norm_gate
+
+HEAD_DIM = 64
+
+
+HEADS = {"tp8": (16, 2), "dp": (128, 16)}  # (query heads, key/value heads) on one GPU
+
+
+SLIDING_WINDOW = 2048
+
+
+ROPE_THETA = 500_000.0
+
+
+QK_SCALE_FACTOR = 5.4730064863875
+
+
+SM_SCALE = HEAD_DIM ** -0.5
+
+
+RMS_EPS = 1e-5
+
+
+PAGE = 64
+
+
+FP8 = torch.float8_e4m3fn
+
+
+K_SCALE = V_SCALE = 1.0
+
+
+REL_L2_TOL = 0.15
+
+
+FP8_QUERY_FACTOR = 2.5
+
+
+FP8_QUERY_FLOOR = 0.03
+
+
+FP8_QUERY_SLACK = 0.015
+
+
+QUERY_DTYPE = torch.bfloat16
+
+
+CACHE_TOL = 8e-2
+
+
+SOFT_C2 = {"sliding": (0.3, 0.75), "full": (0.5, 0.62)}
+
+
+COHERENT_HEAD = 2048
+
+
+COHERENT_ALPHA = 1.0
+
+
+def _coherent_tail(v_cache, k_cache, q, seq_lens, page_table, layer, seed, page, scale):
+    """Add the shared direction to the values of each request's low-attention keys."""
+    hkv, hq = v_cache.shape[-2], q.shape[-2]
+    group = hq // hkv
+    tail_gen = torch.Generator(device=v_cache.device).manual_seed(seed + 0xC0DE)
+    u = torch.randn((hkv, HEAD_DIM), generator=tail_gen, device=v_cache.device)
+    u = u * torch.rsqrt(u.pow(2).mean(-1, keepdim=True))
+    qn = _rms(q) * QK_SCALE_FACTOR  # [B, L, Hq, 64], as the reference attends (RoPE on sliding)
+    if layer == "sliding":
+        pos = seq_lens.long()[:, None] + torch.arange(q.shape[1], device=q.device)
+        qn = _rope(qn, pos, ROPE_THETA)
+    k_flat = k_cache.view(-1, hkv, HEAD_DIM)
+    v_flat = v_cache.view(-1, hkv, HEAD_DIM)
+    for b in range(len(seq_lens)):
+        seq = int(seq_lens[b])
+        first = max(0, seq - SLIDING_WINDOW + 1) if layer == "sliding" else 0
+        past = torch.arange(first, seq, device=q.device)
+        rows = page_table[b].long()[past // page] * page + past % page
+        keys = _dequant(k_flat[rows], scale)  # [S, Hkv, 64]
+        # Each key's best logit over its KV head's query heads and the block's tokens.
+        logits = torch.einsum("lkgd,skd->kgls", qn[b].view(-1, hkv, group, HEAD_DIM), keys)
+        best = logits.flatten(1, 2).amax(1)  # [Hkv, S]
+        if best.shape[1] <= COHERENT_HEAD:
+            continue
+        tail = best < best.topk(COHERENT_HEAD, -1).values[:, -1:]  # [Hkv, S]
+        vals = _dequant(v_flat[rows], scale) + COHERENT_ALPHA * tail.T[..., None] * u
+        v_flat[rows] = _quant(vals, scale)
+
+
+AGENTIC_SPREAD = 0.075
+
+
+def _longest(ctx: int, spread: str) -> int:
+    """The longest length _lengths can draw."""
+    if spread == "fixed":
+        return ctx
+    if spread == "agentic":
+        return math.ceil(ctx * (1 + AGENTIC_SPREAD))
+    return 4 * ctx
+
+
+def _lengths(gen, batch: int, ctx: int, spread: str, device) -> torch.Tensor:
+    if spread == "fixed":
+        return torch.full((batch,), ctx, dtype=torch.int64, device=device)
+    if spread == "agentic":
+        u = torch.rand((batch,), generator=gen, device=device)
+        return (ctx * (1 + AGENTIC_SPREAD * (2 * u - 1))).long().clamp(1, _longest(ctx, spread))
+    # Log-normal around ctx: many short requests, a long tail.
+    z = torch.randn((batch,), generator=gen, device=device)
+    return (ctx * torch.exp(z - 0.5)).clamp(16, 4 * ctx).long()
+
+
+def _quant(x, scale):
+    return (x.float() / scale).to(FP8)
+
+
+def _dequant(x, scale):
+    return x.float() * scale
+
+
+CACHE_CHUNK = 1 << 20  # cache rows generated at a time
+
+
+def _fill_cache(gen, shape, device, scale=K_SCALE, seed=0, dist="normal", layer="full"):
+    """FP8 key and value caches of `shape`: N(0, 1) entries, soft keys for dist="soft" and
+    "coherent" (see SOFT_C2)."""
+    hkv = shape[-2]
+    k_cache = torch.empty(shape, dtype=FP8, device=device)
+    v_cache = torch.empty(shape, dtype=FP8, device=device)
+    mix = None
+    if dist in ("soft", "coherent"):
+        # Its own generator, so the other inputs match the same seed's normal case.
+        soft = torch.Generator(device=device).manual_seed(seed + 0x50F7)
+        u = torch.randn((hkv, HEAD_DIM), generator=soft, device=device)
+        u = u * torch.rsqrt(u.pow(2).mean(-1, keepdim=True))
+        lo, hi = SOFT_C2[layer]
+        c2 = lo + (hi - lo) * torch.rand((hkv, 1), generator=soft, device=device)
+        mix = (c2.sqrt() * u, (1 - c2).sqrt())
+    for dst, keys in ((k_cache, True), (v_cache, False)):
+        flat = dst.view(-1, hkv, HEAD_DIM)
+        for at in range(0, flat.shape[0], CACHE_CHUNK):
+            n = min(CACHE_CHUNK, flat.shape[0] - at)
+            x = torch.randn((n, hkv, HEAD_DIM), generator=gen, device=device)
+            if keys and mix is not None:
+                x = mix[0] + mix[1] * x
+            flat[at:at + n] = _quant(x, scale)
+    return k_cache, v_cache
+
+
+def _fa3_scheduler_metadata(cache_seqlens, cu_seqlens_q, hq, hkv, page, q_len, layer):
+    """FA3's tile schedule for a decode step on a full-attention layer
+    (sgl_kernel.flash_attn.get_scheduler_metadata), which SGLang builds once per step from the
+    batch's lengths and shares across those layers. None on sliding-window layers and verify
+    blocks, where SGLang leaves it to each call."""
+    if layer != "full" or q_len != 1:
+        return None
+    try:
+        from sgl_kernel.flash_attn import get_scheduler_metadata
+    except ImportError:
+        return None
+    return get_scheduler_metadata(
+        batch_size=cache_seqlens.shape[0], max_seqlen_q=1, max_seqlen_k=int(cache_seqlens.max()),
+        num_heads=hq, num_heads_k=hkv, headdim=HEAD_DIM, cache_seqlens=cache_seqlens, qkv_dtype=FP8,
+        cu_seqlens_q=cu_seqlens_q, page_size=page, causal=True, num_splits=0)
+
+
+def generate_input(batch: int, ctx: int, heads: str, layer: str, seed: int, q_len: int = 1,
+                   spread: str = "fixed", dist: str = "normal", page: int = PAGE,
+                   kv_scale: float = K_SCALE, device: str = "cuda", **_):
+    """layer: "sliding" (2,048-token window, RoPE) or "full" (every cached token, no RoPE).
+    q_len: 1 for a decode step, 8 for a speculative-decoding verify block (causal inside it).
+    dist: "normal", "soft" (see SOFT_C2), "coherent" (see COHERENT_HEAD), or "edges": keys
+    aligned with each KV head's queries at the window edges, relative to the block's first
+    token (sliding: the oldest position inside the window and the newest just outside it;
+    full: position 0)."""
+    gen = torch.Generator(device=device).manual_seed(seed)
+    hq, hkv = HEADS[heads]
+    seq_lens = _lengths(gen, batch, ctx, spread, device)
+    pages_per = (seq_lens + q_len + page - 1) // page  # room for the new tokens
+    # The pool and page table are sized for the longest possible length, so every
+    # repetition's inputs have the same shapes (one CUDA graph is replayed on fresh inputs).
+    longest = _longest(ctx, spread)
+    max_pages = (longest + q_len + page - 1) // page
+    total = batch * max_pages
+    # Physical pages are scattered.
+    perm = torch.randperm(total, generator=gen, device=device).to(torch.int32)
+    page_table = torch.full((batch, max_pages), -1, dtype=torch.int32, device=device)
+    offsets = torch.cumsum(pages_per, 0) - pages_per
+    for b in range(batch):
+        n, o = int(pages_per[b]), int(offsets[b])
+        page_table[b, :n] = perm[o:o + n]
+
+    # Cached keys are post-norm (unit RMS per head); values are projections, scale ~1.
+    shape = (total, page, hkv, HEAD_DIM)
+    k_cache, v_cache = _fill_cache(gen, shape, device, kv_scale, seed, dist, layer)
+    q = (2 * torch.randn((batch, q_len, hq, HEAD_DIM), generator=gen, device=device)).to(torch.bfloat16)
+    if dist == "coherent":
+        _coherent_tail(v_cache, k_cache, q, seq_lens, page_table, layer, seed, page, kv_scale)
+    if dist == "edges":
+        # Each KV head's key points along its group's first query head of the block's first
+        # token, as the kernel will see it (normalized, then RoPE on sliding layers).
+        qn = _rms(q[:, 0])
+        if layer == "sliding":
+            qn = _rope(qn, seq_lens, ROPE_THETA)
+        planted = _quant(qn[:, :: hq // hkv], kv_scale)  # [B, Hkv, 64]
+        k_flat = k_cache.view(-1, hkv, HEAD_DIM)
+        for b in range(batch):
+            p = int(seq_lens[b])
+            spots = [p - SLIDING_WINDOW + 1, p - SLIDING_WINDOW] if layer == "sliding" else [0]
+            for t in spots:
+                if 0 <= t < p:
+                    k_flat[int(page_table[b, t // page]) * page + t % page] = planted[b]
+    k_new = (2 * torch.randn((batch, q_len, hkv, HEAD_DIM), generator=gen, device=device)).to(torch.bfloat16)
+    v_new = torch.randn((batch, q_len, hkv, HEAD_DIM), generator=gen, device=device).to(torch.bfloat16)
+    gate = torch.randn((batch, q_len, hq * HEAD_DIM), generator=gen, device=device).to(torch.bfloat16)
+    # Fused projection output, per token: q | k | v | gate.
+    qkv = torch.cat([q.flatten(2), k_new.flatten(2), v_new.flatten(2), gate], -1)
+    # Step metadata: each new token's position and flat cache row, per-request cache lengths
+    # (including the new tokens) and query offsets, and on full-attention decode steps FA3's
+    # tile schedule.
+    positions = (seq_lens[:, None] + torch.arange(q_len, device=device)).reshape(-1)
+    pos = positions.view(batch, q_len)
+    cache_loc = (torch.gather(page_table.long(), 1, pos // page) * page + pos % page).reshape(-1)
+    cache_seqlens = (seq_lens + q_len).to(torch.int32)
+    cu_seqlens_q = torch.arange(0, batch * q_len + 1, q_len, dtype=torch.int32, device=device)
+    return {
+        "qkv": qkv,
+        "positions": positions,
+        "cache_loc": cache_loc,
+        "cache_seqlens": cache_seqlens,
+        "cu_seqlens_q": cu_seqlens_q,
+        "scheduler_metadata": _fa3_scheduler_metadata(cache_seqlens, cu_seqlens_q, hq, hkv, page, q_len, layer),
+        "k_cache": k_cache,
+        "v_cache": v_cache,
+        "k_scale": torch.tensor(kv_scale, dtype=torch.float32, device=device),
+        "v_scale": torch.tensor(kv_scale, dtype=torch.float32, device=device),
+        "page_table": page_table,
+        "seq_lens": seq_lens.to(torch.int32),
+        "config": {
+            "batch": batch,
+            "q_len": q_len,
+            "num_q_heads": hq,
+            "num_kv_heads": hkv,
+            "head_dim": HEAD_DIM,
+            "page_size": page,
+            "window": SLIDING_WINDOW if layer == "sliding" else 0,
+            "rope_theta": ROPE_THETA if layer == "sliding" else 0.0,
+            "qk_scale_factor": QK_SCALE_FACTOR,
+            "sm_scale": SM_SCALE,
+            "kv_scale": kv_scale,
+        },
+    }
+
+
+def split_qkv(data):
+    """q [B, L, Hq, 64], k and v [B, L, Hkv, 64], gate [B, L, Hq*64] from the fused input."""
+    cfg = data["config"]
+    hq, hkv, d = cfg["num_q_heads"], cfg["num_kv_heads"], cfg["head_dim"]
+    batch, length = cfg["batch"], cfg["q_len"]
+    q, k, v, gate = data["qkv"].split([hq * d, hkv * d, hkv * d, hq * d], -1)
+    return (q.reshape(batch, length, hq, d), k.reshape(batch, length, hkv, d), v.reshape(batch, length, hkv, d),
+            gate)
+
+
+def _rms(x, eps=RMS_EPS):
+    x = x.float()
+    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+
+
+def _rope(x, pos, theta):
+    """Interleaved (GPT-J) RoPE: pairs (2i, 2i+1) rotate by pos * theta^(-2i/64).
+    x [..., heads, 64] with pos broadcast over everything but the last two dims."""
+    inv_freq = 1.0 / (theta ** (torch.arange(0, HEAD_DIM, 2, device=x.device).float() / HEAD_DIM))
+    ang = pos.float()[..., None] * inv_freq
+    cos, sin = ang.cos().unsqueeze(-2), ang.sin().unsqueeze(-2)
+    even, odd = x[..., 0::2], x[..., 1::2]
+    return torch.stack([even * cos - odd * sin, even * sin + odd * cos], -1).flatten(-2)
+
+
+def _rows(data, positions):
+    """Flat cache rows of [B, L] positions."""
+    size = data["config"]["page_size"]
+    page = torch.gather(data["page_table"].long(), 1, positions // size)
+    return page * size + positions % size
+
+
+def new_slots(data) -> torch.Tensor:
+    """[B, L] flat cache rows where the block's new tokens go."""
+    pos = data["seq_lens"].long()[:, None] + torch.arange(data["config"]["q_len"], device=data["seq_lens"].device)
+    return _rows(data, pos)
+
+
+def ref_kernel(data, query_dtype=None, new_kv=None):
+    """Returns (output [B, L, Hq*64], new keys and values [B, L, Hkv, 64] as stored: FP8).
+    query_dtype: the precision queries are rounded to (default QUERY_DTYPE). With new_kv
+    (FP8 keys and values [B, L, Hkv, 64]), the block attends those as its own entries."""
+    cfg = data["config"]
+    batch, length = cfg["batch"], cfg["q_len"]
+    hq, hkv = cfg["num_q_heads"], cfg["num_kv_heads"]
+    q_in, k_in, v_in, gate = split_qkv(data)
+    pos = data["seq_lens"].long()[:, None] + torch.arange(length, device=q_in.device)
+    q = _rms(q_in) * cfg["qk_scale_factor"]
+    k = _rms(k_in)
+    if cfg["rope_theta"]:
+        q, k = _rope(q, pos, cfg["rope_theta"]), _rope(k, pos, cfg["rope_theta"])
+    # FP8 rounds the normalized query, before qk_scale_factor.
+    query_dtype = query_dtype or QUERY_DTYPE
+    if query_dtype == torch.bfloat16:
+        q = q.to(torch.bfloat16).float()
+    else:
+        q = (q / cfg["qk_scale_factor"]).to(query_dtype).float() * cfg["qk_scale_factor"]
+    k_new, v_new = _quant(k, data["k_scale"]), _quant(v_in, data["v_scale"])
+    if new_kv is not None:
+        k_new, v_new = new_kv
+    k_flat = data["k_cache"].view(-1, hkv, HEAD_DIM)
+    v_flat = data["v_cache"].view(-1, hkv, HEAD_DIM)
+    group = hq // hkv
+
+    out = torch.empty((batch, length, hq, HEAD_DIM), device=q.device)
+    for b in range(batch):
+        seq = int(data["seq_lens"][b])
+        past = torch.arange(seq, device=q.device)
+        size = cfg["page_size"]
+        past_rows = data["page_table"][b].long()[past // size] * size + past % size
+        keys_past = _dequant(k_flat[past_rows], data["k_scale"])
+        vals_past = _dequant(v_flat[past_rows], data["v_scale"])
+        keys = torch.cat([keys_past, _dequant(k_new[b], data["k_scale"])])  # positions 0 .. seq+L-1
+        vals = torch.cat([vals_past, _dequant(v_new[b], data["v_scale"])])
+        for j in range(length):
+            p = seq + j
+            start = max(0, p - cfg["window"] + 1) if cfg["window"] else 0
+            kb, vb = keys[start:p + 1], vals[start:p + 1]
+            att = torch.einsum("kgd,tkd->kgt", q[b, j].view(hkv, group, HEAD_DIM), kb) * cfg["sm_scale"]
+            out[b, j] = torch.einsum("kgt,tkd->kgd", att.softmax(-1), vb).reshape(hq, HEAD_DIM)
+    out = _rms(out) * torch.sigmoid(gate.float()).view(batch, length, hq, HEAD_DIM)
+    return out.reshape(batch, length, hq * HEAD_DIM), k_new, v_new
+
+
+
+LOG2E = 1.4426950408889634
+
+
+NUM_SMS = 132
+
+
+_INV_FREQ = {}
+
+
+def _inv_freq(theta, d, device):
+    """RoPE frequencies computed exactly as SGLang's / the reference's (FP32)."""
+    key = (theta, d, device)
+    t = _INV_FREQ.get(key)
+    if t is None:
+        if theta:
+            t = 1.0 / (theta ** (torch.arange(0, d, 2, dtype=torch.float, device=device) / d))
+        else:
+            t = torch.zeros(d // 2, dtype=torch.float, device=device)
+        _INV_FREQ[key] = t = t.contiguous()
+    return t
+
+
+@triton.jit
+def _load_heads(qkv_ptr, inv_freq_ptr, tok0, pos0, col0, rows, QKV_W, eps, factor,
+                G: tl.constexpr, NROWS: tl.constexpr, HD: tl.constexpr, ROPE: tl.constexpr, NORM: tl.constexpr):
+    """[R, HD] fp32 rows r = j * G + g: head (col0 / HD + g) of token tok0 + j (position pos0 + j),
+    RMS-normalized and rotated (interleaved RoPE) when asked. Rows >= NROWS are zero."""
+    d = tl.arange(0, HD)
+    j = rows // G
+    g = rows % G
+    rmask = rows < NROWS
+    base = qkv_ptr + (tok0 + j)[:, None].to(tl.int64) * QKV_W + col0 + g[:, None] * HD
+    x = tl.load(base + d[None, :], mask=rmask[:, None], other=0.0).to(tl.float32)
+    if NORM:
+        inv = tl.rsqrt(tl.sum(x * x, axis=1) / HD + eps)
+        x = x * (inv * factor)[:, None]
+    if ROPE:
+        # out[2i] = x[2i] cos - x[2i+1] sin, out[2i+1] = x[2i+1] cos + x[2i] sin
+        xp = tl.load(base + (d ^ 1)[None, :], mask=rmask[:, None], other=0.0).to(tl.float32)
+        if NORM:
+            xp = xp * (inv * factor)[:, None]
+        freq = tl.load(inv_freq_ptr + d // 2)
+        ang = (pos0 + j).to(tl.float32)[:, None] * freq[None, :]
+        sign = tl.where(d % 2 == 0, -1.0, 1.0)
+        x = x * tl.cos(ang) + sign[None, :] * xp * tl.sin(ang)
+    return x
+
+
+@triton.jit
+def _attn_split_kernel(
+        qkv_ptr, inv_freq_ptr, seq_lens_ptr, page_table_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr,
+        k_scale_ptr, v_scale_ptr, out_ptr, ws_acc_ptr, ws_ml_ptr,
+        QKV_W, PT_STRIDE, CHUNK, sm_scale_log2, qk_factor, eps,
+        HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr, G: tl.constexpr,
+        R: tl.constexpr, RN: tl.constexpr, PAGE: tl.constexpr, WINDOW: tl.constexpr, ROPE: tl.constexpr,
+        SPLITS: tl.constexpr, BLOCK_N: tl.constexpr, DIRECT: tl.constexpr):
+    s = tl.program_id(0)
+    h = tl.program_id(1)
+    b = tl.program_id(2)
+    seq = tl.load(seq_lens_ptr + b)
+    rows = tl.arange(0, R)
+    jrow = rows // G
+    qpos = seq + jrow  # each row's query position
+    d = tl.arange(0, HD)
+    tok0 = b * L
+
+    # Queries: RMSNorm x 5.473 (+ RoPE), rounded to BF16 as the reference does.
+    q = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, h * G * HD, rows, QKV_W, eps, qk_factor,
+                    G, G * L, HD, ROPE, True).to(tl.bfloat16)
+
+    k_scale = tl.load(k_scale_ptr)
+    v_scale = tl.load(v_scale_ptr)
+    qk_scale = sm_scale_log2 * k_scale  # scores in log2 units
+
+    # This split's share of the cached keys [lo, seq).
+    if WINDOW > 0:
+        first = tl.maximum(seq - WINDOW + 1, 0)
+    else:
+        first = seq * 0
+    lo = first + s * CHUNK
+    hi = tl.minimum(lo + CHUNK, seq)
+
+    m_i = tl.full((R,), float("-inf"), tl.float32)
+    l_i = tl.zeros((R,), tl.float32)
+    acc = tl.zeros((R, HD), tl.float32)
+    offs_n = tl.arange(0, BLOCK_N)
+    for start in range(lo, hi, BLOCK_N):
+        kpos = start + offs_n
+        kmask = kpos < hi
+        page = tl.load(page_table_ptr + b.to(tl.int64) * PT_STRIDE + kpos // PAGE, mask=kmask, other=0)
+        row = page.to(tl.int64) * PAGE + kpos % PAGE
+        kv_off = (row * HKV + h)[:, None] * HD + d[None, :]
+        k = tl.load(k_cache_ptr + kv_off, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        v = tl.load(v_cache_ptr + kv_off, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        sc = tl.dot(q, tl.trans(k)) * qk_scale
+        valid = kmask[None, :]
+        if WINDOW > 0:
+            valid = valid & (kpos[None, :] > qpos[:, None] - WINDOW)
+        sc = tl.where(valid, sc, float("-inf"))
+        m_new = tl.maximum(m_i, tl.max(sc, axis=1))
+        m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+        alpha = tl.exp2(m_i - m_safe)
+        p = tl.exp2(sc - m_safe[:, None])
+        l_i = l_i * alpha + tl.sum(p, axis=1)
+        acc = acc * alpha[:, None] + tl.dot(p.to(tl.bfloat16), v)
+        m_i = m_new
+
+    if s == SPLITS - 1:
+        # The block's own L keys and values: normalized (+ RoPE), FP8 like the cache, stored to
+        # their rows, and attended from registers (causal inside the block).
+        nrows = tl.arange(0, RN)
+        nmask = nrows < L
+        kn = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, HQ * HD + h * HD, nrows, QKV_W, eps, 1.0,
+                         1, L, HD, ROPE, True)
+        vn = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, (HQ + HKV) * HD + h * HD, nrows, QKV_W, eps, 1.0,
+                         1, L, HD, False, False)
+        kq = (kn / k_scale).to(k_cache_ptr.dtype.element_ty)
+        vq = (vn / v_scale).to(v_cache_ptr.dtype.element_ty)
+        loc = tl.load(cache_loc_ptr + tok0 + nrows, mask=nmask, other=0).to(tl.int64)
+        new_off = (loc * HKV + h)[:, None] * HD + d[None, :]
+        tl.store(k_cache_ptr + new_off, kq, mask=nmask[:, None])
+        tl.store(v_cache_ptr + new_off, vq, mask=nmask[:, None])
+        k = kq.to(tl.bfloat16)
+        v = vq.to(tl.bfloat16)
+        sc = tl.dot(q, tl.trans(k)) * qk_scale
+        valid = nmask[None, :] & (nrows[None, :] <= jrow[:, None])
+        sc = tl.where(valid, sc, float("-inf"))
+        m_new = tl.maximum(m_i, tl.max(sc, axis=1))
+        m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+        alpha = tl.exp2(m_i - m_safe)
+        p = tl.exp2(sc - m_safe[:, None])
+        l_i = l_i * alpha + tl.sum(p, axis=1)
+        acc = acc * alpha[:, None] + tl.dot(p.to(tl.bfloat16), v)
+        m_i = m_new
+
+    rmask = rows < G * L
+    if DIRECT:
+        o = acc / tl.where(l_i == 0.0, 1.0, l_i)[:, None] * v_scale
+        _norm_gate_store(o, qkv_ptr, out_ptr, tok0, h, rows, rmask, QKV_W, eps, HQ, HKV, HD, G)
+    else:
+        base = ((b * HKV + h) * SPLITS + s).to(tl.int64) * R
+        tl.store(ws_acc_ptr + (base + rows)[:, None] * HD + d[None, :], acc)
+        tl.store(ws_ml_ptr + (base + rows) * 2, m_i)
+        tl.store(ws_ml_ptr + (base + rows) * 2 + 1, l_i)
+
+
+@triton.jit
+def _norm_gate_store(o, qkv_ptr, out_ptr, tok0, h, rows, rmask, QKV_W, eps,
+                     HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, G: tl.constexpr):
+    """out[token, head] = RMSNorm(o) * sigmoid(gate) for rows r = j * G + g of KV head h."""
+    d = tl.arange(0, HD)
+    j = rows // G
+    head = h * G + rows % G
+    inv = tl.rsqrt(tl.sum(o * o, axis=1) / HD + eps)
+    tok = (tok0 + j).to(tl.int64)
+    gate = tl.load(qkv_ptr + tok[:, None] * QKV_W + (HQ + 2 * HKV) * HD + head[:, None] * HD + d[None, :],
+                   mask=rmask[:, None], other=0.0).to(tl.float32)
+    y = o * inv[:, None] * tl.sigmoid(gate)
+    tl.store(out_ptr + tok[:, None] * (HQ * HD) + head[:, None] * HD + d[None, :], y.to(tl.bfloat16),
+             mask=rmask[:, None])
+
+
+@triton.jit
+def _attn_combine_kernel(qkv_ptr, out_ptr, ws_acc_ptr, ws_ml_ptr, v_scale_ptr, QKV_W, eps,
+                         HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr,
+                         G: tl.constexpr, R: tl.constexpr, SPLITS: tl.constexpr):
+    h = tl.program_id(0)
+    b = tl.program_id(1)
+    rows = tl.arange(0, R)
+    d = tl.arange(0, HD)
+    m_i = tl.full((R,), float("-inf"), tl.float32)
+    l_i = tl.zeros((R,), tl.float32)
+    acc = tl.zeros((R, HD), tl.float32)
+    for s in range(SPLITS):
+        base = ((b * HKV + h) * SPLITS + s).to(tl.int64) * R
+        m_s = tl.load(ws_ml_ptr + (base + rows) * 2)
+        l_s = tl.load(ws_ml_ptr + (base + rows) * 2 + 1)
+        a_s = tl.load(ws_acc_ptr + (base + rows)[:, None] * HD + d[None, :])
+        m_new = tl.maximum(m_i, m_s)
+        m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+        alpha = tl.exp2(m_i - m_safe)
+        beta = tl.exp2(m_s - m_safe)
+        l_i = l_i * alpha + l_s * beta
+        acc = acc * alpha[:, None] + a_s * beta[:, None]
+        m_i = m_new
+    o = acc / tl.where(l_i == 0.0, 1.0, l_i)[:, None] * tl.load(v_scale_ptr)
+    _norm_gate_store(o, qkv_ptr, out_ptr, b * L, h, rows, rows < G * L, QKV_W, eps, HQ, HKV, HD, G)
+
+
+def _plan(batch, hkv, span, length):
+    """(splits, block_n): enough programs to keep the GPU's memory system busy, with at
+    least a few key blocks per split."""
+    block_n = 64
+    want = 2 * NUM_SMS
+    splits = max(1, min(triton.cdiv(want, batch * hkv), triton.cdiv(span, 2 * block_n)))
+    return splits, block_n
+
+
+def _fused_attention(qkv, data, cfg):
+    """Attention between the QKV and output projections: qkv [T, (2Hq + 2Hkv) * 64] BF16 (the
+    fused projection output, request-major), returns [T, Hq * 64] BF16. Writes the new keys
+    and values into data's caches."""
+    batch, length = cfg["batch"], cfg["q_len"]
+    hq, hkv, hd = cfg["num_q_heads"], cfg["num_kv_heads"], cfg["head_dim"]
+    group = hq // hkv
+    page = cfg["page_size"]
+    window = cfg["window"]
+    if not qkv.is_contiguous():
+        qkv = qkv.contiguous()
+    device = qkv.device
+    page_table = data["page_table"]
+    capacity = page_table.shape[1] * page
+    span = min(window, capacity) if window else capacity
+    splits, block_n = _plan(batch, hkv, span, length)
+    chunk = triton.cdiv(span, splits)
+    chunk = triton.cdiv(chunk, block_n) * block_n
+    splits = triton.cdiv(span, chunk)
+    rows = max(16, triton.next_power_of_2(group * length))
+    rows_new = max(16, triton.next_power_of_2(length))
+    out = torch.empty((batch * length, hq * hd), device=device, dtype=torch.bfloat16)
+    direct = splits == 1
+    if direct:
+        ws_acc = ws_ml = out  # unused
+    else:
+        ws_acc = torch.empty((batch, hkv, splits, rows, hd), device=device, dtype=torch.float32)
+        ws_ml = torch.empty((batch, hkv, splits, rows, 2), device=device, dtype=torch.float32)
+    rope = bool(cfg["rope_theta"])
+    inv_freq = _inv_freq(cfg["rope_theta"], hd, device)
+    qkv_w = qkv.shape[-1]
+    _attn_split_kernel[(splits, hkv, batch)](
+        qkv, inv_freq, data["seq_lens"], page_table, data["cache_loc"], data["k_cache"], data["v_cache"],
+        data["k_scale"], data["v_scale"], out, ws_acc, ws_ml,
+        qkv_w, page_table.stride(0), chunk, cfg["sm_scale"] * LOG2E, cfg["qk_scale_factor"], RMS_EPS,
+        HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, RN=rows_new, PAGE=page, WINDOW=window, ROPE=rope,
+        SPLITS=splits, BLOCK_N=block_n, DIRECT=direct, num_warps=4, num_stages=2)
+    if not direct:
+        _attn_combine_kernel[(hkv, batch)](
+            qkv, out, ws_acc, ws_ml, data["v_scale"], qkv_w, RMS_EPS,
+            HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, SPLITS=splits, num_warps=4)
+    return out
+
+
+@triton.jit
+def _attn3_step(q, k, v, valid, m_i, l_i, acc, qk_scale):
+    """One online-softmax step: scores of q [R, HD] against k [N, HD], masked by valid [R, N]."""
+    sc = tl.dot(q, tl.trans(k)) * qk_scale
+    sc = tl.where(valid, sc, float("-inf"))
+    m_new = tl.maximum(m_i, tl.max(sc, axis=1))
+    m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+    alpha = tl.exp2(m_i - m_safe)
+    p = tl.exp2(sc - m_safe[:, None])
+    l_i = l_i * alpha + tl.sum(p, axis=1)
+    acc = acc * alpha[:, None] + tl.dot(p.to(tl.bfloat16), v)
+    return m_new, l_i, acc
+
+
+@triton.jit
+def _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q, m_i, l_i, acc,
+                    tok0, seq, h, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
+                    HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr, RN: tl.constexpr,
+                    ROPE: tl.constexpr):
+    """The block's own L keys and values for KV head h: normalized (+ RoPE), stored to the
+    cache in FP8, and attended from registers (causal inside the block)."""
+    d = tl.arange(0, HD)
+    nrows = tl.arange(0, RN)
+    nmask = nrows < L
+    kn = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, HQ * HD + h * HD, nrows, QKV_W, eps, 1.0,
+                     1, L, HD, ROPE, True)
+    vn = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, (HQ + HKV) * HD + h * HD, nrows, QKV_W, eps, 1.0,
+                     1, L, HD, False, False)
+    kq = (kn / k_scale).to(k_cache_ptr.dtype.element_ty)
+    vq = (vn / v_scale).to(v_cache_ptr.dtype.element_ty)
+    loc = tl.load(cache_loc_ptr + tok0 + nrows, mask=nmask, other=0).to(tl.int64)
+    off = (loc * HKV + h)[:, None] * HD + d[None, :]
+    tl.store(k_cache_ptr + off, kq, mask=nmask[:, None])
+    tl.store(v_cache_ptr + off, vq, mask=nmask[:, None])
+    valid = nmask[None, :] & (nrows[None, :] <= jrow[:, None])
+    return _attn3_step(q, kq.to(tl.bfloat16), vq.to(tl.bfloat16), valid, m_i, l_i, acc, qk_scale)
+
+
+@triton.jit
+def _attn3_split_kernel(
+        qkv_ptr, inv_freq_ptr, seq_lens_ptr, page_table_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr,
+        k_scale_ptr, v_scale_ptr, ws_acc_ptr, ws_ml_ptr,
+        QKV_W, PT_STRIDE, CHUNK, sm_scale_log2, qk_factor, eps,
+        HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr, G: tl.constexpr,
+        R: tl.constexpr, RN: tl.constexpr, PAGE: tl.constexpr, WINDOW: tl.constexpr, ROPE: tl.constexpr,
+        SPLITS: tl.constexpr, BLOCK_N: tl.constexpr, HP: tl.constexpr):
+    s = tl.program_id(0)
+    h0 = tl.program_id(1) * HP
+    h1 = h0 + HP - 1  # == h0 when HP == 1 (its work is skipped)
+    b = tl.program_id(2)
+    seq = tl.load(seq_lens_ptr + b)
+    rows = tl.arange(0, R)
+    jrow = rows // G
+    qpos = seq + jrow
+    d = tl.arange(0, HD)
+    tok0 = b * L
+    q0 = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, h0 * G * HD, rows, QKV_W, eps, qk_factor,
+                     G, G * L, HD, ROPE, True).to(tl.bfloat16)
+    q1 = _load_heads(qkv_ptr, inv_freq_ptr, tok0, seq, h1 * G * HD, rows, QKV_W, eps, qk_factor,
+                     G, G * L, HD, ROPE, True).to(tl.bfloat16)
+    k_scale = tl.load(k_scale_ptr)
+    v_scale = tl.load(v_scale_ptr)
+    qk_scale = sm_scale_log2 * k_scale
+    if WINDOW > 0:
+        first = tl.maximum(seq - WINDOW + 1, 0)
+    else:
+        first = seq * 0
+    lo = first + s * CHUNK
+    hi = tl.minimum(lo + CHUNK, seq)
+
+    m0 = tl.full((R,), float("-inf"), tl.float32)
+    l0 = tl.zeros((R,), tl.float32)
+    a0 = tl.zeros((R, HD), tl.float32)
+    m1 = tl.full((R,), float("-inf"), tl.float32)
+    l1 = tl.zeros((R,), tl.float32)
+    a1 = tl.zeros((R, HD), tl.float32)
+    offs_n = tl.arange(0, BLOCK_N)
+    pt_row = page_table_ptr + b.to(tl.int64) * PT_STRIDE
+    for start in range(lo, hi, BLOCK_N):
+        kpos = start + offs_n
+        kmask = kpos < hi
+        page = tl.load(pt_row + kpos // PAGE, mask=kmask, other=0)
+        base = (page.to(tl.int64) * PAGE + kpos % PAGE) * HKV
+        off0 = (base + h0)[:, None] * HD + d[None, :]
+        off1 = off0 + HD
+        k0 = tl.load(k_cache_ptr + off0, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        v0 = tl.load(v_cache_ptr + off0, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+        valid = kmask[None, :]
+        if WINDOW > 0:
+            valid = valid & (kpos[None, :] > qpos[:, None] - WINDOW)
+        m0, l0, a0 = _attn3_step(q0, k0, v0, valid, m0, l0, a0, qk_scale)
+        if HP == 2:
+            k1 = tl.load(k_cache_ptr + off1, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+            v1 = tl.load(v_cache_ptr + off1, mask=kmask[:, None], other=0.0).to(tl.bfloat16)
+            m1, l1, a1 = _attn3_step(q1, k1, v1, valid, m1, l1, a1, qk_scale)
+
+    if s == SPLITS - 1:
+        m0, l0, a0 = _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q0, m0, l0, a0,
+                                     tok0, seq, h0, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
+                                     HQ, HKV, HD, L, RN, ROPE)
+        if HP == 2:
+            m1, l1, a1 = _attn3_new_keys(qkv_ptr, inv_freq_ptr, cache_loc_ptr, k_cache_ptr, v_cache_ptr, q1, m1, l1,
+                                         a1, tok0, seq, h1, jrow, QKV_W, eps, k_scale, v_scale, qk_scale,
+                                         HQ, HKV, HD, L, RN, ROPE)
+    for hh in tl.static_range(HP):
+        if hh == 0:
+            m_i, l_i, acc, h = m0, l0, a0, h0
+        else:
+            m_i, l_i, acc, h = m1, l1, a1, h1
+        base_ws = ((b * HKV + h) * SPLITS + s).to(tl.int64) * R
+        tl.store(ws_acc_ptr + (base_ws + rows)[:, None] * HD + d[None, :], acc)
+        tl.store(ws_ml_ptr + (base_ws + rows) * 2, m_i)
+        tl.store(ws_ml_ptr + (base_ws + rows) * 2 + 1, l_i)
+
+
+@triton.jit
+def _attn3_combine_kernel(qkv_ptr, out_ptr, ws_acc_ptr, ws_ml_ptr, v_scale_ptr, QKV_W, eps,
+                          HQ: tl.constexpr, HKV: tl.constexpr, HD: tl.constexpr, L: tl.constexpr,
+                          G: tl.constexpr, R: tl.constexpr, SPLITS: tl.constexpr, SC: tl.constexpr):
+    """One program per (query head, request, block token): merges that row's splits in
+    vectorized chunks of SC, then RMSNorm x sigmoid(gate)."""
+    hq = tl.program_id(0)
+    b = tl.program_id(1)
+    j = tl.program_id(2)
+    h = hq // G
+    r = j * G + hq % G
+    d = tl.arange(0, HD)
+    sc = tl.arange(0, SC)
+    m_run = tl.full((1,), float("-inf"), tl.float32)
+    l_run = tl.zeros((1,), tl.float32)
+    acc = tl.zeros((HD,), tl.float32)
+    for c0 in range(0, SPLITS, SC):
+        si = c0 + sc
+        smask = si < SPLITS
+        idx = ((b * HKV + h) * SPLITS + si).to(tl.int64) * R + r
+        m_s = tl.load(ws_ml_ptr + idx * 2, mask=smask, other=float("-inf"))
+        l_s = tl.load(ws_ml_ptr + idx * 2 + 1, mask=smask, other=0.0)
+        a_s = tl.load(ws_acc_ptr + idx[:, None] * HD + d[None, :], mask=smask[:, None], other=0.0)
+        m_new = tl.maximum(m_run, tl.max(m_s, axis=0))
+        m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+        alpha = tl.exp2(m_run - m_safe)
+        beta = tl.exp2(m_s - m_safe)
+        l_run = l_run * alpha + tl.sum(l_s * beta, axis=0)
+        acc = acc * alpha + tl.sum(a_s * beta[:, None], axis=0)
+        m_run = m_new
+    o = acc / tl.where(l_run == 0.0, 1.0, l_run) * tl.load(v_scale_ptr)
+    inv = tl.rsqrt(tl.sum(o * o, axis=0) / HD + eps)
+    tok = (b * L + j).to(tl.int64)
+    gate = tl.load(qkv_ptr + tok * QKV_W + (HQ + 2 * HKV) * HD + hq * HD + d).to(tl.float32)
+    tl.store(out_ptr + tok * (HQ * HD) + hq * HD + d, (o * inv * tl.sigmoid(gate)).to(tl.bfloat16))
+
+
+def _attn3(qkv, data, cfg, block_n=64, warps=4, stages=3, per_sm=4, min_chunk=256, hp=2):
+    """v3 attention: qkv [T, W] -> [T, Hq * 64]; writes the new cache entries."""
+    batch, length = cfg["batch"], cfg["q_len"]
+    hq, hkv, hd = cfg["num_q_heads"], cfg["num_kv_heads"], cfg["head_dim"]
+    group = hq // hkv
+    page, window = cfg["page_size"], cfg["window"]
+    if not qkv.is_contiguous():
+        qkv = qkv.contiguous()
+    device = qkv.device
+    page_table = data["page_table"]
+    capacity = page_table.shape[1] * page
+    span = min(window, capacity) if window else capacity
+    if hkv % hp:
+        hp = 1
+    pairs = hkv // hp
+    splits = max(1, min(triton.cdiv(per_sm * NUM_SMS, batch * pairs), triton.cdiv(span, min_chunk)))
+    chunk = triton.cdiv(triton.cdiv(span, splits), block_n) * block_n
+    splits = triton.cdiv(span, chunk)
+    rows = max(16, triton.next_power_of_2(group * length))
+    rows_new = max(16, triton.next_power_of_2(length))
+    ws_acc = torch.empty((batch, hkv, splits, rows, hd), device=device, dtype=torch.float32)
+    ws_ml = torch.empty((batch, hkv, splits, rows, 2), device=device, dtype=torch.float32)
+    out = torch.empty((batch * length, hq * hd), device=device, dtype=torch.bfloat16)
+    inv_freq = _inv_freq(cfg["rope_theta"], hd, device)
+    qkv_w = qkv.shape[-1]
+    _attn3_split_kernel[(splits, pairs, batch)](
+        qkv, inv_freq, data["seq_lens"], page_table, data["cache_loc"], data["k_cache"], data["v_cache"],
+        data["k_scale"], data["v_scale"], ws_acc, ws_ml,
+        qkv_w, page_table.stride(0), chunk, cfg["sm_scale"] * LOG2E, cfg["qk_scale_factor"], RMS_EPS,
+        HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, RN=rows_new, PAGE=page, WINDOW=window,
+        ROPE=bool(cfg["rope_theta"]), SPLITS=splits, BLOCK_N=block_n, HP=hp, num_warps=warps,
+        num_stages=stages)
+    _attn3_combine_kernel[(hq, batch, length)](
+        qkv, out, ws_acc, ws_ml, data["v_scale"], qkv_w, RMS_EPS,
+        HQ=hq, HKV=hkv, HD=hd, L=length, G=group, R=rows, SPLITS=splits,
+        SC=min(64, triton.next_power_of_2(splits)), num_warps=4)
+    return out
+
+
+_NORMS = {}
+
+
+_ROPE = {}
+
+
+ROPE_POSITIONS = 1 << 21
+
+
+def _qk_norm(hq, hkv, d):
+    key = (hq, hkv, d)
+    if key not in _NORMS:
+        _NORMS[key] = FusedQKNorm(head_dim=d, num_q_heads=hq, num_kv_heads=hkv, eps=RMS_EPS)
+    return _NORMS[key]
+
+
+def _cos_sin(theta, d, device):
+    """[2^21, d] float32 cos | sin, as SGLang's RotaryEmbedding builds it, cached per theta."""
+    cache = _ROPE.get(theta)
+    if cache is None:
+        inv_freq = 1.0 / (theta ** (torch.arange(0, d, 2, dtype=torch.float, device=device) / d))
+        freqs = torch.einsum("i,j -> ij", torch.arange(ROPE_POSITIONS, dtype=torch.float, device=device), inv_freq)
+        cache = _ROPE[theta] = torch.cat((freqs.cos(), freqs.sin()), dim=-1)
+    return cache
+
+
+def _sglang_attention(data):
+    cfg = data["config"]
+    batch, length = cfg["batch"], cfg["q_len"]
+    hq, hkv, d = cfg["num_q_heads"], cfg["num_kv_heads"], cfg["head_dim"]
+    tokens = batch * length
+    qkv = data["qkv"].view(tokens, -1)
+    device = qkv.device
+
+    if cfg["rope_theta"]:
+        q, k = _qk_norm(hq, hkv, d)(qkv, data["positions"], _cos_sin(cfg["rope_theta"], d, device))
+    else:
+        q, k = _qk_norm(hq, hkv, d)(qkv)
+    v = qkv[:, (hq + hkv) * d:(hq + 2 * hkv) * d]
+
+    k_cache, v_cache = data["k_cache"], data["v_cache"]
+    scaled = cfg["kv_scale"] != 1.0
+    k = k.reshape(tokens, hkv * d)
+    if scaled:
+        k, v = k / data["k_scale"], v / data["v_scale"]
+    # The pool keeps FP8 rows as bytes; slot 0 is a live row here (SGLang reserves it for padding).
+    store_cache(k.to(FP8).view(torch.uint8), v.to(FP8).view(torch.uint8),
+                k_cache.view(-1, hkv * d).view(torch.uint8), v_cache.view(-1, hkv * d).view(torch.uint8),
+                data["cache_loc"], reserved_skip_index=-1)
+
+    window = cfg["window"]
+    descale = {}
+    if scaled:
+        descale = dict(k_descale=data["k_scale"].reshape(1, 1).expand(batch, hkv),
+                       v_descale=data["v_scale"].reshape(1, 1).expand(batch, hkv))
+    out = flash_attn_with_kvcache(
+        q=q.view(tokens, hq, d).to(FP8),
+        k_cache=k_cache,
+        v_cache=v_cache,
+        page_table=data["page_table"],
+        cache_seqlens=data["cache_seqlens"],
+        cu_seqlens_q=data["cu_seqlens_q"],
+        max_seqlen_q=length,
+        # The 5.473 query factor is folded into the softmax scale, as SGLang does.
+        softmax_scale=cfg["sm_scale"] * cfg["qk_scale_factor"],
+        causal=True,
+        window_size=(window - 1, 0) if window else (-1, -1),
+        scheduler_metadata=data["scheduler_metadata"],
+        **descale,
+    )
+    if isinstance(out, tuple):
+        out = out[0]
+    gate = qkv[:, (hq + 2 * hkv) * d:]
+    o = rms_norm_gate(out.reshape(tokens, hq * d).to(torch.bfloat16), gate, None, head_dim=d, eps=RMS_EPS,
+                      has_norm=True)
+    return o.view(batch, length, hq * d)
+
+
+
+class SimBench:
+    def __init__(self, device="cuda"):
+        self.flush = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int32, device=device)
+        self.stream = torch.cuda.Stream(device)
+        self.overhead_us = 0.0
+        dummy = torch.zeros(1, device=device)
+        self.overhead_us = self._replay_times(self._capture(lambda: dummy.add_(1)), 21)[10]
+
+    def _capture(self, fn):
+        with torch.cuda.stream(self.stream):
+            fn()
+            fn()
+        self.stream.synchronize()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, stream=self.stream):
+            fn()
+        return graph
+
+    def _replay_times(self, graph, reps):
+        starts = [torch.cuda.Event(enable_timing=True) for _ in range(reps)]
+        ends = [torch.cuda.Event(enable_timing=True) for _ in range(reps)]
+        with torch.cuda.stream(self.stream):
+            for i in range(reps):
+                self.flush.zero_()
+                starts[i].record()
+                graph.replay()
+                ends[i].record()
+        ends[-1].synchronize()
+        return sorted(s.elapsed_time(e) * 1e3 for s, e in zip(starts, ends))
+
+    def compare(self, candidate, baseline, pairs=30):
+        """(candidate µs, baseline µs, median paired speedup, (lo, hi) 95% CI), net of
+        the replay overhead."""
+        ga, gb = self._capture(candidate), self._capture(baseline)
+        ev = [torch.cuda.Event(enable_timing=True) for _ in range(8 * pairs)]
+        order = []
+        with torch.cuda.stream(self.stream):
+            k = 0
+            for i in range(2 * pairs):
+                first = (ga, gb) if i % 2 == 0 else (gb, ga)
+                for g in first:
+                    self.flush.zero_()
+                    ev[k].record()
+                    g.replay()
+                    ev[k + 1].record()
+                    k += 2
+                order.append(i % 2 == 0)
+        ev[k - 1].synchronize()
+        ta, tb = [], []
+        k = 0
+        for a_first in order:
+            t1 = ev[k].elapsed_time(ev[k + 1]) * 1e3
+            t2 = ev[k + 2].elapsed_time(ev[k + 3]) * 1e3
+            k += 4
+            a, b = (t1, t2) if a_first else (t2, t1)
+            ta.append(max(a - self.overhead_us, 0.05))
+            tb.append(max(b - self.overhead_us, 0.05))
+        ratios = sorted(b / a for a, b in zip(ta, tb))
+        med = ratios[len(ratios) // 2]
+        rng = random.Random(0)
+        boots = sorted(sorted(rng.choice(ratios) for _ in ratios)[len(ratios) // 2] for _ in range(200))
+        del ga, gb
+        return sorted(ta)[len(ta) // 2], sorted(tb)[len(tb) // 2], med, (boots[5], boots[194])
+
+
+def rel_l2(a, b):
+    return float((a.float() - b.float()).norm() / b.float().norm().clamp(min=1e-12))
+
+
+def row_worst(a, b, floor=0.1):
+    """Worst row's relative error, rows measured against max(own norm, floor x mean norm)."""
+    d = (a.float() - b.float()).reshape(-1, a.shape[-1]).norm(dim=-1)
+    n = b.float().reshape(-1, b.shape[-1]).norm(dim=-1)
+    return float((d / torch.maximum(n, floor * n.mean()).clamp(min=1e-12)).max())
+
+
+class SimReport:
+    """Collects rows and prints a compact table plus a verdict per group."""
+
+    def __init__(self, title):
+        self.title = title
+        self.rows = []
+        self.t0 = time.time()
+
+    def add(self, group, case, ok, err, bound, cand_us=None, base_us=None, speedup=None, ci=None, note=""):
+        self.rows.append(dict(group=group, case=case, ok=ok, err=err, bound=bound, cand=cand_us, base=base_us,
+                              speedup=speedup, ci=ci, note=note))
+        # Compact: the judge returns only the last 16,000 characters of output.
+        s = f"{self.title[-12:]}|{group[0]}|{case}|{'ok' if ok else 'BAD'} {err:.1e}/{bound:.2f}"
+        if speedup is not None:
+            s += f"|{cand_us:.1f}/{base_us:.1f}us x{speedup:.3f} [{ci[0]:.2f},{ci[1]:.2f}]"
+        print(s + (f" {note}" if note else ""), flush=True)
+
+    def summary(self):
+        import math
+        print(f"sim {self.title}: {len(self.rows)} cases in {time.time() - self.t0:.0f} s")
+        for group in dict.fromkeys(r["group"] for r in self.rows):
+            rows = [r for r in self.rows if r["group"] == group]
+            bad = [r["case"] for r in rows if not r["ok"]]
+            sp = [r["speedup"] for r in rows if r["speedup"]]
+            if sp:
+                geo = math.exp(sum(math.log(x) for x in sp) / len(sp))
+                worst = min(rows, key=lambda r: r["speedup"] or 9)
+                print(f"sim {group}: {len(rows)} cases, {len(bad)} wrong, speedup geomean {geo:.3f},"
+                      f" min {worst['speedup']:.3f} ({worst['case']})")
+            else:
+                print(f"sim {group}: {len(rows)} cases, {len(bad)} wrong")
+            for c in bad[:5]:
+                print(f"sim   wrong: {c}")
+
+
+
+ATTN_SCORED = [
+    dict(batch=b, ctx=80000, heads="tp8", layer=layer, page=1, q_len=L,
+         dist="soft" if layer == "sliding" else "coherent", **({} if b == 1 else {"spread": "agentic"}))
+    for L in (1, 8) for b in (1, 16, 32) for layer in ("sliding", "full")]
+ATTN_TESTS = [
+    dict(batch=1, ctx=10, heads="tp8", layer="sliding"),
+    dict(batch=3, ctx=2047, heads="tp8", layer="sliding"),
+    dict(batch=5, ctx=5000, heads="tp8", layer="sliding", q_len=8, spread="mixed", page=1),
+    dict(batch=4, ctx=3000, heads="tp8", layer="full"),
+    dict(batch=8, ctx=8192, heads="dp", layer="full", spread="mixed"),
+    dict(batch=2, ctx=100000, heads="tp8", layer="full", q_len=8, page=1),
+    dict(batch=4, ctx=6000, heads="tp8", layer="sliding", dist="edges", page=1),
+    dict(batch=4, ctx=6000, heads="tp8", layer="full", q_len=8, dist="edges"),
+    dict(batch=1, ctx=1048576, heads="tp8", layer="full", q_len=8),
+    dict(batch=3, ctx=4000, heads="tp8", layer="sliding", q_len=8, page=1, kv_scale=0.015625),
+    dict(batch=2, ctx=9000, heads="tp8", layer="full", kv_scale=0.015625),
+    dict(batch=4, ctx=80000, heads="tp8", layer="full", spread="mixed", dist="soft"),
+    dict(batch=4, ctx=6000, heads="tp8", layer="sliding", q_len=8, dist="soft", page=1),
+    dict(batch=2, ctx=20000, heads="dp", layer="full", q_len=8, dist="soft"),
+    dict(batch=4, ctx=80000, heads="tp8", layer="full", spread="mixed", dist="coherent", page=1),
+    dict(batch=2, ctx=20000, heads="dp", layer="full", q_len=8, dist="coherent"),
+]
+# Shapes near the scored ones: other batches, contexts, block lengths and distributions.
+ATTN_NEARBY = [
+    dict(batch=b, ctx=ctx, heads="tp8", layer=layer, page=1, q_len=L, dist=dist, spread="agentic")
+    for (b, ctx, L, layer, dist) in (
+        (2, 80000, 1, "sliding", "soft"), (8, 80000, 1, "full", "coherent"), (24, 80000, 1, "sliding", "soft"),
+        (40, 80000, 1, "full", "coherent"), (16, 20000, 1, "full", "soft"), (16, 160000, 1, "full", "coherent"),
+        (4, 300000, 1, "full", "normal"), (16, 80000, 4, "sliding", "soft"), (16, 80000, 2, "full", "coherent"),
+        (8, 80000, 8, "full", "normal"), (24, 120000, 8, "full", "coherent"), (40, 80000, 8, "sliding", "edges"),
+        (32, 2500, 1, "sliding", "edges"), (32, 40000, 8, "full", "soft"))]
+
+
+def _attn_check(data, out):
+    """The judge's check: new cache entries within 8%; output within its FP8-query bound of an
+    FP32 reference attending our own new entries. Returns (ok, err, bound)."""
+    cfg = data["config"]
+    slots = new_slots(data)
+    hkv = cfg["num_kv_heads"]
+    k = data["k_cache"].view(-1, hkv, HEAD_DIM)[slots]
+    v = data["v_cache"].view(-1, hkv, HEAD_DIM)[slots]
+    _, rk, rv = ref_kernel(data)
+    for got, want, sc in ((k, rk, data["k_scale"]), (v, rv, data["v_scale"])):
+        if rel_l2(_dequant(got, sc), _dequant(want, sc)) > CACHE_TOL:
+            return False, rel_l2(_dequant(got, sc), _dequant(want, sc)), CACHE_TOL
+    ref = ref_kernel(data, new_kv=(k, v))[0].to(torch.bfloat16)
+    e4m3 = rel_l2(ref_kernel(data, torch.float8_e4m3fn, new_kv=(k, v))[0].to(torch.bfloat16), ref)
+    bound = min(REL_L2_TOL, max(FP8_QUERY_FLOOR, FP8_QUERY_FACTOR * e4m3 + FP8_QUERY_SLACK))
+    err = rel_l2(out, ref)
+    ok = bool(torch.isfinite(out.float()).all()) and err <= bound and row_worst(out, ref) <= 5 * bound
+    return ok, err, bound
+
+
+def _attn_name(c):
+    return (f"B{c['batch']} ctx{c['ctx']} L{c.get('q_len', 1)} {c['layer'][:4]} {c.get('heads')}"
+            f" {c.get('dist', 'normal')[:4]} p{c.get('page', 64)}" + (f" s{c['kv_scale']:.3g}" if 'kv_scale' in c else ""))
+
+
+def _clone_inputs(data):
+    return {k: (v.clone() if isinstance(v, torch.Tensor) else v) for k, v in data.items()}
+
+
+def run_attention_sim(variants, budget_s=240.0, seed=7_000_000, groups=("tests", "scored", "nearby"), only=None):
+    """variants: {name: fn(data) -> out [B, L, Hq*64]}. Checks every variant on every case and
+    times each against SGLang on the scored and nearby cases."""
+    t0 = time.time()
+    bench = SimBench()
+    print(f"sim attention: replay overhead {bench.overhead_us:.1f} us")
+    reports = {name: SimReport(f"attention {name}") for name in variants}
+    sets = {"tests": ATTN_TESTS, "scored": ATTN_SCORED, "nearby": ATTN_NEARBY}
+    i = 0
+    for group in groups:
+        for case in sets[group]:
+            if only is not None and not only(case):
+                continue
+            if time.time() - t0 > budget_s:
+                print(f"sim attention: budget reached at {group} {_attn_name(case)}")
+                break
+            i += 1
+            data = generate_input(seed=seed + i, device="cuda", **case)
+            for name, fn in variants.items():
+                rep = reports[name]
+                try:
+                    trial = _clone_inputs(data)
+                    out = fn(trial)
+                    ok, err, bound = _attn_check(trial, out)
+                    if group == "tests":
+                        rep.add(group, _attn_name(case), ok, err, bound)
+                        continue
+                    a, b, sp, ci = bench.compare(lambda: fn(data), lambda: _sglang_attention(data), pairs=15)
+                    rep.add(group, _attn_name(case), ok, err, bound, a, b, sp, ci)
+                except Exception as e:
+                    rep.add(group, _attn_name(case), False, float("nan"), 0.0, note=f"{type(e).__name__}: {str(e)[:120]}")
+            del data
+            torch.cuda.empty_cache()
+    for rep in reports.values():
+        rep.summary()
+
+
+try:
+    run_attention_sim({'v3': _kernel_v3, 'v4': _attn_v4, 'v4s6': lambda d: _attn_v4(d, stages=6), 'v4n396s3': lambda d: _attn_v4(d, n_ctas=396, stages=3)}, budget_s=240.0, only=lambda c: c.get('q_len', 1) == 1)
+except Exception:  # the sim must never break the submission
+    import traceback
+    print('sim failed:', traceback.format_exc()[-1500:])
+torch.cuda.empty_cache()

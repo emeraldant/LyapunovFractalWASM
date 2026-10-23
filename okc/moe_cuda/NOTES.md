@@ -432,3 +432,10 @@ s1dw ablations (profiling build, cold L2, synthetic weights, judge-like routing)
 - Open: GEMM1 bs 8 stage 61 us vs a 45 us item span. Profiling build now stamps per-CTA entry
   and consumer exit (PCTA slots before the item records); probe moe_cta_pf prints the CTA
   timeline (entry -> first producer issue -> first data -> last item end -> exits).
+- CTA timeline (run 6774bc77, bs 8 s1dw GEMM1, times from the first CTA entry): all 264 CTAs enter
+  within 0.3 us; producer first issue 2.0-2.6 us (prologue + metadata, cold); first data at the
+  consumers 7.4 us p50 (first fill ~5 us cold); last item end 48.1; last exit 48.4. The stage time
+  (graph replay minus a tiny-kernel graph) is 60.3: ~12 us lies outside the CTAs' lifetime. GEMM2
+  the same (27.4 life vs 37.6 stage). Two GEMMs -> ~20 us of the ~100 us bs 8 MoE, if real.
+  Probe moe_launch_attn: [globaltimer stamp] -> GEMM -> [stamp] in one graph, cold L2, plus the
+  same GEMM with no items and a stamp-only graph.

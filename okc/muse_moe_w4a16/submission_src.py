@@ -297,6 +297,8 @@ CUDA_CONFIGS = {
     "s1dw": dict(mt=1, stages=204, ctas_per_sm=2, sab=True),     # s1d with two-chunk stages (16 KB weight copies)
     "s2w": dict(mt=2, stages=202, ctas_per_sm=4, sab=True),      # s2 with two-chunk stages
     "s2q": dict(mt=2, stages=402, ctas_per_sm=2, sab=True),      # 16 tokens, four-chunk stages (32 KB copies), 2 CTAs/SM
+    "s2qv16": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, dualv8=16),   # experts > 16 routes on v8, the rest
+                                                                 # on s2q as its PDL co-runner (bs 256)
     "s1dw2fp": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True),   # bs 1: K split 2,
                                                                  # parts reduced in GEMM1, GEMM2 a PDL dependent
     "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens

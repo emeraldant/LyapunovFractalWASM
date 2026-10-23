@@ -360,6 +360,45 @@ ALIGN_CHUNK = 256
 
 # @bundle muse_moe_w4a16/submission.py _bins _align_local_kernel _post_norm_sum_kernel _experts _moe_fast
 
+# Our CUDA expert GEMMs (okc/moe_cuda: swap-AB mma.sync / wgmma on the NVFP4 weights, decoded in
+# registers), the muse_moe_w4a16 board's fast path; adopted per token bucket by _tune_moe.
+# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULES moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _gather_rows_kernel _splitk_silu_kernel _post_norm_parts_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_cuda_stages moe_cuda_forward
+
+MOE_CUDA_CONFIGS = {   # the configurations the MoE board's gate adopted (judge 233c679f) and their kin
+    "s1k4": dict(mt=1, stages=4, ctas_per_sm=4, sab=True, kparts=4),
+    "s1dw": dict(mt=1, stages=204, ctas_per_sm=2, sab=True),
+    "s2w": dict(mt=2, stages=202, ctas_per_sm=4, sab=True),
+    "s2q": dict(mt=2, stages=402, ctas_per_sm=2, sab=True),
+    "v8": dict(mt=8, stages=504, ctas_per_sm=2, wg=True),
+    "s2qv16": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, dualv8=16),
+}
+MOE_CUDA_MARGIN, MOE_CUDA_EACH = 0.98, 1.01   # adopt: <= 98% over two routings, <= 101% on each
+
+
+def _moe_cuda_bank(weights):
+    """Compile and repack for the CUDA expert path; None (keep the Marlin paths) on any failure."""
+    try:
+        t = time.time()
+        moe_cuda_module()
+        bank = build_cuda_bank(weights, 0, LOCAL_EXPERTS)
+        if bank is None:
+            print("moe cuda: scales outside the fast decode's range, CUDA path off")
+            return None
+        ws_layout(bank)
+        for k in ("w13q", "w13s", "w2q", "w2s"):
+            del bank[k]
+        torch.cuda.synchronize()
+        print(f"moe cuda: ready in {time.time() - t:.0f} s")
+        return bank
+    except Exception as e:
+        print(f"moe cuda: unavailable ({type(e).__name__}: {str(e)[:200]})")
+        return None
+
+
+def _moe_cuda(x, topk_ids, topk_weights, local_start, state, name):
+    return moe_cuda_forward(x, topk_ids, topk_weights, local_start, state["cuda_bank"], state["post_expert_w"],
+                            POST_NORM_EPS, **MOE_CUDA_CONFIGS[name])
+
 # ---------------------------------------------------------------------------------------
 # The layer with the faster parts
 
@@ -465,6 +504,8 @@ def _attention(qkv, data, cfg, state):
 
 def _moe(x, topk_weights, topk_ids, local_start, state):
     plan = state["moe_plans"].get(_bucket(x.shape[0]), ("base",))
+    if plan[0] == "cuda":
+        return _moe_cuda(x, topk_ids, topk_weights, local_start, state, plan[1])
     if plan[0] == "base":
         local_ids = (topk_ids - local_start) % N_EXPERTS
         return _baseline_experts(x, topk_weights, local_ids, state)
@@ -645,8 +686,52 @@ def _tune_moe(state, bench, t0):
             if tw >= tb:
                 best = ("base",)
             best_t, base_t = min(tw, tb), tb
+        if state.get("cuda_bank") is not None:
+            best, best_t = _tune_moe_cuda(state, bench, t0, bucket, cases, gen, best, best_t)
         state["moe_plans"][bucket] = best
         print(f"moe bs{bucket:<4d}: {best} {best_t * 1e3:.1f} us (sglang {base_t * 1e3:.1f} us)")
+
+
+def _moe_run(plan, x, ids, wts, ls, state):
+    if plan[0] == "cuda":
+        return _moe_cuda(x, ids, wts, ls, state, plan[1])
+    if plan[0] == "fast":
+        return _moe_fast(x, ids, wts, ls, state["moe"], plan[1], plan[2])
+    return _baseline_experts(x, wts, (ids - ls) % N_EXPERTS, state)
+
+
+def _tune_moe_cuda(state, bench, t0, bucket, cases, gen, best, best_t):
+    """CUDA expert configurations for one bucket: adopted only if correct on the bucket's case and
+    a smaller odd one, bitwise repeatable, and <= MOE_CUDA_MARGIN of the incumbent's time over two
+    routings (and <= MOE_CUDA_EACH on each)."""
+    device = bench.flush.device
+    x2 = torch.randn((bucket, D_EXPERT), generator=gen, device=device).to(torch.bfloat16)
+    ids2, wts2 = _routing_ids(bucket, device, gen)
+    ls = cases[0][3]
+    ids2 = (ids2 + 32) % N_EXPERTS
+    timing = (cases[0][:4], (x2, ids2, wts2, ls))
+    for name in MOE_CUDA_CONFIGS:
+        if time.time() - t0 > TUNE_BUDGET_S:
+            break
+        plan = ("cuda", name)
+        try:
+            ok = all(_rel(_moe_cuda(cx, ci, cw, cl, state, name), cr) <= 1e-2 for cx, ci, cw, cl, cr in cases)
+            cx, ci, cw, cl, _ = cases[0]
+            ok = ok and torch.equal(_moe_cuda(cx, ci, cw, cl, state, name), _moe_cuda(cx, ci, cw, cl, state, name))
+            if not ok:
+                print(f"moe bs{bucket} {plan}: failed the correctness gate, skipped")
+                continue
+            times = [(bench.time(lambda: _moe_cuda(tx, ti, tw, tl_, state, name), reps=21),
+                      bench.time(lambda: _moe_run(best, tx, ti, tw, tl_, state), reps=21)) for tx, ti, tw, tl_ in timing]
+        except Exception as e:
+            print(f"moe bs{bucket} {plan}: {type(e).__name__}: {str(e)[:160]}")
+            continue
+        if (sum(tc for tc, _ in times) <= MOE_CUDA_MARGIN * sum(ti for _, ti in times)
+                and all(tc <= MOE_CUDA_EACH * ti for tc, ti in times)):
+            print(f"moe bs{bucket} {plan}: adopted over {best} "
+                  + ", ".join(f"{tc * 1e3:.1f}/{ti * 1e3:.1f} us" for tc, ti in times))
+            best, best_t = plan, times[0][0]
+    return best, best_t
 
 
 def _attn_inputs(batch, ctx, length, sliding, page, kv_scale, device, gen, random_bytes=False):
@@ -822,6 +907,7 @@ def prepare(weights: Weights):
                     "norm_w": state["post_expert_w"]}
     state["proj_plans"], state["attn_plans"], state["moe_plans"] = {}, {}, {}
     device = weights["qkv_gate"].device
+    state["cuda_bank"] = _moe_cuda_bank(weights)
     bench = _Bench(device)
     for tune in (_tune_attention, _tune_moe, _tune_proj):
         try:

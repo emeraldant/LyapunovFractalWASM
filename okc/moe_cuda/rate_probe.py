@@ -282,8 +282,14 @@ template <int VAR>
 __device__ __forceinline__ void unpack8v(uint32_t q, uint32_t out[4], uint32_t k10, uint32_t k13) {
   const uint32_t M = 0x81C081C0u;
   out[0] = q & M;
-  if (VAR == 0) {
+  if ((VAR & 3) == 0) {
     out[1] = __funnelshift_l(q, q, 10) & M;
+    out[2] = __funnelshift_l(q, q, 13) & M;
+  } else if ((VAR & 3) == 2) {   // rotations on the FMA pipe: lo / hi words of q * 2^r, merged by one LOP3
+    out[1] = ((q * k10) | __umulhi(q, k10)) & M;
+    out[2] = ((q * k13) | __umulhi(q, k13)) & M;
+  } else if ((VAR & 3) == 3) {   // one rotation each way: balance the ALU and FMA pipes
+    out[1] = ((q * k10) | __umulhi(q, k10)) & M;
     out[2] = __funnelshift_l(q, q, 13) & M;
   } else {
     uint64_t w1, w2;
@@ -295,6 +301,7 @@ __device__ __forceinline__ void unpack8v(uint32_t q, uint32_t out[4], uint32_t k
   out[3] = ((q & 0x001B001Bu) * 0x4108u) & M;
 }
 __device__ __forceinline__ uint32_t sc_even(uint32_t w) { uint32_t r; asm("mad.lo.u32 %0, %1, 16, %2;" : "=r"(r) : "r"(w & 0x00FF00FFu), "r"((238u << 7) | (238u << 23))); return r; }
+__device__ __forceinline__ uint32_t sc_even_r(uint32_t w, uint32_t k16) { uint32_t r; asm("mad.lo.u32 %0, %1, %2, %3;" : "=r"(r) : "r"(w & 0x00FF00FFu), "r"(k16), "r"((238u << 7) | (238u << 23))); return r; }
 __device__ __forceinline__ uint32_t sc_odd(uint32_t w) { uint32_t r; asm("mad.hi.u32 %0, %1, 268435456, %2;" : "=r"(r) : "r"(w & 0xFF00FF00u), "r"((238u << 7) | (238u << 23))); return r; }
 __device__ __forceinline__ uint32_t hmul2h(uint32_t a, uint32_t s, int h) {
   __nv_bfloat162 sv = *reinterpret_cast<__nv_bfloat162*>(&s);
@@ -321,7 +328,7 @@ __global__ void decode_bench(float* sink, int iters, uint32_t k10, uint32_t k13)
 #pragma unroll
         for (int j = 0; j < 2; ++j) {
           const uint32_t sw = w < 2 ? sv[j][0] : sv[j][1];
-          const uint32_t sp = half == 0 ? sc_even(sw) : sc_odd(sw);
+          const uint32_t sp = half == 0 ? ((VAR & 4) ? sc_even_r(sw, k10 >> 6) : sc_even(sw)) : sc_odd(sw);
           const int h = (step % 4) < 2 ? 0 : 1;
           a[j] = hmul2h(v[j][2 * half], sp, h);
           a[2 + j] = hmul2h(v[j][2 * half + 1], sp, h);
@@ -344,10 +351,9 @@ double run_decode(int var, int mma, int blocks, int threads, int iters, torch::T
   cudaEventCreate(&e0); cudaEventCreate(&e1);
   auto go = [&]() {
     float* p = sink.data_ptr<float>();
-    if (var == 0 && !mma) decode_bench<0, false><<<blocks, threads>>>(p, iters, 1u << 10, 1u << 13);
-    if (var == 1 && !mma) decode_bench<1, false><<<blocks, threads>>>(p, iters, 1u << 10, 1u << 13);
-    if (var == 0 && mma) decode_bench<0, true><<<blocks, threads>>>(p, iters, 1u << 10, 1u << 13);
-    if (var == 1 && mma) decode_bench<1, true><<<blocks, threads>>>(p, iters, 1u << 10, 1u << 13);
+#define DCASE(V_) if (var == V_ && !mma) decode_bench<V_, false><<<blocks, threads>>>(p, iters, 1u << 10, 1u << 13); \
+                  if (var == V_ && mma) decode_bench<V_, true><<<blocks, threads>>>(p, iters, 1u << 10, 1u << 13);
+    DCASE(0) DCASE(1) DCASE(2) DCASE(3) DCASE(4) DCASE(6) DCASE(7)
   };
   go();
   cudaEventRecord(e0);
@@ -442,9 +448,10 @@ def run_decode_probe():
                       extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"], verbose=False)
     sink = torch.zeros(4, device="cuda")
     clk, sms, iters = 1.98e9, 132, 4000
-    hbm = 1.0 / (4.06e12 / 0.5625 / sms / clk)   # SM-cycles per weight at the HBM roofline
+    hbm = 1.0 / (4.49e12 / 0.5625 / sms / clk)   # SM-cycles per weight at the HBM roofline (4.49 TB/s measured)
+    # var: rotations 0 SHF, 1 IMAD.WIDE, 2 IMAD lo + IMAD.HI (FMA pipe), 3 one of each; +4: scale via IMAD
     for warps in (16, 32):
-        for var in (0, 1):
+        for var in (0, 2, 3, 4, 6, 7):
             for mma in (0, 1):
                 ms = mod.run_decode(var, mma, sms, 32 * warps, iters, sink)
                 weights = sms * warps * iters * 2048

@@ -324,3 +324,14 @@ one wave) but loses at bs 16 (2 warps per scheduler on far more items).
   ring (no gain). Kept: GEMM1 split parts reduced by the last-arriving CTA (fused, no reduction
   kernel) + GEMM2 as a PDL dependent: bs 1 -5..-9% on one routing, neutral on another, +2-3% at
   bs 4-8 (candidate config s1dw2fp). Post-norm kernels made branch-free (slot loads overlap).
+- Decode microbenchmark variants (run 6456df78): rotations on the FMA pipe (IMAD lo + IMAD.HI,
+  merged by one LOP3) are slower with the MMA in the loop (0.0273-0.0287 vs 0.0236-0.0241
+  SM-clk/weight); scale build via IMAD instead of LEA: -5% decode-only, nothing with the MMA.
+  The real loop (math only) runs 0.031: ~11% more instructions (LDS / ldmatrix / barriers) plus
+  stalls. At 4.49 TB/s the HBM budget is 0.0327 SM-clk/weight: the microbenchmark alone is at
+  72% of it, so small batches stay in the compute ~ memory regime.
+- Hybrid at bs 256 (run a9364a88): experts > 16 routes on v8, the rest on s2q as v8's PDL
+  co-runner (no start wait; waits for v8 before exiting, so the next launch sees both): 242 /
+  252 / 240.5 us vs v8 249 / 270 / 251.5 (-3..-7%); loses at bs 64-128 (config s2qv16).
+- decode_layer: the CUDA expert path bundled with its own gate (configs s1k4 s1dw s2w s2q v8
+  s2qv16), tested inside a prefill-board host (same layer weights) via exec of the submission.

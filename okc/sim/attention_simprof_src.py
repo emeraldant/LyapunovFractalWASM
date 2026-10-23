@@ -143,8 +143,9 @@ def run_attn_prof(cases, variants, seed=7_300_000):
             if len(live) == 0:
                 print(f"prof {name} {_attn_name(case)}: no stamps")
                 continue
-            t0g, t1g = live[:, 63].float(), live[:, 62].float()
-            cyc = (live[:, 61] - live[:, 0]).float()
+            g0 = int(live[:, 63].min())
+            t0g, t1g = (live[:, 63] - g0).double(), (live[:, 62] - g0).double()  # int64 first: ns since 1970
+            cyc = (live[:, 61] - live[:, 0]).double()
             clk = float(cyc.sum() / (t1g - t0g).clamp(min=1).sum())  # cycles per ns
             span = float(t1g.max() - t0g.min()) / 1e3
             skew = float(t0g.max() - t0g.min()) / 1e3
@@ -154,7 +155,7 @@ def run_attn_prof(cases, variants, seed=7_300_000):
                 ok = col != 0
                 if k >= 4 and k < 36 and int(ok.sum()) < len(live) // 2:
                     continue
-                d = (col[ok] - live[ok, 0]).float() / clk / 1e3
+                d = (col[ok] - live[ok, 0]).double() / clk / 1e3
                 if len(d) == 0:
                     continue
                 nm = ATT_EVENTS.get(k, (f"t{(k - 4) // 2} ready" if k % 2 == 0 else f"t{(k - 4) // 2} done"))

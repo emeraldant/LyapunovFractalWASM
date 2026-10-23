@@ -122,6 +122,44 @@ bytes in flight. Fix that does not cost smem: cp.async.bulk.prefetch.L2 PFD chun
 Split K (v6 kparts, fp32 partial slices summed in fixed order, deterministic): only bs 1 wins,
 45 -> 38.6 us (route 1.4, GEMM1+silu 19.3, GEMM2 10.7, post 3.9 us).
 
+**Refuted (run 7667fa12): L2 prefetch.** pfd 4 / 8 chunks ahead made bs 8 weights-only WORSE
+(3.27 -> 2.77 -> 2.37 TB/s): bytes in flight were never the limit (see the bandwidth probe).
+
+**HBM ceiling, measured (bw_probe.py, runs after 7667fa12):** 1 GB streamed by LDG.128: 4.39-4.44
+TB/s; by cp.async.bulk 8 KB + 1 KB x 4 stages x 4 CTAs/SM (v6's exact shape): 4.49 TB/s; every
+TMA shape from 72 to 216 KB/SM in flight: 4.42-4.52. So the roofline is ~4.49 TB/s, not 4.06
+(the dream times above are ~10% generous to us). Short runs: time = bytes / 4.49 TB/s + ~6 us
+per kernel (launch + fill + drain), for 528 / 448 / 264 / 224 equal CTAs alike: the CTA -> SM
+spread does not cost bandwidth (refuted: "per-SM fair share makes 4-item SMs slow").
+
+**Refuted (run after bw probe): stream-K for compute balance.** Equal-bytes CTA ranges (sk,
+partial slots) are correct and bitwise repeatable, but GEMM1 at bs 8 stays 48 us balanced or
+not; plain split K4 is as good or better everywhere (bs 1 39.2, bs 8 80.3, bs 32 160.3 vs s1
+46.5 / 87.8 / 163.6; s1 best at bs 16). Kept as the `sk` flag (off).
+
+**Refuted (run 9bbdc0bc): the activation rows' small copies.** bs 8 GEMM1 without act rows 47.4
+us vs 48.1 full; memory-only with them 39.2 vs 39.9 without.
+
+**Tensor and ALU do not overlap even across warp-specialized warpgroups (spec probe a314237e).**
+Even WGs issue wgmma, odd WGs run the decode-like ALU block (clocks per iteration):
+RS N16: both 380-400 vs wgmma 120 / ALU 300 (sum 420); RS N64: 757-796 vs 287 / 600 (sum 880);
+SS N64: 766-812 (sum 880); SS N64 with 2x ALU: 1410 vs 287 / 1204 (sum 1491). At most ~25% of
+the tensor time hides. So the large-batch compute floor is decode + tensor, additive. Units
+fix: wgmma m64n64k16 reached 1827 MAC/clk/SM = 89% of the 2048 dense bf16 peak (not 1024);
+N16 only ~55%.
+
+Judge check 21259fd1 (split K4 config added): 1.688 (bs 1 1.845 with s1k4 adopted, 44.9 us);
+bs 8 88.1 us because the gate kept s1 over s1d this time (86.2/94.7 us on one routing,
+108.2/108.7 on the other: not <= 98% on both) -> gate now: <= 98% over the two routings
+summed and <= 101% on each. The judge prints its own floor: 11.4 / 37.3 / 52.5 / 70.8 /
+101.3 / 108.9 us (bs 1/8/16/32/128/256); we are at 25-45% of it.
+
+v7 N 64 (t8, W0, 2 CTAs/SM, 93-96 registers, no spills or C7512): correct and repeatable;
+bs 256 360.7 us vs t2 368.0 / t4 334.0; worse at bs 32/128 (small experts pay a 64-wide tile).
+
+The one measured fact that stands: v6 at bs 8 runs 0.031 SM-clk/weight math-only (no memory),
+0.049 with memory, against a 0.034 static instruction count and a 0.032 HBM budget at 4.49 TB/s.
+
 TMA token tiles for v7 (128B swizzle, K-major; config t2 = stages 304): judge 408b8505 1.714
 (bs1 1.658, bs8 1.682, bs16 1.667, bs32 1.363, bs128 1.983, bs256 2.016).
 

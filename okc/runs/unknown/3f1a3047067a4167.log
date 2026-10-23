@@ -1,0 +1,85 @@
+bw probe: compiled in 39 s
+bw tma grid 528 x 32 chunks of 8K+1K (4 stages, <= 4 CTAs/SM):    3778 GB/s
+bw tma grid 448 x 32 chunks of 8K+1K (4 stages, <= 4 CTAs/SM):    3730 GB/s
+bw tma grid 396 x 32 chunks of 8K+1K (4 stages, <= 4 CTAs/SM):    3686 GB/s
+bw tma grid 264 x 32 chunks of 8K+1K (4 stages, <= 4 CTAs/SM):    3370 GB/s
+bw tma grid 224 x 32 chunks of 8K+1K (4 stages, <= 4 CTAs/SM):    3161 GB/s
+bw tma grid 528 x 27 chunks of 8K+1K (4 stages, <= 4 CTAs/SM):    3753 GB/s
+bw tma grid 132 x 32 chunks of 8K+1K (4 stages, <= 4 CTAs/SM):    3176 GB/s
+bw tma grid 133 x 32 chunks of 8K+1K (4 stages, <= 4 CTAs/SM):    3103 GB/s
+bw tma grid 448 x 64 chunks of 8K+1K (4 stages, <= 4 CTAs/SM):    4030 GB/s
+bw tma grid 528 x 32 chunks +LDS:    3787 GB/s
+bw tma grid 448 x 32 chunks +LDS:    3628 GB/s
+bw tma grid 224 x 32 chunks +LDS:    3118 GB/s
+attention B1   L1 sliding: fused 18.0 us, sglang 26.0 us
+attention B1   L1 full   : fused 60.2 us, sglang 40.4 us
+attention B1   L8 sliding: fused 39.0 us, sglang 28.7 us
+attention B1   L8 full   : fused 141.9 us, sglang 44.3 us
+attention B16  L1 sliding: fused 23.1 us, sglang 31.8 us
+attention B16  L1 full   : fused 318.7 us, sglang 214.2 us
+attention B16  L8 sliding: fused 44.6 us, sglang 35.6 us
+attention B16  L8 full   : fused 408.3 us, sglang 216.7 us
+attention B32  L1 sliding: fused 28.8 us, sglang 38.4 us
+attention B32  L1 full   : fused 559.0 us, sglang 399.3 us
+attention B32  L8 sliding: fused 67.2 us, sglang 42.6 us
+attention B32  L8 full   : fused 715.5 us, sglang 401.1 us
+moe bs1   : ('fast', 8, True) 57.8 us (sglang 95.2 us)
+moe bs8   : ('fast', 8, False) 120.3 us (sglang 164.5 us)
+moe bs16  : ('fast', 8, False) 169.4 us (sglang 220.1 us)
+moe bs32  : ('fast', 16, False) 220.7 us (sglang 235.1 us)
+moe bs128 : ('fast', 16, False) 352.6 us (sglang 520.2 us)
+moe bs256 : ('fast', 16, False) 487.5 us (sglang 666.2 us)
+proj qkv_gate  m1   : ('fma', 1, 8, 1024, 1, 4, 2) 20.2 us (sglang 21.1 us)
+proj o         m1   : ('base',) 12.0 us (sglang 12.0 us)
+proj pooler    m1   : ('fma', 1, 8, 1024, 1, 4, 2) 26.9 us (sglang 30.1 us)
+proj unpooler  m1   : ('fma', 1, 4, 1024, 1, 4, 2) 11.3 us (sglang 11.5 us)
+proj qkv_gate  m8   : ('base',) 21.2 us (sglang 21.2 us)
+proj o         m8   : ('dot', 16, 32, 128, 1, 4, 4) 11.6 us (sglang 11.9 us)
+proj pooler    m8   : ('base',) 30.0 us (sglang 30.0 us)
+proj unpooler  m8   : ('base',) 11.6 us (sglang 11.6 us)
+proj qkv_gate  m16  : ('base',) 21.0 us (sglang 21.0 us)
+proj o         m16  : ('dot', 16, 32, 128, 1, 4, 4) 11.7 us (sglang 12.3 us)
+proj pooler    m16  : ('base',) 30.7 us (sglang 30.7 us)
+proj unpooler  m16  : ('base',) 28.6 us (sglang 28.6 us)
+proj qkv_gate  m32  : ('base',) 21.7 us (sglang 21.7 us)
+proj o         m32  : ('dot', 32, 32, 128, 1, 4, 4) 12.1 us (sglang 12.4 us)
+proj pooler    m32  : ('base',) 30.8 us (sglang 30.8 us)
+proj unpooler  m32  : ('base',) 28.3 us (sglang 28.3 us)
+proj qkv_gate  m128 : ('base',) 25.2 us (sglang 25.2 us)
+proj o         m128 : ('base',) 12.9 us (sglang 12.9 us)
+proj pooler    m128 : ('base',) 31.0 us (sglang 31.0 us)
+proj unpooler  m128 : ('base',) 30.1 us (sglang 30.1 us)
+proj qkv_gate  m256 : ('base',) 29.1 us (sglang 29.1 us)
+proj o         m256 : ('base',) 13.9 us (sglang 13.9 us)
+proj pooler    m256 : ('base',) 37.7 us (sglang 37.7 us)
+proj unpooler  m256 : ('base',) 33.5 us (sglang 33.5 us)
+layer check B1 L1: next input 6.61e-03, stream update 7.43e-03, ids 1.000
+layer check B4 L8: next input 1.13e-04, stream update 1.14e-04, ids 1.000
+layer check B16 L1: next input 0.00e+00, stream update 0.00e+00, ids 1.000
+layer check B32 L8: next input 3.58e-04, stream update 3.51e-04, ids 1.000
+layer check: 2440/2440 expert ids identical
+prepare: 67 s
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:05 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 05:46:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 05:46:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 05:46:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 05:46:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

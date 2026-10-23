@@ -293,10 +293,12 @@ CUDA_CONFIGS = {
     "s1": dict(mt=1, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB (mma.sync), 8 tokens per item
     "s2": dict(mt=2, stages=4, ctas_per_sm=4, sab=True),         # v6, 16 tokens per item
     "s1d": dict(mt=1, stages=8, ctas_per_sm=2, sab=True),        # v6, deeper pipeline: few items per SM
+    "s1k4": dict(mt=1, stages=4, ctas_per_sm=4, sab=True, kparts=4),   # v6, K split 4 ways (bs <= 8: too few items)
     "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens
     "t4": dict(mt=4, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA, 32 tokens (2 CTAs/SM)
 }
-CUDA_MARGIN = 0.98   # a CUDA plan must take <= 98% of the incumbent's time on both timing routings
+CUDA_MARGIN = 0.98   # a CUDA plan must take <= 98% of the incumbent's time over the two timing routings
+CUDA_EACH = 1.01     # ... and <= 101% on each of them
 
 
 def _cuda(data, state, name):
@@ -420,7 +422,7 @@ class _Bench:
 def _tune_cuda(bucket, data, ref, small, small_ref, best, best_t, state, weights, bench, gen, start, count):
     """Adopts a CUDA configuration only if it is correct on the bucket's routing, a smaller odd
     batch and two more fresh routings, bitwise repeatable, and at most CUDA_MARGIN of the
-    incumbent's time on two different routings."""
+    incumbent's time over two different routings (and not slower on either)."""
     extra = [_make_input(bucket, start, count, data["hidden_states"].device, gen) for _ in range(2)]
     extra_ref = [_reference(d, weights) for d in extra]
     for name in CUDA_CONFIGS:
@@ -441,7 +443,10 @@ def _tune_cuda(bucket, data, ref, small, small_ref, best, best_t, state, weights
         except Exception as e:
             print(f"moe bs{bucket} {plan}: {type(e).__name__}: {str(e)[:160]}")
             continue
-        if all(tc <= CUDA_MARGIN * ti for tc, ti in times):
+        # Faster on the two routings together by the margin, and not slower on either (one
+        # near-tie routing no longer vetoes a clear win on the other: gate noise flipped bs 8).
+        if (sum(tc for tc, _ in times) <= CUDA_MARGIN * sum(ti for _, ti in times)
+                and all(tc <= CUDA_EACH * ti for tc, ti in times)):
             print(f"moe bs{bucket} {plan}: adopted over {best} "
                   + ", ".join(f"{tc * 1e3:.1f}/{ti * 1e3:.1f} us" for tc, ti in times))
             best, best_t = plan, times[0][0]

@@ -1458,6 +1458,108 @@ __global__ void overlap_probe(float* sink, int iters) {
   if (s == 12345u || f == 12345.f) sink[0] = f;
 }
 
+// Warp-specialized overlap probe: even warpgroups issue wgmma (A from registers: RS, or from
+// shared memory: SS), odd warpgroups run the decode-like ALU block. KIND: 0 = both roles,
+// 1 = only the wgmma role (odd WGs idle), 2 = only the ALU role (even WGs idle).
+template <int N> struct WgAcc { float d[N / 2]; };
+
+template <int N, bool SS>
+__device__ __forceinline__ void wg_step(float* d, const uint32_t* a, uint64_t da, uint64_t db) {
+  if (N == 16 && !SS)
+    asm volatile("{\n .reg .pred p;\n setp.ne.b32 p, 1, 0;\n"
+                 "wgmma.mma_async.sync.aligned.m64n16k16.f32.bf16.bf16 {%0,%1,%2,%3,%4,%5,%6,%7}, {%8,%9,%10,%11}, %12, p, 1, 1, 0;\n}\n"
+                 : "+f"(d[0]), "+f"(d[1]), "+f"(d[2]), "+f"(d[3]), "+f"(d[4]), "+f"(d[5]), "+f"(d[6]), "+f"(d[7])
+                 : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "l"(db));
+  if (N == 16 && SS)
+    asm volatile("{\n .reg .pred p;\n setp.ne.b32 p, 1, 0;\n"
+                 "wgmma.mma_async.sync.aligned.m64n16k16.f32.bf16.bf16 {%0,%1,%2,%3,%4,%5,%6,%7}, %8, %9, p, 1, 1, 0, 0;\n}\n"
+                 : "+f"(d[0]), "+f"(d[1]), "+f"(d[2]), "+f"(d[3]), "+f"(d[4]), "+f"(d[5]), "+f"(d[6]), "+f"(d[7])
+                 : "l"(da), "l"(db));
+  if (N == 64 && SS)
+    asm volatile("{\n .reg .pred p;\n setp.ne.b32 p, 1, 0;\n"
+                 "wgmma.mma_async.sync.aligned.m64n64k16.f32.bf16.bf16 "
+                 "{%0,%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15,%16,%17,%18,%19,%20,%21,%22,%23,%24,%25,%26,%27,%28,%29,%30,%31}, %32, %33, p, 1, 1, 0, 0;\n}\n"
+                 : "+f"(d[0]), "+f"(d[1]), "+f"(d[2]), "+f"(d[3]), "+f"(d[4]), "+f"(d[5]), "+f"(d[6]), "+f"(d[7]),
+                   "+f"(d[8]), "+f"(d[9]), "+f"(d[10]), "+f"(d[11]), "+f"(d[12]), "+f"(d[13]), "+f"(d[14]), "+f"(d[15]),
+                   "+f"(d[16]), "+f"(d[17]), "+f"(d[18]), "+f"(d[19]), "+f"(d[20]), "+f"(d[21]), "+f"(d[22]), "+f"(d[23]),
+                   "+f"(d[24]), "+f"(d[25]), "+f"(d[26]), "+f"(d[27]), "+f"(d[28]), "+f"(d[29]), "+f"(d[30]), "+f"(d[31])
+                 : "l"(da), "l"(db));
+  if (N == 64 && !SS)
+    asm volatile("{\n .reg .pred p;\n setp.ne.b32 p, 1, 0;\n"
+                 "wgmma.mma_async.sync.aligned.m64n64k16.f32.bf16.bf16 "
+                 "{%0,%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15,%16,%17,%18,%19,%20,%21,%22,%23,%24,%25,%26,%27,%28,%29,%30,%31}, {%32,%33,%34,%35}, %36, p, 1, 1, 0;\n}\n"
+                 : "+f"(d[0]), "+f"(d[1]), "+f"(d[2]), "+f"(d[3]), "+f"(d[4]), "+f"(d[5]), "+f"(d[6]), "+f"(d[7]),
+                   "+f"(d[8]), "+f"(d[9]), "+f"(d[10]), "+f"(d[11]), "+f"(d[12]), "+f"(d[13]), "+f"(d[14]), "+f"(d[15]),
+                   "+f"(d[16]), "+f"(d[17]), "+f"(d[18]), "+f"(d[19]), "+f"(d[20]), "+f"(d[21]), "+f"(d[22]), "+f"(d[23]),
+                   "+f"(d[24]), "+f"(d[25]), "+f"(d[26]), "+f"(d[27]), "+f"(d[28]), "+f"(d[29]), "+f"(d[30]), "+f"(d[31])
+                 : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "l"(db));
+}
+
+template <int KIND, int N, bool SS>
+__global__ void spec_probe(float* sink, int iters, int alu_reps) {
+  __shared__ __align__(128) uint8_t sA[64 * 64 * 2], sB[64 * 64 * 2];
+  for (int i = threadIdx.x; i < 64 * 64 / 2; i += blockDim.x) {
+    reinterpret_cast<uint32_t*>(sA)[i] = 0x3f803f80u;
+    reinterpret_cast<uint32_t*>(sB)[i] = 0x3f803f80u;
+  }
+  asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+  __syncthreads();
+  const uint64_t da = desc0((uint32_t)__cvta_generic_to_shared(sA)), db = desc0((uint32_t)__cvta_generic_to_shared(sB));
+  const int wg = threadIdx.x / 128;
+  const bool mma_role = (wg % 2) == 0;
+  uint32_t x[8];
+  for (int i = 0; i < 8; ++i) x[i] = threadIdx.x * 8 + i;
+  const uint32_t m = 0x3f803f81u;
+  float d[N / 2];
+  for (int i = 0; i < N / 2; ++i) d[i] = 0.f;
+  if (mma_role && KIND != 2) {
+    for (int it = 0; it < iters; ++it) {
+      asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory");
+#pragma unroll
+      for (int k = 0; k < 4; ++k) wg_step<N, SS>(d, x + (k & 1) * 4, da, db);
+      asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+      asm volatile("wgmma.wait_group.sync.aligned 1;\n" ::: "memory");
+    }
+    asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+  }
+  if (!mma_role && KIND != 1) {
+    for (int it = 0; it < iters * alu_reps; ++it) {
+#pragma unroll
+      for (int r = 0; r < 8; ++r)
+#pragma unroll
+        for (int i = 0; i < 8; ++i) asm volatile("lop3.b32 %0, %0, 0x81C081C0, %0, 0x6a;" : "+r"(x[i]));
+#pragma unroll
+      for (int r = 0; r < 4; ++r)
+#pragma unroll
+        for (int i = 0; i < 8; ++i) asm volatile("mul.rn.bf16x2 %0, %0, %1;" : "+r"(x[i]) : "r"(m));
+    }
+  }
+  uint32_t s = 0;
+  for (int i = 0; i < 8; ++i) s ^= x[i];
+  float f = 0.f;
+  for (int i = 0; i < N / 2; ++i) f += d[i];
+  if (s == 12345u || f == 12345.f) sink[0] = f;
+}
+
+double run_spec(int kind, int n, int ss, int blocks, int threads, int iters, int alu_reps, torch::Tensor sink) {
+  cudaEvent_t e0, e1;
+  cudaEventCreate(&e0); cudaEventCreate(&e1);
+  auto go = [&]() {
+    float* p = sink.data_ptr<float>();
+#define SPECC(K_, N_, S_) if (kind == K_ && n == N_ && ss == S_) spec_probe<K_, N_, S_><<<blocks, threads>>>(p, iters, alu_reps);
+    SPECC(0, 16, 0) SPECC(1, 16, 0) SPECC(2, 16, 0) SPECC(0, 16, 1) SPECC(1, 16, 1)
+    SPECC(0, 64, 0) SPECC(1, 64, 0) SPECC(0, 64, 1) SPECC(1, 64, 1)
+  };
+  go();
+  cudaEventRecord(e0);
+  go();
+  cudaEventRecord(e1);
+  cudaEventSynchronize(e1);
+  float ms = 0;
+  cudaEventElapsedTime(&ms, e0, e1);
+  return ms;
+}
+
 double run_overlap(int mode, int blocks, int threads, int iters, torch::Tensor sink) {
   cudaEvent_t e0, e1;
   cudaEventCreate(&e0); cudaEventCreate(&e1);
@@ -1594,6 +1696,7 @@ double run(int which, int n, int blocks, int threads, int iters, torch::Tensor s
 
 _RATE_CPP = ("double run(int which, int n, int blocks, int threads, int iters, torch::Tensor sink);\n"
              "double run_overlap(int mode, int blocks, int threads, int iters, torch::Tensor sink);\n"
+             "double run_spec(int kind, int n, int ss, int blocks, int threads, int iters, int alu_reps, torch::Tensor sink);\n"
              "double run_decode(int var, int mma, int blocks, int threads, int iters, torch::Tensor sink);")
 
 
@@ -1662,10 +1765,37 @@ def run_decode_probe():
                       f" ({100 * cyc / hbm:.0f}% of the HBM budget {hbm:.4f})")
 
 
+def run_spec_probe():
+    """Does one warpgroup's decode-like ALU work overlap another warpgroup's wgmma? (RS: A from
+    registers, SS: A from shared memory; N 16 and 64.) Per iteration: 4 wgmma m64nNk16 per
+    mma warpgroup, alu_reps x (64 LOP3 + 32 HMUL2) per warp of each ALU warpgroup."""
+    import time
+    from torch.utils.cpp_extension import load_inline
+    t = time.time()
+    mod = load_inline(name="okc_rate_probe", cpp_sources=_RATE_CPP, cuda_sources=_RATE_SRC,
+                      functions=["run", "run_overlap", "run_decode", "run_spec"],
+                      extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"], verbose=False)
+    print(f"spec probe: compiled in {time.time() - t:.0f} s", flush=True)
+    sink = torch.zeros(4, device="cuda")
+    clk, sms, iters = 1.98e9, 132, 2000
+    for n, ss, reps in ((16, 0, 1), (16, 1, 1), (64, 0, 2), (64, 1, 2), (64, 1, 4)):
+        for wgs, ctas in ((2, 2), (4, 1)):
+            r = {}
+            for kind in ((0, 1, 2) if (n, ss) == (16, 0) or True else (0, 1)):
+                if kind == 2 and n != 16:
+                    continue
+                ms = mod.run_spec(kind, n, ss, sms * ctas, 128 * wgs, iters, reps, sink)
+                r[kind] = ms * 1e-3 * clk / iters
+            if 2 not in r:
+                r[2] = mod.run_spec(2, 16, 0, sms * ctas, 128 * wgs, iters, reps, sink) * 1e-3 * clk / iters
+            print(f"spec {'SS' if ss else 'RS'} N{n} alu x{reps}, {wgs * ctas} WG/SM: clocks/iter both {r[0]:.0f},"
+                  f" wgmma only {r[1]:.0f}, alu only {r[2]:.0f} (max {max(r[1], r[2]):.0f}, sum {r[1] + r[2]:.0f})", flush=True)
+
+
 
 def prepare(weights: Weights):
     try:
-        run_decode_probe()
+        run_spec_probe()
     except Exception as e:  # the sim must never break the host's own result
         import traceback
         print('sim failed:', ''.join(traceback.format_exc())[-1500:])

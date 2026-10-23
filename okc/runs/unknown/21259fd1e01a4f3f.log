@@ -1,0 +1,56 @@
+moe cuda: ready in 54 s
+moe bs1 ('cuda', 's1'): not faster (51.2/50.8 us, 65.5/57.6 us)
+moe bs1 ('cuda', 's2'): not faster (52.6/50.9 us, 67.1/57.7 us)
+moe bs1 ('cuda', 's1d'): not faster (49.6/50.9 us, 57.3/57.7 us)
+moe bs1 ('cuda', 's1k4'): adopted over ('fast', 8, True) 43.9/50.9 us, 54.7/57.6 us
+moe bs1 ('cuda', 't2'): not faster (58.6/43.7 us, 74.1/55.2 us)
+moe bs1 ('cuda', 't4'): not faster (62.4/43.9 us, 72.5/54.6 us)
+moe plan bs1   : ('cuda', 's1k4') 43.9 us (sglang 87.1 us)
+moe bs8 ('cuda', 's1'): adopted over ('fast', 8, False) 94.1/109.8 us, 108.8/120.3 us
+moe bs8 ('cuda', 's2'): not faster (101.3/94.5 us, 109.2/108.9 us)
+moe bs8 ('cuda', 's1d'): not faster (86.2/94.7 us, 108.2/108.7 us)
+moe bs8 ('cuda', 's1k4'): not faster (92.4/93.1 us, 101.2/107.9 us)
+moe bs8 ('cuda', 't2'): not faster (104.2/94.8 us, 114.9/108.9 us)
+moe bs8 ('cuda', 't4'): not faster (102.0/94.6 us, 126.8/108.4 us)
+moe plan bs8   : ('cuda', 's1') 94.1 us (sglang 150.6 us)
+moe bs16 ('cuda', 's1'): adopted over ('fast', 8, False) 130.5/138.7 us, 134.9/149.5 us
+moe bs16 ('cuda', 's2'): adopted over ('cuda', 's1') 119.7/131.1 us, 123.4/134.9 us
+moe bs16 ('cuda', 's1d'): not faster (120.5/119.9 us, 126.0/123.5 us)
+moe bs16 ('cuda', 's1k4'): not faster (117.1/120.1 us, 126.3/123.1 us)
+moe bs16 ('cuda', 't2'): not faster (138.1/119.9 us, 141.2/123.4 us)
+moe bs16 ('cuda', 't4'): not faster (142.1/120.3 us, 144.9/123.9 us)
+moe plan bs16  : ('cuda', 's2') 119.7 us (sglang 184.4 us)
+moe bs32 ('cuda', 's1'): adopted over ('fast', 8, False) 171.5/210.7 us, 140.5/179.4 us
+moe bs32 ('cuda', 's2'): not faster (167.6/169.6 us, 141.2/140.8 us)
+moe bs32 ('cuda', 's1d'): not faster (168.9/169.2 us, 153.2/140.9 us)
+moe bs32 ('cuda', 's1k4'): not faster (167.4/169.5 us, 146.1/140.9 us)
+moe bs32 ('cuda', 't2'): not faster (186.1/170.1 us, 140.4/141.0 us)
+moe bs32 ('cuda', 't4'): not faster (202.7/169.8 us, 144.6/141.3 us)
+moe plan bs32  : ('cuda', 's1') 171.5 us (sglang 230.2 us)
+moe bs128 ('cuda', 's1'): adopted over ('fast', 16, False) 307.1/352.8 us, 308.6/363.8 us
+moe bs128 ('cuda', 's2'): adopted over ('cuda', 's1') 282.3/307.6 us, 287.2/309.3 us
+moe bs128 ('cuda', 's1d'): not faster (355.4/282.5 us, 377.2/286.8 us)
+moe bs128 ('cuda', 's1k4'): not faster (325.0/281.7 us, 340.7/286.8 us)
+moe bs128 ('cuda', 't2'): adopted over ('cuda', 's2') 276.5/283.0 us, 273.7/286.9 us
+moe bs128 ('cuda', 't4'): not faster (281.3/276.5 us, 279.4/273.5 us)
+moe plan bs128 : ('cuda', 't2') 276.5 us (sglang 515.4 us)
+moe bs256 ('cuda', 's1'): adopted over ('fast', 16, False) 369.5/398.7 us, 444.3/453.8 us
+moe bs256 ('cuda', 's2'): adopted over ('cuda', 's1') 336.9/364.5 us, 390.2/446.1 us
+moe bs256 ('cuda', 's1d'): not faster (454.1/336.6 us, 554.4/391.3 us)
+moe bs256 ('cuda', 's1k4'): not faster (401.8/336.6 us, 490.6/391.3 us)
+moe bs256 ('cuda', 't2'): adopted over ('cuda', 's2') 296.4/337.6 us, 325.2/390.6 us
+moe bs256 ('cuda', 't4'): not faster (295.1/294.9 us, 328.6/327.4 us)
+moe plan bs256 : ('cuda', 't2') 296.4 us (sglang 613.2 us)
+prepare: tuned in 65 s
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 06:19:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

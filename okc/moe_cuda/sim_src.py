@@ -144,6 +144,9 @@ def _prof_report(tag, buf, n_items, bytes_total, grid, clk_ghz=1.98):
     prod_wait = float(pw.sum() / cyc.sum())                             # producer blocked on free stages
     per_sm = torch.bincount(sm.long(), minlength=132)
     t_mma = r[:, 7]
+    st = torch.sort(torch.minimum(t0, p0) - start).values / 1e3                # item start times, us
+    starts = (f" starts {float(st[int(0.5 * (n_items - 1))]):.1f}/{float(st[int(0.9 * (n_items - 1))]):.1f}"
+              f"/{float(st[-1]):.1f} us (p50/p90/max);")
     waits = ""
     if float(t_mma.sum()) > 0 or float(cw.sum()) > 0:   # timed build: warp 0's split of its item time
         waits = (f" warp time: data wait {100 * float(cw.sum() / cyc.sum()):.0f}%, tensor wait"
@@ -154,7 +157,7 @@ def _prof_report(tag, buf, n_items, bytes_total, grid, clk_ghz=1.98):
         waits += ";"
     print(f"  prof {tag}: {n_items} items on {int((per_sm > 0).sum())} SMs, span {span / 1e3:.1f} us,"
           f" {bytes_total / span / 1e3:.2f} TB/s; slot use {100 * busy:.0f}%; 90% done at {t90 / 1e3:.1f} us"
-          f" (tail {(span - t90) / 1e3:.1f}); item {float(dur.median()) / 1e3:.1f} us med,"
+          f" (tail {(span - t90) / 1e3:.1f});{starts} item {float(dur.median()) / 1e3:.1f} us med,"
           f" {float(dur.quantile(0.9)) / 1e3:.1f} p90;{waits} producer waits {100 * prod_wait:.0f}%; items/SM {int(per_sm.max())} max {float(per_sm[per_sm > 0].float().mean()):.1f} mean",
           flush=True)
 
@@ -203,7 +206,7 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
                     fn()
                     torch.cuda.synchronize()
                     n_items = int((prof[g].view(-1, 12)[:, 2] > 0).sum())
-                    grid = 132 * (4 if kw["ks"] == 1 else 1)
+                    grid = 132 * (kw.get("ctas_per_sm", 4) if kw.get("ks", 1) == 1 else 1)
                     _prof_report(f"bs{bs} {name} {ABLATIONS[abl]:>12} gemm{g + 1} ({ne} exp)", prof[g], n_items,
                                  nbytes, grid)
 
@@ -211,7 +214,7 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
 _SIM_EPS = globals().get("POST_NORM_EPS", 1e-8)   # the MoE host defines POST_NORM_EPS; other hosts do not
 
 
-def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7, timed=True, stage_detail=False):
+def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7, timed=True, stage_detail=False, seed_base=8_800_000):
     """run_moe_profile on random NVFP4 weights for the 32 local experts: runs inside ANY
     problem's host (the kernels' speed does not depend on the weight values), so kernel
     experiments do not spend the MoE problem's checks."""
@@ -242,10 +245,14 @@ def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7, timed=True, 
     ls = torch.zeros(1, dtype=torch.int32, device="cuda")
     bench = SimBench() if timed else None
     for i, bs in enumerate(sizes):
-        data = generate_input(bs=bs, sharding="ep8", seed=8_800_000 + i, device="cuda")
+        data = generate_input(bs=bs, sharding="ep8", seed=seed_base + i, device="cuda")
         args = (data["hidden_states"], data["topk_ids"], data["topk_weights"], ls, bank, state["norm_w"], _SIM_EPS)
         ref_kw = dict(mt=2, stages=4, ctas_per_sm=4, sab=True)
         ref = moe_cuda_forward(*args, **ref_kw)
+        ids = data["topk_ids"].flatten()
+        per_exp = torch.bincount(ids[ids < 32].long(), minlength=32).tolist()
+        print(f"routing bs{bs} seed {seed_base + i}: tokens per local expert {sorted((c for c in per_exp if c), reverse=True)}",
+              flush=True)
         for name, kw in cfgs.items():
             kw = {k: v for k, v in kw.items() if k != "abl"}
             out = moe_cuda_forward(*args, **kw)

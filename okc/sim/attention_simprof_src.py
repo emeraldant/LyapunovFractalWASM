@@ -150,15 +150,17 @@ def run_attn_prof(cases, variants, seed=7_300_000):
             span = float(t1g.max() - t0g.min()) / 1e3
             skew = float(t0g.max() - t0g.min()) / 1e3
             line = [f"prof {name} {_attn_name(case)}: {len(live)} CTAs, span {span:.1f}us, start skew {skew:.1f}us, clk {clk:.2f}GHz"]
-            for k in list(range(0, 4)) + list(range(4, 36)) + [40, 41, 42] + list(range(44, 60)) + [61]:
+            for k in list(range(0, 4)) + list(range(4, 40)) + [40, 41, 42] + list(range(44, 60)) + [61]:
                 col = live[:, k]
                 ok = col != 0
-                if k >= 4 and k < 36 and int(ok.sum()) < len(live) // 2:
+                if k >= 4 and k < 40 and int(ok.sum()) < len(live) // 2:
                     continue
                 d = (col[ok] - live[ok, 0]).double() / clk / 1e3
                 if len(d) == 0:
                     continue
-                if 44 <= k < 60:
+                if 36 <= k < 40:
+                    nm = f"T{k - 36}:qk-issued"
+                elif 44 <= k < 60:
                     nm = f"T{(k - 44) // 4}:" + ("qk", "smax", "pv-issued", "pv-done")[(k - 44) % 4]
                 else:
                     nm = ATT_EVENTS.get(k, (f"t{(k - 4) // 2} ready" if k % 2 == 0 else f"t{(k - 4) // 2} done"))

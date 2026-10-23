@@ -1553,6 +1553,7 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
     wg_e4m3_64(sacc, qa[0][0], qa[1][0], qa[0][1], qa[1][1], dk + ((uint64_t)(64 * hw) >> 4));
     wg_e4m3_64(sacc, qa[0][2], qa[1][2], qa[0][3], qa[1][3], dk + ((uint64_t)(64 * hw + 32) >> 4));
     asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+    if (tci < 4) ATT_STAMP(36 + tci);
     asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
     if (tci < 4) ATT_STAMP(44 + 4 * tci);
     // softmax on rows ra (e = 0, 1) and rb (e = 2, 3); key of sacc[4 jj + e] = 8 jj + 2 t + (e & 1)

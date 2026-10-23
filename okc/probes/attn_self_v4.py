@@ -2115,6 +2115,7 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
     wg_e4m3_64(sacc, qa[0][0], qa[1][0], qa[0][1], qa[1][1], dk + ((uint64_t)(64 * hw) >> 4));
     wg_e4m3_64(sacc, qa[0][2], qa[1][2], qa[0][3], qa[1][3], dk + ((uint64_t)(64 * hw + 32) >> 4));
     asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+    if (tci < 4) ATT_STAMP(36 + tci);
     asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
     if (tci < 4) ATT_STAMP(44 + 4 * tci);
     // softmax on rows ra (e = 0, 1) and rb (e = 2, 3); key of sacc[4 jj + e] = 8 jj + 2 t + (e & 1)
@@ -3731,15 +3732,17 @@ def run_attn_prof(cases, variants, seed=7_300_000):
             span = float(t1g.max() - t0g.min()) / 1e3
             skew = float(t0g.max() - t0g.min()) / 1e3
             line = [f"prof {name} {_attn_name(case)}: {len(live)} CTAs, span {span:.1f}us, start skew {skew:.1f}us, clk {clk:.2f}GHz"]
-            for k in list(range(0, 4)) + list(range(4, 36)) + [40, 41, 42] + list(range(44, 60)) + [61]:
+            for k in list(range(0, 4)) + list(range(4, 40)) + [40, 41, 42] + list(range(44, 60)) + [61]:
                 col = live[:, k]
                 ok = col != 0
-                if k >= 4 and k < 36 and int(ok.sum()) < len(live) // 2:
+                if k >= 4 and k < 40 and int(ok.sum()) < len(live) // 2:
                     continue
                 d = (col[ok] - live[ok, 0]).double() / clk / 1e3
                 if len(d) == 0:
                     continue
-                if 44 <= k < 60:
+                if 36 <= k < 40:
+                    nm = f"T{k - 36}:qk-issued"
+                elif 44 <= k < 60:
                     nm = f"T{(k - 44) // 4}:" + ("qk", "smax", "pv-issued", "pv-done")[(k - 44) % 4]
                 else:
                     nm = ATT_EVENTS.get(k, (f"t{(k - 4) // 2} ready" if k % 2 == 0 else f"t{(k - 4) // 2} done"))
@@ -3750,7 +3753,7 @@ def run_attn_prof(cases, variants, seed=7_300_000):
 
 
 try:
-    run_attention_sim({'v4': _attn_v4, 'v4cl': lambda d: _attn_v4(d, n_ctas=392, stages=203), 'v4cl4': lambda d: _attn_v4(d, n_ctas=264, stages=204)}, budget_s=240.0, only=lambda c: c.get('q_len', 1) == 1); run_attn_prof([c for c in ATTN_SCORED if c.get('q_len', 1) == 1], {'v4cl': lambda d, prof=None: _attn_v4(d, n_ctas=392, stages=203, prof=prof)})
+    run_attention_sim({'v3': _kernel_v3, 'vwg': _attn_v4, 'vwgmk64': lambda d: _attn_v4(d, min_keys=64), 'vwgmk128': lambda d: _attn_v4(d, min_keys=128)}, budget_s=200.0, groups=('scored',), only=lambda c: c.get('q_len', 1) > 1); run_attn_prof([c for c in ATTN_SCORED if c.get('q_len', 1) > 1 and c['layer'] == 'sliding'], {'vwg': _attn_v4, 'vwgmk64': lambda d, prof=None: _attn_v4(d, min_keys=64, prof=prof)})
 except Exception:  # the sim must never break the submission
     import traceback
     print('sim failed:', traceback.format_exc()[-1500:])

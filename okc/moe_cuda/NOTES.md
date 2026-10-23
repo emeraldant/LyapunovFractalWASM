@@ -301,3 +301,12 @@ one wave) but loses at bs 16 (2 warps per scheduler on far more items).
   50%); with consumers well above HBM it stays ~97%. v6 at bs 8 has math (35 us) ~ memory
   (32 us), so ~65-70% is expected: the 48 us measured. Levers: 16 KB copies; math well below
   memory.
+- 16 KB weight copies (v6 SUB 2: two 128-k chunks per stage, one bulk copy each): 2-6% (s1dw
+  bs 32 -10%); 8 KB copies issued in back-to-back pairs: no gain (probe 692595f8), so it is the
+  request size. PDL (GEMM2 launched as a programmatic dependent, weights warmed in L2 before
+  griddepcontrol.wait, GEMM1 producers trigger when the queue is empty): ~1.5 us at bs 1 only.
+- Route compaction: the per-expert programs looped over 256-id chunks with a dependent load per
+  pass (~0.6 us each): 10 us at bs 256, 8 at bs 128. One load of all ids + tl.histogram + one
+  cumsum: 2.2 / 1.4 us (v7 route + gather: 13.5 -> 6.3 us).
+- Judge 233c679f: **1.834** (bs 1 1.883, bs 8 1.809, bs 16 1.722, bs 32 1.434, bs 128 2.039,
+  bs 256 2.218); plans s1k4 / s1dw / s1dw / s1dw / s2w / v8.

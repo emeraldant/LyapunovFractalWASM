@@ -975,31 +975,40 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
 // Producer, pipeline and scheduling as v5; 16 weight groups (slots) per CTA in both GEMMs:
 // weights [expert][n block][chunk][slot 16][lane][16 B], scales [...][slot 16][row 8][step 8].
 
-template <int MT>
+// SUB = 128-k chunks per pipeline stage: 2 makes each weight copy 16 KB (one cp.async.bulk),
+// which the memory system serves better when the consumers pace it (bandwidth probe
+// 692595f8: 3.58 vs 3.11 TB/s at v6's bs 8 pace; two back-to-back 8 KB copies: no gain).
+template <int MT, int SUB = 1>
 struct SabCfg {
-  static constexpr int A_ROW = 272;
+  static constexpr int A_ROW = 256 * SUB + 16;   // + 16 B: conflict-free ldmatrix rows
   static constexpr int A_STAGE = MT * 8 * A_ROW;
-  static constexpr int W_STAGE = 16 * 512;
-  static constexpr int S_STAGE = 16 * 64;
+  static constexpr int W_STAGE = SUB * 16 * 512;
+  static constexpr int S_STAGE = SUB * 16 * 64;
   static constexpr int STAGE = A_STAGE + W_STAGE + S_STAGE;
 };
 
-template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0>
+template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0, int SUB = 1>
 __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
     const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
     const uint8_t* __restrict__ wq, const uint8_t* __restrict__ ws, const float* __restrict__ gs,
     const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
     const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out, int n_blocks,
     long long* __restrict__ prof, int* __restrict__ sched, int kparts, float* __restrict__ part, int part_rows,
-    int sk) {
+    int flags) {
+  // flags: 1 = stream K (below); 2 = launched as a programmatic dependent (PDL) of the previous
+  // kernel, whose output (our activations) may not be ready: the producer warms L2 with its
+  // first item's first stages of weights, then waits for that grid (griddepcontrol.wait).
+  // Every producer signals its dependents (griddepcontrol.launch_dependents) once the work
+  // queue is empty, so the next GEMM's CTAs can take SM slots as this one's CTAs retire.
+  const int sk = flags & 1;
   // Split K (kparts > 1, small batches: too few items for the SMs): item = (chunk entry,
   // n block, k part); each part streams NCHUNK / kparts chunks and writes its scaled fp32
   // partial to part[k part][row][column] (GEMM1: gate at n, up at 4096 + n); the parts are
   // summed in a fixed order afterwards (_splitk_silu_kernel, _post_norm_parts_kernel), so the
   // result stays bitwise repeatable.
   constexpr int abl = PROF ? ABL : 0;   // ablation bits as moe_gemm_ws_kernel's
-  using C = SabCfg<MT>;
-  constexpr int NCHUNK = KTOT / 128;
+  using C = SabCfg<MT, SUB>;
+  constexpr int NCHUNK = KTOT / (128 * SUB);   // pipeline stages per item
   static_assert(NCHUNK % STAGES == 0 && MT * 8 <= 32, "stages divide chunks; <= 32 token rows");
   extern __shared__ __align__(128) uint8_t smem[];
   const uint32_t base = (uint32_t)__cvta_generic_to_shared(smem);
@@ -1035,6 +1044,17 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
   }
 
   if (warp == 8) {
+    if (flags & 2) {
+      if (lane == 0 && !sk && (int)blockIdx.x < total) {
+        const int it0 = (int)blockIdx.x / kparts, kb0 = ((int)blockIdx.x % kparts) * nch;
+        const int e0 = active[it0 / n_blocks] & 255, nb0 = it0 % n_blocks;
+        const uint8_t* w0 = wq + (((size_t)e0 * n_blocks + nb0) * NCHUNK + kb0) * C::W_STAGE;
+        const uint8_t* s0p = ws + (((size_t)e0 * n_blocks + nb0) * NCHUNK + kb0) * C::S_STAGE;
+        prefetch_l2(w0, (uint32_t)min(STAGES, nch) * C::W_STAGE);
+        prefetch_l2(s0p, (uint32_t)min(STAGES, nch) * C::S_STAGE);
+      }
+      asm volatile("griddepcontrol.wait;\n" ::: "memory");
+    }
     // Producer (as v5): first item static, then the global counter; one end marker.
     uint32_t f = 0;
     int u = s0;
@@ -1059,6 +1079,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
         ke = kb + nch;
       }
       if (done) {
+        if (lane == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
         const uint32_t st = f % STAGES;
         if (f >= STAGES) mbar_wait(bar_empty + 8 * st, ((f / STAGES) - 1) & 1);
         if (lane == 0) {
@@ -1082,7 +1103,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       const uint8_t* a_row = reinterpret_cast<const uint8_t*>(a_src + (size_t)src * KTOT);
       const uint8_t* w_blk = wq + ((size_t)e * n_blocks + nb) * NCHUNK * C::W_STAGE;
       const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * NCHUNK * C::S_STAGE;
-      const uint32_t tx = (abl & 4) ? 0u : ((abl & 2) ? 0u : live * 256) + C::W_STAGE + C::S_STAGE;
+      const uint32_t tx = (abl & 4) ? 0u : ((abl & 2) ? 0u : live * 256 * SUB) + C::W_STAGE + C::S_STAGE;
       // profiling record: one per item (stream K: per item segment)
       const int prec = sk ? item * kparts + (int)blockIdx.x - ((it * NU + 1) * geff - 1) / U : item;
       long long pw = 0;
@@ -1102,7 +1123,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
           }
         }
         __syncwarp();
-        if (!(abl & 6) && lane < live) bulk_g2s(sb + lane * C::A_ROW, a_row + kc * 256, 256, full);
+        if (!(abl & 6) && lane < live) bulk_g2s(sb + lane * C::A_ROW, a_row + kc * 256 * SUB, 256 * SUB, full);
       }
       if (PROF && lane == 0) prof[prec * PSTR + 4] = pw;
     }
@@ -1165,15 +1186,17 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
             stage_release(bar_empty + 8 * st, lane);
             continue;
           }
+#pragma unroll
+          for (int sub = 0; sub < SUB; ++sub) {   // the stage's 128-k chunks
           uint4 wv[2];
           uint2 sv[2];
 #pragma unroll
           for (int j = 0; j < 2; ++j) {
             asm volatile("ld.shared.v4.u32 {%0,%1,%2,%3}, [%4];\n"
                          : "=r"(wv[j].x), "=r"(wv[j].y), "=r"(wv[j].z), "=r"(wv[j].w)
-                         : "r"(w_src + st * C::STAGE + j * 512));
+                         : "r"(w_src + st * C::STAGE + sub * 8192 + j * 512));
             asm volatile("ld.shared.v2.u32 {%0,%1}, [%2];\n" : "=r"(sv[j].x), "=r"(sv[j].y)
-                         : "r"(s_src + st * C::STAGE + j * 64));
+                         : "r"(s_src + st * C::STAGE + sub * 1024 + j * 64));
           }
 #pragma unroll
           for (int w = 0; w < 4; ++w) {
@@ -1185,7 +1208,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
             for (int t = 0; t < T; ++t)
               asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
                            : "=r"(b[t][0]), "=r"(b[t][1]), "=r"(b[t][2]), "=r"(b[t][3])
-                           : "r"(ldb[w] + st * C::STAGE + t * 8 * C::A_ROW));
+                           : "r"(ldb[w] + st * C::STAGE + sub * 256 + t * 8 * C::A_ROW));
 #pragma unroll
             for (int half = 0; half < 2; ++half) {
               const int step = 2 * w + half;
@@ -1214,6 +1237,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
                 }
               }
             }
+          }
           }
           stage_release(bar_empty + 8 * st, lane);
         }
@@ -1797,22 +1821,33 @@ void moe_gemm_ws(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, 
   TORCH_CHECK(false, "moe_gemm_ws: unsupported mode / m tiles / stages");
 }
 
-template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0>
+template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0, int SUB = 1>
 void launch_sab(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
                 torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
                 int n_blocks, int grid, long long* prof, int* sched, int kparts, float* part, int part_rows, int sk) {
-  size_t smem = (size_t)STAGES * (SabCfg<MT>::STAGE + 32);
-  auto k = moe_gemm_sab_kernel<MODE, MT, STAGES, PROF, ABL>;
+  size_t smem = (size_t)STAGES * (SabCfg<MT, SUB>::STAGE + 32);
+  auto k = moe_gemm_sab_kernel<MODE, MT, STAGES, PROF, ABL, SUB>;
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   int per_sm = 0, sms = 0, dev = 0;
   cudaGetDevice(&dev);
   cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
   cudaOccupancyMaxActiveBlocksPerMultiprocessor(&per_sm, k, 288, smem);
   grid = std::min(grid, std::max(1, per_sm) * sms);
-  k<<<grid, 288, smem, at::cuda::getCurrentCUDAStream()>>>(
-      reinterpret_cast<const __nv_bfloat16*>(a_src.data_ptr()), row_route.data_ptr<int32_t>(),
-      wq.data_ptr<uint8_t>(), ws.data_ptr<uint8_t>(), gs.data_ptr<float>(),
-      active.data_ptr<int32_t>(), n_active.data_ptr<int32_t>(), exp_start.data_ptr<int32_t>(),
+  cudaLaunchConfig_t cfg = {};
+  cfg.gridDim = dim3(grid);
+  cfg.blockDim = dim3(288);
+  cfg.dynamicSmemBytes = smem;
+  cfg.stream = at::cuda::getCurrentCUDAStream();
+  cudaLaunchAttribute attr[1];
+  attr[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+  attr[0].val.programmaticStreamSerializationAllowed = 1;
+  cfg.attrs = attr;
+  cfg.numAttrs = (sk & 2) ? 1 : 0;   // flags bit 2: a programmatic dependent of the previous kernel
+  cudaLaunchKernelEx(&cfg, k,
+      reinterpret_cast<const __nv_bfloat16*>(a_src.data_ptr()), (const int32_t*)row_route.data_ptr<int32_t>(),
+      (const uint8_t*)wq.data_ptr<uint8_t>(), (const uint8_t*)ws.data_ptr<uint8_t>(), (const float*)gs.data_ptr<float>(),
+      (const int32_t*)active.data_ptr<int32_t>(), (const int32_t*)n_active.data_ptr<int32_t>(),
+      (const int32_t*)exp_start.data_ptr<int32_t>(),
       reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks, prof, sched, kparts, part, part_rows, sk);
 }
 
@@ -1837,6 +1872,9 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
   }
 #define SCASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch_sab<M_, T_, S_, false>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk); return; }
   SCASE(1, 1, 4) SCASE(2, 1, 4) SCASE(1, 2, 4) SCASE(2, 2, 4) SCASE(1, 1, 8) SCASE(2, 1, 8) SCASE(1, 2, 8) SCASE(2, 2, 8)
+  // 200 + S: two 128-k chunks per stage (16 KB weight copies)
+#define SCASE2(M_, T_, S_) if (mode == M_ && mt == T_ && stages == 200 + S_) { launch_sab<M_, T_, S_, false, 0, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk); return; }
+  SCASE2(1, 1, 2) SCASE2(2, 1, 2) SCASE2(1, 2, 2) SCASE2(2, 2, 2) SCASE2(1, 1, 4) SCASE2(2, 1, 4)
   TORCH_CHECK(false, "moe_gemm_sab: unsupported mode / token groups / stages");
 }
 
@@ -2034,34 +2072,28 @@ def _route_compact_kernel(ids_ptr, local_start_ptr, row_route_ptr, pos_of_route_
     pos_of_route[p] = row (-1 for non-local routes, written by program 0). Program 0 also
     writes exp_start [E + 1] and the list of non-empty chunks of ROWS rows, e | (chunk << 8).
     SPLIT > 0: experts with more than SPLIT routes are listed separately, in chunks of ROWS2
-    rows, at active_ptr + E + P (count at n_active_ptr + 1)."""
+    rows, at active_ptr + E + P (count at n_active_ptr + 1).
+    CHUNK >= P (a power of two): all route ids in one load, counts by histogram, ranks by one
+    cumsum (a loop over 256-id chunks cost ~0.6 us of dependent load latency per pass: 10 us
+    at bs 256)."""
     e = tl.program_id(0)
-    experts = tl.arange(0, E)
-    offs = tl.arange(0, CHUNK)
+    experts = tl.arange(0, 2 * E)   # histogram bins: E local experts + "not local" (bin E)
+    p = tl.arange(0, CHUNK)
+    in_range = p < P
     local_start = tl.load(local_start_ptr)
-    counts = tl.zeros((E,), tl.int32)
-    for c0 in range(0, P, CHUNK):
-        p = c0 + offs
-        loc = (tl.load(ids_ptr + p, mask=p < P, other=0) - local_start + NE) % NE
-        loc = tl.where((p < P) & (loc < E), loc, E)
-        counts += tl.sum((loc[:, None] == experts[None, :]).to(tl.int32), axis=0)
+    loc = (tl.load(ids_ptr + p, mask=in_range, other=0) - local_start + NE) % NE
+    loc = tl.where(in_range & (loc < E), loc, E)
+    counts = tl.where(experts < E, tl.histogram(loc, 2 * E), 0)
     ends = tl.cumsum(counts, axis=0)
     starts = ends - counts
     my_start = tl.sum(tl.where(experts == e, starts, 0), axis=0)
-    running = my_start
-    for c0 in range(0, P, CHUNK):
-        p = c0 + offs
-        in_range = p < P
-        loc = (tl.load(ids_ptr + p, mask=in_range, other=0) - local_start + NE) % NE
-        mine = (loc == e) & in_range
-        rank = tl.cumsum(mine.to(tl.int32), axis=0) - 1
-        tl.store(row_route_ptr + running + rank, p, mask=mine)
-        tl.store(pos_of_route_ptr + p, running + rank, mask=mine)
-        running += tl.sum(mine.to(tl.int32), axis=0)
-        if e == 0:
-            tl.store(pos_of_route_ptr + p, -1, mask=in_range & (loc >= E))
+    mine = loc == e
+    rank = tl.cumsum(mine.to(tl.int32), axis=0) - 1
+    tl.store(row_route_ptr + my_start + rank, p, mask=mine)
+    tl.store(pos_of_route_ptr + p, my_start + rank, mask=mine)
     if e == 0:
-        tl.store(exp_start_ptr + experts, starts)
+        tl.store(pos_of_route_ptr + p, -1, mask=in_range & (loc >= E))
+        tl.store(exp_start_ptr + experts, starts, mask=experts < E)
         tl.store(exp_start_ptr + E, tl.sum(counts, axis=0))
         big = counts > SPLIT if SPLIT > 0 else counts < 0
         nch = tl.where(big, 0, (counts + ROWS - 1) // ROWS)
@@ -2180,7 +2212,7 @@ def ws_layout(bank):
 
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
-                    ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant=""):
+                    ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -2211,7 +2243,8 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
 
     def route():
         _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, rows_per_chunk,
-                                        NE=256, E=count, CHUNK=256, SPLIT=dual if wg else 0, ROWS2=64, num_warps=4)
+                                        NE=256, E=count, CHUNK=max(256, triton.next_power_of_2(p)),
+                                        SPLIT=dual if wg else 0, ROWS2=64, num_warps=4)
         if tma:
             _gather_rows_kernel[(triton.cdiv(p, 4),)](x, row_route, exp_start, xs, E=count, ROWS=4, H=4096, num_warps=4)
 
@@ -2258,7 +2291,8 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
             return
         if sab:
             mod.moe_gemm_sab(2, mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
-                             n_active[0:1], exp_start, y, 32, grid, prof[1], sched[2:4], abl, kparts, part2, int(sk))
+                             n_active[0:1], exp_start, y, 32, grid, prof[1], sched[2:4], abl, kparts, part2,
+                             int(sk) | (2 if pdl else 0))
             return
         g2(2, mt, stages, inter, row_route, bank["w2q" + sfx], bank["w2s" + sfx], bank["w2_gs"], active, n_active,
              exp_start, y, 512 // 8, grid)
@@ -2289,6 +2323,8 @@ CUDA_CONFIGS = {
     "s2": dict(mt=2, stages=4, ctas_per_sm=4, sab=True),         # v6, 16 tokens per item
     "s1d": dict(mt=1, stages=8, ctas_per_sm=2, sab=True),        # v6, deeper pipeline: few items per SM
     "s1k4": dict(mt=1, stages=4, ctas_per_sm=4, sab=True, kparts=4),   # v6, K split 4 ways (bs <= 8: too few items)
+    "s1dw": dict(mt=1, stages=204, ctas_per_sm=2, sab=True),     # s1d with two-chunk stages (16 KB weight copies)
+    "s2w": dict(mt=2, stages=202, ctas_per_sm=4, sab=True),      # s2 with two-chunk stages
     "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens
     "t4": dict(mt=4, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA, 32 tokens (2 CTAs/SM)
     "v8": dict(mt=8, stages=504, ctas_per_sm=2, wg=True),        # v7, 64-row chunks, wgmma width per chunk

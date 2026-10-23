@@ -135,7 +135,7 @@ __global__ void ldg_stream(const uint4* __restrict__ src, size_t n, uint32_t* si
 
 // Warp 0 lane 0 produces; warps 1..NC consume. Each CTA streams its own contiguous range.
 __global__ void tma_stream(const uint8_t* __restrict__ src, const uint8_t* __restrict__ src2, int nchunks,
-                           int chunk, int extra, int stages, int lds, uint32_t* sink, int hold) {
+                           int chunk, int extra, int stages, int lds, uint32_t* sink, int hold, int pair) {
   extern __shared__ __align__(128) uint8_t smem[];
   const uint32_t base = (uint32_t)__cvta_generic_to_shared(smem);
   const int stage_bytes = chunk + extra;
@@ -157,6 +157,11 @@ __global__ void tma_stream(const uint8_t* __restrict__ src, const uint8_t* __res
         const int st = k % stages;
         if (k >= stages) {
           while (!mbar_try(bar_empty + 8 * st, ((k / stages) - 1) & 1)) {
+          }
+          if (pair && (k % 2) == 0 && k + 1 < nchunks) {   // issue pairs back to back: wait for the next slot too
+            const int st1 = (k + 1) % stages;
+            while (!mbar_try(bar_empty + 8 * st1, (((k + 1) / stages) - 1) & 1)) {
+            }
           }
         }
         mbar_expect_tx(bar_full + 8 * st, stage_bytes);
@@ -197,7 +202,7 @@ static torch::Tensor g_buf, g_buf2, g_sink;
 
 // Returns GB/s (bytes read / kernel time, median of 5 after a warmup).
 double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int stages, int lds, int grid_override, int nch_fixed,
-              int hold) {
+              int hold, int pair) {
   const size_t total = (size_t)1 << 30;
   if (!g_buf.defined()) {
     g_buf = torch::ones({(long)total}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
@@ -223,7 +228,7 @@ double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int 
                                     reinterpret_cast<uint32_t*>(g_sink.data_ptr()));
     else
       tma_stream<<<grid, threads, smem>>>(g_buf.data_ptr<uint8_t>(), g_buf2.data_ptr<uint8_t>(), nchunks, chunk,
-                                          extra, stages, lds, reinterpret_cast<uint32_t*>(g_sink.data_ptr()), hold);
+                                          extra, stages, lds, reinterpret_cast<uint32_t*>(g_sink.data_ptr()), hold, pair);
   };
   launch();
   cudaDeviceSynchronize();
@@ -247,7 +252,7 @@ double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int 
 """
 
 _BW_CPP = ("double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int stages, int lds, int grid_override, "
-           "int nch_fixed, int hold);")
+           "int nch_fixed, int hold, int pair);")
 
 
 def run_bw_probe():
@@ -261,6 +266,18 @@ def run_bw_probe():
     # holds a stage ~1.1 us (~2200 clk) with 4 CTAs/SM; the bytes alone need 1.2 us per stage per
     # CTA at 4.49 TB/s. Rate with no hold = HBM; the question is how fast it falls with the hold.
     # Bytes: 528 CTAs x 32 chunks (bs 8 GEMM1-sized), and 1 GB streams.
+    # Is it the copy size or the burst? 8 KB copies issued in back-to-back pairs vs 16 KB copies.
+    for cps, stages, chunk, extra, th, pr in ((4, 4, 8192, 1024, 288, 0), (4, 4, 8192, 1024, 288, 1), (4, 2, 16384, 2048, 288, 0),
+                                              (4, 4, 8192, 0, 288, 0), (4, 4, 8192, 0, 288, 1), (3, 4, 16384, 0, 288, 0),
+                                              (3, 2, 32768, 0, 288, 0), (4, 6, 8192, 1024, 288, 1)):
+        line = []
+        for per9k in (1, 2000, 2500):
+            hold = max(1, per9k * (chunk + extra) // 9216)
+            gbs = mod.run_bw(1, cps, th, chunk, extra, stages, 0, 0, 0, hold, pr)
+            line.append(f"{per9k}:{gbs:.0f}")
+        print(f"bw paced {cps} CTAs x {stages} x {chunk // 1024}K+{extra // 1024}K{' pairs' if pr else ''}"
+              f" ({cps * stages * (chunk + extra) // 1024} KB/SM): GB/s by hold clk per 9 KB " + " ".join(line), flush=True)
+    return
     # DRAM under pacing: same consumer time per byte (hold scaled with the stage size), bigger
     # copies / fewer streams. ~2000 clk per 9 KB is v6's pace at bs 8.
     for cps, stages, chunk, extra, th in ((4, 4, 8192, 1024, 288), (4, 4, 8192, 0, 288), (4, 2, 16384, 2048, 288),
@@ -269,7 +286,7 @@ def run_bw_probe():
         line = []
         for per9k in (1, 1000, 2000, 3000):
             hold = max(1, per9k * (chunk + extra) // 9216)
-            gbs = mod.run_bw(1, cps, th, chunk, extra, stages, 0, 0, 0, hold)
+            gbs = mod.run_bw(1, cps, th, chunk, extra, stages, 0, 0, 0, hold, pr)
             line.append(f"{per9k}:{gbs:.0f}")
         print(f"bw paced {cps} CTAs x {stages} x {chunk // 1024}K+{extra // 1024}K ({cps * stages * (chunk + extra) // 1024} KB/SM):"
               f" GB/s by hold clk per 9 KB " + " ".join(line), flush=True)

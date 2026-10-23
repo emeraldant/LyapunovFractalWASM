@@ -1706,6 +1706,520 @@ __global__ void __launch_bounds__(128, 3) attn_ver_kernel(AttnParams p) {
 """
 
 
+ATTN_VWG_SRC = r"""
+// ---------------------------------------------------------------------------------------
+// Verify blocks on wgmma (attn_vwg_kernel). mma.sync could not keep up with 64 rows per KV head:
+// Hopper has no native E4M3 mma.sync (ptxas emulates it as two f16 HMMAs plus unpacks), and a
+// 16-key step was 596 instructions. Here a CTA = two warpgroups, one per KV head of the pair:
+//   S = Q K^T: wgmma m64n64k32 E4M3, A = the head's 64 rows (8 tokens x 8 query heads) in
+//     registers, B = the cached K tile straight from shared memory (128 B swizzle, K-major:
+//     the gather writes rows in that layout; head h's k32 steps start at 64 h + 32 c).
+//   O^T = V^T P^T: wgmma m64n64k16 f16, A = V^T from registers (warp w holds d = 8 g + w and
+//     8 g + 4 + w: the decode kernel's byte pairing), B = P in shared memory ([row][key] f16,
+//     128 B swizzle). The online-softmax rescale goes through shared memory (alpha per row).
+
+__device__ __forceinline__ void wg_e4m3_64(float* d, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint64_t desc) {
+  asm volatile("{\n .reg .pred p;\n setp.ne.b32 p, 1, 0;\n"
+               "wgmma.mma_async.sync.aligned.m64n64k32.f32.e4m3.e4m3 "
+               "{%0,%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15,%16,%17,%18,%19,%20,%21,%22,%23,"
+               "%24,%25,%26,%27,%28,%29,%30,%31}, {%32,%33,%34,%35}, %36, p, 1, 1;\n}\n"
+               : "+f"(d[0]), "+f"(d[1]), "+f"(d[2]), "+f"(d[3]), "+f"(d[4]), "+f"(d[5]), "+f"(d[6]), "+f"(d[7]),
+                 "+f"(d[8]), "+f"(d[9]), "+f"(d[10]), "+f"(d[11]), "+f"(d[12]), "+f"(d[13]), "+f"(d[14]), "+f"(d[15]),
+                 "+f"(d[16]), "+f"(d[17]), "+f"(d[18]), "+f"(d[19]), "+f"(d[20]), "+f"(d[21]), "+f"(d[22]), "+f"(d[23]),
+                 "+f"(d[24]), "+f"(d[25]), "+f"(d[26]), "+f"(d[27]), "+f"(d[28]), "+f"(d[29]), "+f"(d[30]), "+f"(d[31])
+               : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "l"(desc));
+}
+
+__device__ __forceinline__ void wg_f16_64(float* d, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint64_t desc) {
+  asm volatile("{\n .reg .pred p;\n setp.ne.b32 p, 1, 0;\n"
+               "wgmma.mma_async.sync.aligned.m64n64k16.f32.f16.f16 "
+               "{%0,%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15,%16,%17,%18,%19,%20,%21,%22,%23,"
+               "%24,%25,%26,%27,%28,%29,%30,%31}, {%32,%33,%34,%35}, %36, p, 1, 1, 0;\n}\n"
+               : "+f"(d[0]), "+f"(d[1]), "+f"(d[2]), "+f"(d[3]), "+f"(d[4]), "+f"(d[5]), "+f"(d[6]), "+f"(d[7]),
+                 "+f"(d[8]), "+f"(d[9]), "+f"(d[10]), "+f"(d[11]), "+f"(d[12]), "+f"(d[13]), "+f"(d[14]), "+f"(d[15]),
+                 "+f"(d[16]), "+f"(d[17]), "+f"(d[18]), "+f"(d[19]), "+f"(d[20]), "+f"(d[21]), "+f"(d[22]), "+f"(d[23]),
+                 "+f"(d[24]), "+f"(d[25]), "+f"(d[26]), "+f"(d[27]), "+f"(d[28]), "+f"(d[29]), "+f"(d[30]), "+f"(d[31])
+               : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "l"(desc));
+}
+
+__device__ __forceinline__ uint64_t att_desc128(uint32_t addr) {
+  // K-major, 128 B swizzle: 8-row atoms 1024 B apart (SBO); LBO unused (16)
+  return (uint64_t)((addr & 0x3FFFF) >> 4) | ((uint64_t)1 << 16) | ((uint64_t)(1024 >> 4) << 32) | (1ull << 62);
+}
+
+template <int STAGES>
+__global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
+  extern __shared__ uint8_t smem_raw[];
+  __shared__ int s_pref[ATT_MAXB + 1], s_first[ATT_MAXB], s_n[ATT_MAXB];
+  __shared__ int s_sb[ATT_MAXB], s_su0[ATT_MAXB], s_suc[ATT_MAXB], s_snew[ATT_MAXB], s_stiles[ATT_MAXB];
+  __shared__ int s_nseg, s_last;
+  __shared__ int s_pg[8][ATT_TILE];
+  __shared__ __align__(16) float s_alpha[2][64];
+
+  const int tid = threadIdx.x, lane = tid & 31;
+  const int hw = tid >> 7, wt = tid & 127, w = wt >> 5;   // warpgroup = KV head of the pair; warp in it
+  const int g = lane >> 2, t = lane & 3;
+  const int pair = blockIdx.y;
+  const int B = p.B, HKV = p.HKV, HQ = p.HQ, L = p.L;
+  const uint32_t raw_u32 = (uint32_t)__cvta_generic_to_shared(smem_raw);
+  const uint32_t base = (raw_u32 + 1023u) & ~1023u;            // 1024-aligned for the swizzle atoms
+  uint8_t* smem = smem_raw + (base - raw_u32);
+  const uint32_t pbuf = base + STAGES * 16384 + hw * 8192;     // this head's P [64 rows][64 keys] f16
+  uint8_t* pbuf_g = smem + STAGES * 16384 + hw * 8192;
+  if (p.prof != nullptr && tid == 0) p.prof[((size_t)blockIdx.y * gridDim.x + blockIdx.x) * 64 + 63] = att_gtime();
+  ATT_STAMP(0);
+
+  if (tid < 32) {
+    int carry = 0;
+    for (int b0 = 0; b0 < B; b0 += 32) {
+      int b = b0 + lane;
+      int len = b < B ? p.seq_lens[b] : 0;
+      int n = p.window > 0 ? min(len, p.window - 1) : len;
+      int v = b < B ? n + 1 : 0;
+      int x = v;
+#pragma unroll
+      for (int o = 1; o < 32; o <<= 1) {
+        int y = __shfl_up_sync(0xffffffffu, x, o);
+        if (lane >= o) x += y;
+      }
+      if (b < B) { s_pref[b] = carry + x - v; s_first[b] = len - n; s_n[b] = n; }
+      carry += __shfl_sync(0xffffffffu, x, 31);
+    }
+    if (lane == 0) s_pref[B] = carry;
+  }
+  __syncthreads();
+  const long long T = s_pref[B];
+  const int N = (int)min((long long)p.n_ctas, T);
+  const int cta = blockIdx.x;
+  ATT_STAMP(1);
+  if (cta >= N) return;
+  const long long r0 = T * cta / N, r1 = T * (cta + 1) / N;
+
+  if (tid < 32) {
+    int ns = 0;
+    for (int b0 = 0; b0 < B; b0 += 32) {
+      const int b = b0 + lane;
+      long long lo = 0, hi = 0;
+      bool hit = false;
+      if (b < B) { lo = s_pref[b]; hi = s_pref[b + 1]; hit = hi > r0 && lo < r1; }
+      const unsigned m = __ballot_sync(0xffffffffu, hit);
+      if (hit) {
+        const int i = ns + __popc(m & ((1u << lane) - 1u));
+        const int u0 = (int)max(r0 - lo, 0LL), u1 = (int)min(r1 - lo, hi - lo);
+        const int n = s_n[b], uc = min(u1, n);
+        s_sb[i] = b; s_su0[i] = u0; s_suc[i] = max(uc, u0); s_snew[i] = u1 > n;
+        s_stiles[i] = uc > u0 ? (uc - u0 + ATT_TILE - 1) / ATT_TILE : 1;
+      }
+      ns += __popc(m);
+    }
+    if (lane == 0) s_nseg = ns;
+  }
+  __syncthreads();
+  ATT_STAMP(2);
+  const int nseg = s_nseg;
+  int ntiles = 0;
+  for (int s = 0; s < nseg; ++s) ntiles += s_stiles[s];
+
+  const int pmask = (1 << p.page_shift) - 1;
+  const size_t row_bytes = (size_t)HKV * 64;
+  const int rs = tid >> 3, gr = tid & 7;     // gather: keys rs and rs + 32, granule gr
+  const size_t W = p.qkv_w;
+
+  int ip_s = 0, ip_k = 0, ip_t = 0, is_s = 0, is_k = 0, is_t = 0;
+  auto advance = [&](int& s, int& k, int& tt) { ++tt; if (s < nseg && ++k == s_stiles[s]) { ++s; k = 0; } };
+  auto copy_pages = [&]() {
+    if (tid < ATT_TILE && ip_s < nseg) {
+      const int b = s_sb[ip_s];
+      const int u = s_su0[ip_s] + ip_k * ATT_TILE + tid;
+      const bool ok = u < s_suc[ip_s];
+      const int pos = s_first[b] + (ok ? u : 0);
+      const int32_t* src = p.page_table + (size_t)b * p.pt_stride + (pos >> p.page_shift);
+      const uint32_t dst = (uint32_t)__cvta_generic_to_shared(&s_pg[ip_t & 7][tid]);
+      asm volatile("cp.async.ca.shared.global [%0], [%1], 4, %2;\n" :: "r"(dst), "l"(src), "r"(ok ? 4 : 0));
+    }
+    advance(ip_s, ip_k, ip_t);
+  };
+  auto prefetch_req = [&](int b) {
+    if (tid < 16 * L) {
+      const int j = tid >> 4, c = tid & 15;
+      const uint8_t* gp = reinterpret_cast<const uint8_t*>(p.qkv + ((size_t)b * L + j) * W + (HQ + 2 * HKV) * 64 + pair * 1024);
+      asm volatile("prefetch.global.L2 [%0];" :: "l"(gp + c * 128));
+      if (c < 4) {
+        const uint8_t* kp = reinterpret_cast<const uint8_t*>(p.qkv + ((size_t)b * L + j) * W + (HQ + (c >> 1) * HKV) * 64 + pair * 128);
+        asm volatile("prefetch.global.L2 [%0];" :: "l"(kp + (c & 1) * 128));
+      }
+    }
+  };
+  auto gather = [&](int stage) {
+    if (is_s < nseg) {
+      const int s = is_s, k = is_k, b = s_sb[s];
+      const uint32_t st = base + stage * 16384;
+#pragma unroll
+      for (int q = 0; q < 2; ++q) {
+        const int key = rs + 32 * q;
+        const int u = s_su0[s] + k * ATT_TILE + key;
+        const bool ok = u < s_suc[s];
+        const int pos = s_first[b] + u;
+        const long long row = ok ? ((long long)s_pg[is_t & 7][key] << p.page_shift) + (pos & pmask) : 0;
+        const size_t go = row * row_bytes + pair * 128 + gr * 16;
+        const uint32_t dst = st + key * 128 + ((gr ^ (key & 7)) << 4);
+        cp_async16(dst, p.k_cache + go, ok ? 16u : 0u);
+        cp_async16(dst + 8192, p.v_cache + go, ok ? 16u : 0u);
+      }
+      if (k == 0 && s > 0) prefetch_req(b);
+    }
+    advance(is_s, is_k, is_t);
+  };
+
+  for (int m = 0; m < STAGES - 1; ++m) copy_pages();
+  if (nseg > 0) prefetch_req(s_sb[0]);
+  cp_commit();
+  cp_wait<0>();
+  __syncthreads();
+  for (int m = 0; m < STAGES - 1; ++m) { gather(m); copy_pages(); cp_commit(); }
+  ATT_STAMP(3);
+
+  const float k_scale = *p.k_scale, v_scale = *p.v_scale;
+  const float c_log2 = p.sm_scale_log2 * k_scale * p.qk_factor;   // queries are E4M3 of q / factor
+
+  // rows of this thread in its warpgroup's 64: ra = 16 w + g (token 2w, query head g), rb = ra + 8
+  // (token 2w + 1); Q E4M3 words per row: d 16 c + 4 t .. + 3, c = 0..3.
+  uint32_t qa[2][4];
+  float m_r[2], l_r[2], o[32];
+  int seq = 0;
+  auto prep_q = [&](int b) {
+    seq = s_first[b] + s_n[b];
+#pragma unroll
+    for (int hf = 0; hf < 2; ++hf) {
+      const int j = 2 * w + hf;
+      float x[16];
+      if (j < L) {
+        const __nv_bfloat16* src = p.qkv + ((size_t)b * L + j) * W + (pair * 16 + 8 * hw + g) * 64 + 4 * t;
+#pragma unroll
+        for (int c = 0; c < 4; ++c) {
+          const uint2 u = __ldg(reinterpret_cast<const uint2*>(src + 16 * c));
+          const __nv_bfloat162* hh = reinterpret_cast<const __nv_bfloat162*>(&u);
+          float2 f0 = __bfloat1622float2(hh[0]), f1 = __bfloat1622float2(hh[1]);
+          x[4 * c] = f0.x; x[4 * c + 1] = f0.y; x[4 * c + 2] = f1.x; x[4 * c + 3] = f1.y;
+        }
+      } else {
+#pragma unroll
+        for (int i = 0; i < 16; ++i) x[i] = 0.f;
+      }
+      float ss = 0.f;
+#pragma unroll
+      for (int i = 0; i < 16; ++i) ss += x[i] * x[i];
+      ss += __shfl_xor_sync(0xffffffffu, ss, 1);
+      ss += __shfl_xor_sync(0xffffffffu, ss, 2);
+      const float sc = rsqrtf(ss / 64.f + p.eps);
+#pragma unroll
+      for (int i = 0; i < 16; ++i) x[i] *= sc;
+      if (p.rope) {
+#pragma unroll
+        for (int c = 0; c < 4; ++c)
+#pragma unroll
+          for (int i = 0; i < 2; ++i) {
+            float sn, cn;
+            att_sincos((float)(seq + j) * __ldg(p.inv_freq + 8 * c + 2 * t + i), sn, cn);
+            float e = x[4 * c + 2 * i], od = x[4 * c + 2 * i + 1];
+            x[4 * c + 2 * i] = e * cn - od * sn;
+            x[4 * c + 2 * i + 1] = od * cn + e * sn;
+          }
+      }
+#pragma unroll
+      for (int c = 0; c < 4; ++c) qa[hf][c] = att_e4m3x4(x[4 * c], x[4 * c + 1], x[4 * c + 2], x[4 * c + 3]);
+      m_r[hf] = -ATT_INF; l_r[hf] = 0.f;
+    }
+#pragma unroll
+    for (int i = 0; i < 32; ++i) o[i] = 0.f;
+  };
+  if (nseg > 0) prep_q(s_sb[0]);
+
+  // One 64-key tile for this warpgroup's head. mode 0: cached keys (nvalid valid; wpos >= 0: the
+  // window's lower edge applies, wpos = position of key 0); mode 1: the block's own keys.
+  auto tile = [&](uint32_t st, const uint8_t* stg, int nvalid, int mode, int wpos, bool masked) {
+    float sacc[32];
+#pragma unroll
+    for (int i = 0; i < 32; ++i) sacc[i] = 0.f;
+    asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory");
+    const uint64_t dk = att_desc128(st);
+    wg_e4m3_64(sacc, qa[0][0], qa[1][0], qa[0][1], qa[1][1], dk + ((uint64_t)(64 * hw) >> 4));
+    wg_e4m3_64(sacc, qa[0][2], qa[1][2], qa[0][3], qa[1][3], dk + ((uint64_t)(64 * hw + 32) >> 4));
+    asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+    asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+    // softmax on rows ra (e = 0, 1) and rb (e = 2, 3); key of sacc[4 jj + e] = 8 jj + 2 t + (e & 1)
+    float al[2];
+#pragma unroll
+    for (int hf = 0; hf < 2; ++hf) {
+      const int jrow = 2 * w + hf;
+      float mt = -ATT_INF;
+#pragma unroll
+      for (int jj = 0; jj < 8; ++jj)
+#pragma unroll
+        for (int e = 0; e < 2; ++e) {
+          float x = sacc[4 * jj + 2 * hf + e] * c_log2;
+          if (masked) {
+            const int k = 8 * jj + 2 * t + e;
+            bool ok = k < nvalid;
+            if (mode == 1) ok = ok && k <= jrow;
+            if (wpos >= 0) ok = ok && wpos + k > seq + jrow - p.window;
+            x = ok ? x : -ATT_INF;
+          }
+          sacc[4 * jj + 2 * hf + e] = x;
+          mt = fmaxf(mt, x);
+        }
+      mt = fmaxf(mt, __shfl_xor_sync(0xffffffffu, mt, 1));
+      mt = fmaxf(mt, __shfl_xor_sync(0xffffffffu, mt, 2));
+      const float mn = fmaxf(m_r[hf], mt);
+      const float ms = mn == -ATT_INF ? 0.f : mn;
+      al[hf] = ex2(m_r[hf] - ms);
+      m_r[hf] = mn;
+      float ls = 0.f;
+#pragma unroll
+      for (int jj = 0; jj < 8; ++jj)
+#pragma unroll
+        for (int e = 0; e < 2; ++e) {
+          const float pv = ex2(sacc[4 * jj + 2 * hf + e] - ms);
+          sacc[4 * jj + 2 * hf + e] = pv;
+          ls += pv;
+        }
+      l_r[hf] = l_r[hf] * al[hf] + ls;
+    }
+    // P -> shared [row][key] f16, 128 B swizzle (rows ra, rb share ra & 7 = g); alphas per row
+    const int ra = 16 * w + g;
+#pragma unroll
+    for (int jj = 0; jj < 8; ++jj) {
+      const int co = ((jj ^ g) << 4) + 4 * t;
+      *reinterpret_cast<uint32_t*>(pbuf_g + ra * 128 + co) = pack_h2(sacc[4 * jj], sacc[4 * jj + 1]);
+      *reinterpret_cast<uint32_t*>(pbuf_g + (ra + 8) * 128 + co) = pack_h2(sacc[4 * jj + 2], sacc[4 * jj + 3]);
+    }
+    if (t == 0) { s_alpha[hw][ra] = al[0]; s_alpha[hw][ra + 8] = al[1]; }
+    asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+    asm volatile("bar.sync %0, 128;\n" :: "r"(1 + hw) : "memory");
+    // rescale O^T: column (row) 8 jj + 2 t (+1)
+#pragma unroll
+    for (int jj = 0; jj < 8; ++jj) {
+      const float2 a2 = *reinterpret_cast<const float2*>(&s_alpha[hw][8 * jj + 2 * t]);
+      o[4 * jj] *= a2.x; o[4 * jj + 1] *= a2.y; o[4 * jj + 2] *= a2.x; o[4 * jj + 3] *= a2.y;
+    }
+    // V^T A fragments: warp w's d rows 8 g + w (g) and 8 g + 4 + w (g + 8), keys 16 kk + {2t, 2t+1, 2t+8, 2t+9}
+    const uint8_t* sV = stg + 8192;
+    const int vc = 4 * hw + (g >> 1), vh = (g & 1) << 3;
+    const uint32_t sel = (uint32_t)w | ((uint32_t)(4 + w) << 4);
+    uint32_t va[4][4];
+#pragma unroll
+    for (int kk = 0; kk < 4; ++kk) {
+      const int k0 = 16 * kk + 2 * t;
+      const uint2 x0 = *reinterpret_cast<const uint2*>(sV + k0 * 128 + (((vc ^ (k0 & 7)) << 4) | vh));
+      const uint2 x1 = *reinterpret_cast<const uint2*>(sV + (k0 + 1) * 128 + (((vc ^ ((k0 + 1) & 7)) << 4) | vh));
+      const uint2 x2 = *reinterpret_cast<const uint2*>(sV + (k0 + 8) * 128 + (((vc ^ ((k0 + 8) & 7)) << 4) | vh));
+      const uint2 x3 = *reinterpret_cast<const uint2*>(sV + (k0 + 9) * 128 + (((vc ^ ((k0 + 9) & 7)) << 4) | vh));
+      va[kk][0] = e4m3x2_f16x2(__byte_perm(x0.x, x1.x, sel) & 0xFFFFu);
+      va[kk][1] = e4m3x2_f16x2(__byte_perm(x0.y, x1.y, sel) & 0xFFFFu);
+      va[kk][2] = e4m3x2_f16x2(__byte_perm(x2.x, x3.x, sel) & 0xFFFFu);
+      va[kk][3] = e4m3x2_f16x2(__byte_perm(x2.y, x3.y, sel) & 0xFFFFu);
+    }
+    asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory");
+    const uint64_t dp = att_desc128(pbuf);
+#pragma unroll
+    for (int kk = 0; kk < 4; ++kk) wg_f16_64(o, va[kk][0], va[kk][1], va[kk][2], va[kk][3], dp + ((uint64_t)(32 * kk) >> 4));
+    asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+    asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+    asm volatile("bar.sync %0, 128;\n" :: "r"(1 + hw) : "memory");   // P / alpha reused by the next tile
+  };
+
+  int cs = 0, ck = 0;
+  for (int j = 0; j < ntiles; ++j) {
+    cp_wait<STAGES - 2>();
+    asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+    __syncthreads();
+    if (j < 16) ATT_STAMP(4 + 2 * j);
+    gather((j + STAGES - 1) % STAGES);
+    copy_pages();
+    cp_commit();
+
+    const int stage = j % STAGES;
+    const uint32_t st = base + stage * 16384;
+    uint8_t* stg = smem + stage * 16384;
+    const int b = s_sb[cs];
+    if (ck == 0 && cs > 0) prep_q(b);
+    const int u0 = s_su0[cs] + ck * ATT_TILE;
+    const int nv = min(s_suc[cs] - u0, ATT_TILE);
+    const int pos0 = s_first[b] + u0;
+    const int wpos = (p.window > 0 && pos0 < seq + L - p.window) ? pos0 : -1;
+    if (nv > 0) {
+      if (nv < ATT_TILE || wpos >= 0) tile(st, stg, nv, 0, wpos, true);
+      else tile(st, stg, nv, 0, -1, false);
+    }
+    if (j < 16) ATT_STAMP(5 + 2 * j);
+
+    if (ck == s_stiles[cs] - 1) {
+      ATT_STAMP(40);
+      if (s_snew[cs]) {
+        __syncthreads();
+        const int jt = tid >> 4, hh = (tid >> 3) & 1, dc = tid & 7;
+        float kx[8], vx[8];
+        if (jt < L) {
+          const uint4 kr = __ldg(reinterpret_cast<const uint4*>(p.qkv + ((size_t)b * L + jt) * W + (HQ + 2 * pair + hh) * 64 + 8 * dc));
+          const uint4 vr = __ldg(reinterpret_cast<const uint4*>(p.qkv + ((size_t)b * L + jt) * W + (HQ + HKV + 2 * pair + hh) * 64 + 8 * dc));
+          const __nv_bfloat162* kh = reinterpret_cast<const __nv_bfloat162*>(&kr);
+          const __nv_bfloat162* vh2 = reinterpret_cast<const __nv_bfloat162*>(&vr);
+#pragma unroll
+          for (int i = 0; i < 4; ++i) {
+            float2 a = __bfloat1622float2(kh[i]), c = __bfloat1622float2(vh2[i]);
+            kx[2 * i] = a.x; kx[2 * i + 1] = a.y; vx[2 * i] = c.x; vx[2 * i + 1] = c.y;
+          }
+        } else {
+#pragma unroll
+          for (int i = 0; i < 8; ++i) { kx[i] = 0.f; vx[i] = 0.f; }
+        }
+        float ss = 0.f;
+#pragma unroll
+        for (int i = 0; i < 8; ++i) ss += kx[i] * kx[i];
+        ss += __shfl_xor_sync(0xffffffffu, ss, 1);
+        ss += __shfl_xor_sync(0xffffffffu, ss, 2);
+        ss += __shfl_xor_sync(0xffffffffu, ss, 4);
+        const float inv = rsqrtf(ss / 64.f + p.eps);
+#pragma unroll
+        for (int i = 0; i < 8; ++i) kx[i] *= inv;
+        if (p.rope) {
+#pragma unroll
+          for (int i = 0; i < 4; ++i) {
+            float sn, cn;
+            att_sincos((float)(seq + jt) * __ldg(p.inv_freq + 4 * dc + i), sn, cn);
+            float e = kx[2 * i], od = kx[2 * i + 1];
+            kx[2 * i] = e * cn - od * sn;
+            kx[2 * i + 1] = od * cn + e * sn;
+          }
+        }
+        const float ik = 1.f / k_scale, iv = 1.f / v_scale;
+        uint2 kq, vq;
+        kq.x = att_e4m3x4(kx[0] * ik, kx[1] * ik, kx[2] * ik, kx[3] * ik);
+        kq.y = att_e4m3x4(kx[4] * ik, kx[5] * ik, kx[6] * ik, kx[7] * ik);
+        vq.x = att_e4m3x4(vx[0] * iv, vx[1] * iv, vx[2] * iv, vx[3] * iv);
+        vq.y = att_e4m3x4(vx[4] * iv, vx[5] * iv, vx[6] * iv, vx[7] * iv);
+        if (jt < L) {
+          const long long loc = p.cache_loc[(size_t)b * L + jt];
+          const size_t off = ((size_t)loc * HKV + 2 * pair + hh) * 64 + 8 * dc;
+          *reinterpret_cast<uint2*>(p.k_cache + off) = kq;
+          *reinterpret_cast<uint2*>(p.v_cache + off) = vq;
+        } else {
+          kq = make_uint2(0u, 0u); vq = make_uint2(0u, 0u);
+        }
+        if (jt < 16) {  // rows 0..15 of the consumed stage (0..7 the block, 8..15 zero)
+          const int so = ((((4 * hh + (dc >> 1)) ^ (jt & 7)) << 4) | ((dc & 1) << 3));
+          *reinterpret_cast<uint2*>(stg + jt * 128 + so) = kq;
+          *reinterpret_cast<uint2*>(stg + 8192 + jt * 128 + so) = vq;
+        }
+        asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+        __syncthreads();
+        tile(st, stg, L, 1, -1, true);
+      }
+      // partial (slot cta + b): acc [slot][h][d][row], d = 8 g + w (rows g) / 8 g + 4 + w (g + 8)
+      const size_t slot = (size_t)pair * (p.n_ctas + B) + cta + b;
+      {
+        float* wa = p.ws_acc + (slot * 2 + hw) * 4096;
+#pragma unroll
+        for (int jj = 0; jj < 8; ++jj) {
+          const int rr = 8 * jj + 2 * t;
+          *reinterpret_cast<float2*>(wa + (8 * g + w) * 64 + rr) = make_float2(o[4 * jj], o[4 * jj + 1]);
+          *reinterpret_cast<float2*>(wa + (8 * g + 4 + w) * 64 + rr) = make_float2(o[4 * jj + 2], o[4 * jj + 3]);
+        }
+#pragma unroll
+        for (int hf = 0; hf < 2; ++hf) {
+          float l = l_r[hf];
+          l += __shfl_xor_sync(0xffffffffu, l, 1);
+          l += __shfl_xor_sync(0xffffffffu, l, 2);
+          if (t == 0) reinterpret_cast<float2*>(p.ws_ml)[(slot * 2 + hw) * 64 + 16 * w + 8 * hf + g] = make_float2(m_r[hf], l);
+        }
+      }
+      __threadfence();
+      __syncthreads();
+      const long long vb0 = s_pref[b], vb1 = s_pref[b + 1];
+      const int i_first = att_cta_of(vb0, T, N), i_last = att_cta_of(vb1 - 1, T, N);
+      const int c = i_last - i_first + 1, ng = (c + ATT_GROUP - 1) / ATT_GROUP;
+      const int gi = (cta - i_first) / ATT_GROUP, gs = min(ATT_GROUP, c - gi * ATT_GROUP);
+      int* cnt_final = p.counters + b * gridDim.y + pair;
+      int* cnt_group = p.counters + B * gridDim.y + (size_t)(b * gridDim.y + pair) * p.max_groups + gi;
+      const size_t g_slot0 = ((size_t)pair * B + b) * p.max_groups;
+      if (tid == 0) {
+        int mode = 0;
+        if (ng == 1) {
+          if (atomicAdd(cnt_final, 1) == c - 1) { *cnt_final = 0; mode = 2; }
+        } else if (atomicAdd(cnt_group, 1) == gs - 1) {
+          *cnt_group = 0; mode = 1;
+        }
+        s_last = mode;
+      }
+      __syncthreads();
+      ATT_STAMP(41);
+      const int h = (tid >> 6) & 1, row = tid & 63;
+      const bool mt = tid < 128;
+      if (s_last == 1) {
+        __threadfence();
+        if (mt) {
+          float M = -ATT_INF, Ls = 0.f, oo[64];
+#pragma unroll
+          for (int d = 0; d < 64; ++d) oo[d] = 0.f;
+          att_merge_v(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + gi * ATT_GROUP + b, gs, h, row, M, Ls, oo);
+          att_store_partial_v(p.ws2_acc, p.ws2_ml, g_slot0 + gi, h, row, M, Ls, oo);
+        }
+        __threadfence();
+        __syncthreads();
+        if (tid == 0) {
+          int mode = 0;
+          if (atomicAdd(cnt_final, 1) == ng - 1) { *cnt_final = 0; mode = 3; }
+          s_last = mode;
+        }
+        __syncthreads();
+      }
+      if (s_last >= 2 && mt) {
+        __threadfence();
+        float M = -ATT_INF, Ls = 0.f, oo[64];
+#pragma unroll
+        for (int d = 0; d < 64; ++d) oo[d] = 0.f;
+        if (s_last == 2) att_merge_v(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + b, c, h, row, M, Ls, oo);
+        else att_merge_v(p.ws2_acc, p.ws2_ml, g_slot0, ng, h, row, M, Ls, oo);
+        const int jt = row >> 3, qh = (2 * pair + h) * 8 + (row & 7);
+        if (jt < L) {
+          const float sc = v_scale / Ls;
+          float ss = 0.f;
+#pragma unroll
+          for (int d = 0; d < 64; ++d) { oo[d] *= sc; ss += oo[d] * oo[d]; }
+          const float inv = rsqrtf(ss / 64.f + p.eps);
+          const size_t tok = (size_t)b * L + jt;
+          const uint4* gp = reinterpret_cast<const uint4*>(p.qkv + tok * W + (HQ + 2 * HKV) * 64 + qh * 64);
+          uint4* op = reinterpret_cast<uint4*>(p.out + tok * HQ * 64 + qh * 64);
+#pragma unroll
+          for (int q = 0; q < 8; ++q) {
+            const uint4 gw = gp[q];
+            const __nv_bfloat162* gh = reinterpret_cast<const __nv_bfloat162*>(&gw);
+            uint4 ow;
+            __nv_bfloat162* oh = reinterpret_cast<__nv_bfloat162*>(&ow);
+#pragma unroll
+            for (int i = 0; i < 4; ++i) {
+              const float2 gf = __bfloat1622float2(gh[i]);
+              oh[i] = __floats2bfloat162_rn(oo[8 * q + 2 * i] * inv / (1.f + __expf(-gf.x)),
+                                            oo[8 * q + 2 * i + 1] * inv / (1.f + __expf(-gf.y)));
+            }
+            op[q] = ow;
+          }
+        }
+      }
+      __syncthreads();
+      ATT_STAMP(42);
+      ++cs; ck = 0;
+    } else {
+      ++ck;
+    }
+  }
+  cp_wait<0>();
+  ATT_STAMP(61);
+  if (p.prof != nullptr && tid == 0) p.prof[((size_t)blockIdx.y * gridDim.x + blockIdx.x) * 64 + 62] = att_gtime();
+}
+"""
+
+
 ATTN_HOST_SRC = r"""
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -1716,6 +2230,14 @@ static void launch_dec(const AttnParams& p, int grid_x, int grid_y) {
   auto kern = attn_dec_kernel<S>;
   cudaFuncSetAttribute(kern, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   kern<<<dim3(grid_x, grid_y), 128, smem, at::cuda::getCurrentCUDAStream()>>>(p);
+}
+
+template <int S>
+static void launch_vwg(const AttnParams& p, int grid_x, int grid_y) {
+  size_t smem = (size_t)S * 16384 + 2 * 8192 + 1024;
+  auto kern = attn_vwg_kernel<S>;
+  cudaFuncSetAttribute(kern, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+  kern<<<dim3(grid_x, grid_y), 256, smem, at::cuda::getCurrentCUDAStream()>>>(p);
 }
 
 template <int S>
@@ -1756,6 +2278,12 @@ void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens,
   p.rope = (int)rope; p.n_ctas = (int)n_ctas; p.L = (int)L;
   p.qk_factor = (float)qk_factor; p.sm_scale_log2 = (float)sm_scale_log2; p.eps = (float)eps;
   int pairs = (int)HKV / 2;
+  if (L > 1 && stages >= 100) {
+    if (stages == 103) launch_vwg<3>(p, (int)n_ctas, pairs);
+    else if (stages == 104) launch_vwg<4>(p, (int)n_ctas, pairs);
+    else TORCH_CHECK(false, "attn_dec: unsupported wgmma stages");
+    return;
+  }
   if (L > 1) {
     if (stages == 3) launch_ver<3>(p, (int)n_ctas, pairs);
     else if (stages == 4) launch_ver<4>(p, (int)n_ctas, pairs);
@@ -1772,7 +2300,7 @@ void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens,
 
 
 ATTN_CUDA_SRC = ATTN_HOST_SRC.replace("#include <ATen/cuda/CUDAContext.h>\n",
-                                      "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC, 1)
+                                      "#include <ATen/cuda/CUDAContext.h>\n" + ATTN_DEVICE_SRC + ATTN_VER_SRC + ATTN_VWG_SRC, 1)
 
 
 ATTN_CUDA_CPP = """
@@ -1855,9 +2383,15 @@ def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=25
 
 
 
-def _attn_v4(data, n_ctas=396, stages=3, min_keys=256, prof=None):
+def _attn_v4(data, n_ctas=None, stages=None, min_keys=256, prof=None):
+    """Decode steps: attn_dec_kernel (396 CTAs, 3 stages); verify blocks: attn_vwg_kernel
+    (wgmma; 264 CTAs, 3 stages = code 103)."""
     cfg = data["config"]
     batch, length = cfg["batch"], cfg["q_len"]
+    if n_ctas is None:
+        n_ctas = 396 if length == 1 else 264
+    if stages is None:
+        stages = 3 if length == 1 else 103
     qkv = data["qkv"].reshape(batch * length, -1)
     if not qkv.is_contiguous():
         qkv = qkv.contiguous()
@@ -3012,7 +3546,7 @@ def run_attn_prof(cases, variants, seed=7_300_000):
 
 
 try:
-    run_attention_sim({'v3': _kernel_v3, 'v4': _attn_v4, 'v4s4n264': lambda d: _attn_v4(d, n_ctas=264, stages=4)}, budget_s=260.0, only=lambda c: c.get('q_len', 1) > 1); run_attn_prof([c for c in ATTN_SCORED if c.get('q_len', 1) > 1], {'v4': _attn_v4})
+    run_attention_sim({'v3': _kernel_v3, 'vwg': _attn_v4, 'vwg4': lambda d: _attn_v4(d, stages=104), 'vwgn132': lambda d: _attn_v4(d, n_ctas=132)}, budget_s=260.0, only=lambda c: c.get('q_len', 1) > 1); run_attn_prof([c for c in ATTN_SCORED if c.get('q_len', 1) > 1], {'vwg': _attn_v4})
 except Exception:  # the sim must never break the submission
     import traceback
     print('sim failed:', traceback.format_exc()[-1500:])

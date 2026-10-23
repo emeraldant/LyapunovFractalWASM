@@ -585,12 +585,18 @@ def _sglang_attention(data):
 # ---------------------------------------------------------------------------------------
 # v4: CUDA, one launch per decode step (okc/attn_cuda/kernel.py, bundled below).
 
-# @bundle attn_cuda/kernel.py ATTN_DEVICE_SRC ATTN_VER_SRC ATTN_HOST_SRC ATTN_CUDA_SRC ATTN_CUDA_CPP _ATTN_MODULES _ATTN_COUNTERS _ATTN_EMPTY _no_prof attn_cuda_module attn_cuda_supported attn_cuda_decode
+# @bundle attn_cuda/kernel.py ATTN_DEVICE_SRC ATTN_VER_SRC ATTN_VWG_SRC ATTN_HOST_SRC ATTN_CUDA_SRC ATTN_CUDA_CPP _ATTN_MODULES _ATTN_COUNTERS _ATTN_EMPTY _no_prof attn_cuda_module attn_cuda_supported attn_cuda_decode
 
 
-def _attn_v4(data, n_ctas=396, stages=3, min_keys=256, prof=None):
+def _attn_v4(data, n_ctas=None, stages=None, min_keys=256, prof=None):
+    """Decode steps: attn_dec_kernel (396 CTAs, 3 stages); verify blocks: attn_vwg_kernel
+    (wgmma; 264 CTAs, 3 stages = code 103)."""
     cfg = data["config"]
     batch, length = cfg["batch"], cfg["q_len"]
+    if n_ctas is None:
+        n_ctas = 396 if length == 1 else 264
+    if stages is None:
+        stages = 3 if length == 1 else 103
     qkv = data["qkv"].reshape(batch * length, -1)
     if not qkv.is_contiguous():
         qkv = qkv.contiguous()

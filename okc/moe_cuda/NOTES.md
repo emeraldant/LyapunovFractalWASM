@@ -410,3 +410,9 @@ s1dw ablations (profiling build, cold L2, synthetic weights, judge-like routing)
   is wrong for these sizes: math hides under memory (45.1 vs 41.2).
 - Next: stream K (sk, equal 72 KB units per CTA) on the current v6 (two-chunk stages) - the old
   refutation was on an earlier kernel generation. Probe moe_sk_attn (run after 74e36e12).
+- Stream K on today's v6 (run ff6e0fea, stage times, cold L2): still a loss. bs 8 GEMM1 60.1 ->
+  63.2 (sk2) / 63.5 (sk3), post 3.3 -> 5.1-5.8; bs 16 45.7 -> 49.9; bs 32 81.2 -> 91.4; bs 128 s2q
+  144.4 -> 181.9. Balanced bytes per CTA did not buy the slot-use gain the ablations promised.
+  Note the stage time (60.1) vs the in-kernel item span (45.1): ~15 us sits outside the items
+  (launch, first fill, exit) - probe moe_skprof_attn times the launches with events beside the
+  span, for s1dw and s1dwsk2, full and memory-only.

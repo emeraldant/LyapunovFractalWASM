@@ -205,8 +205,12 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
                 for g, (fn, nbytes) in enumerate(((fns[1], ne * W13_BYTES), (fns[2], ne * W2_BYTES))):
                     prof[g].zero_()
                     flush.zero_()
+                    ev0, ev1 = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+                    ev0.record()
                     fn()
+                    ev1.record()
                     torch.cuda.synchronize()
+                    print(f"  event bs{bs} {name} abl {abl} gemm{g + 1}: {1e3 * ev0.elapsed_time(ev1):.1f} us (launch to end, eager, cold L2)")
                     n_items = int((prof[g].view(-1, 12)[:, 2] > 0).sum())
                     grid = 132 * (kw.get("ctas_per_sm", 4) if kw.get("ks", 1) == 1 else 1)
                     _prof_report(f"bs{bs} {name} {ABLATIONS[abl]:>12} gemm{g + 1} ({ne} exp)", prof[g], n_items,

@@ -1362,7 +1362,7 @@ __device__ __forceinline__ void att_store_partial_h(float* ws_acc, float* ws_ml,
 
 // The cooperative merge's work for one CTA (rank of c): its slice of the 128 (head, row) rows.
 // Out of line: it runs once per segment, and inlined its registers spilled the main loop.
-__device__ __noinline__ void att_coop_merge_v(const AttnParams& p, int rank, int c, size_t s0, int b, int pair, int L,
+__device__ __forceinline__ void att_coop_merge_v(const AttnParams& p, int rank, int c, size_t s0, int b, int pair, int L,
                                               float v_scale) {
   const int tid = threadIdx.x;
   const int HQ = p.HQ, HKV = p.HKV;
@@ -1374,18 +1374,18 @@ __device__ __noinline__ void att_coop_merge_v(const AttnParams& p, int rank, int
     const bool live = hr < r_hi;
     float M = -ATT_INF, Ls = 0.f;
     float4 acc = make_float4(0.f, 0.f, 0.f, 0.f);
-    for (int k0 = 0; k0 < c; k0 += 8) {   // 8 partials in flight per round
-      float4 a[8];
-      float2 ml[8];
+    for (int k0 = 0; k0 < c; k0 += 2) {   // 2 partials in flight per round
+      float4 a[2];
+      float2 ml[2];
 #pragma unroll
-      for (int k = 0; k < 8; ++k) {
+      for (int k = 0; k < 2; ++k) {
         if (k0 + k < c && live) {
           a[k] = __ldcg(reinterpret_cast<const float4*>(p.ws_acc) + (s0 + k0 + k) * 2048 + hr * 16 + d4);
           ml[k] = __ldcg(reinterpret_cast<const float2*>(p.ws_ml) + (s0 + k0 + k) * 128 + hr);
         }
       }
 #pragma unroll
-      for (int k = 0; k < 8; ++k) {
+      for (int k = 0; k < 2; ++k) {
         if (k0 + k < c && live) {
           const float mn = fmaxf(M, ml[k].x);
           const float ms = mn == -ATT_INF ? 0.f : mn;
@@ -1420,7 +1420,7 @@ __device__ __noinline__ void att_coop_merge_v(const AttnParams& p, int rank, int
   }
 }
 
-template <int STAGES>
+template <int STAGES, bool COOP>
 __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
   extern __shared__ uint8_t smem_raw[];
   __shared__ int s_pref[ATT_MAXB + 1], s_first[ATT_MAXB], s_n[ATT_MAXB];
@@ -1845,7 +1845,7 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
       int* cnt_final = p.counters + b * gridDim.y + pair;
       int* cnt_group = p.counters + B * gridDim.y + (size_t)(b * gridDim.y + pair) * p.max_groups + gi;
       const size_t g_slot0 = ((size_t)pair * B + b) * p.max_groups;
-      if (c <= ATT_GROUP) {
+      if (COOP && c <= ATT_GROUP) {
         // Cooperative merge: every CTA of the request waits for all partials (the grid is never
         // larger than what is resident, and CTA ranges are contiguous, so no wait is circular),
         // then merges its slice of the 128 (head, row) rows: 16 lanes per row, coalesced loads,
@@ -1977,10 +1977,10 @@ static void launch_dec(const AttnParams& p, int grid_x, int grid_y) {
   cudaLaunchKernelEx(&cfg, kern, p);
 }
 
-template <int S>
+template <int S, bool COOP>
 static void launch_vwg(const AttnParams& p, int grid_x, int grid_y) {
   size_t smem = (size_t)S * 16384 + 2 * 8192 + 1024;
-  auto kern = attn_vwg_kernel<S>;
+  auto kern = attn_vwg_kernel<S, COOP>;
   cudaFuncSetAttribute(kern, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   kern<<<dim3(grid_x, grid_y), 256, smem, at::cuda::getCurrentCUDAStream()>>>(p);
 }
@@ -2024,8 +2024,9 @@ void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens,
   p.qk_factor = (float)qk_factor; p.sm_scale_log2 = (float)sm_scale_log2; p.eps = (float)eps;
   int pairs = (int)HKV / 2;
   if (L > 1 && stages >= 100) {
-    if (stages == 103) launch_vwg<3>(p, (int)n_ctas, pairs);
-    else if (stages == 104) launch_vwg<4>(p, (int)n_ctas, pairs);
+    if (stages == 103) launch_vwg<3, false>(p, (int)n_ctas, pairs);
+    else if (stages == 104) launch_vwg<4, false>(p, (int)n_ctas, pairs);
+    else if (stages == 113) launch_vwg<3, true>(p, (int)n_ctas, pairs);
     else TORCH_CHECK(false, "attn_dec: unsupported wgmma stages");
     return;
   }

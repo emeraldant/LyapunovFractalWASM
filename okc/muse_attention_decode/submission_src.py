@@ -597,7 +597,7 @@ def _attn_v4(data, n_ctas=None, stages=None, min_keys=256, prof=None):
     if n_ctas is None:
         n_ctas = 396 if length == 1 else 264
     if stages is None:
-        stages = 3 if length == 1 else 103
+        stages = 3 if length == 1 else (113 if cfg["window"] else 103)
     qkv = data["qkv"].reshape(batch * length, -1)
     if not qkv.is_contiguous():
         qkv = qkv.contiguous()

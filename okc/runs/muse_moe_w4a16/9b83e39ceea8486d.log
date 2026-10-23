@@ -1,0 +1,74 @@
+moe cuda: ready in 48 s
+moe bs1 ('cuda', 's1'): not faster (50.8/50.5 us, 65.0/57.9 us)
+moe bs1 ('cuda', 's2'): not faster (51.7/50.9 us, 65.8/58.1 us)
+moe bs1 ('cuda', 's1d'): adopted over ('fast', 8, True) 47.9/50.9 us, 57.1/58.5 us
+moe bs1 ('cuda', 's1k4'): adopted over ('cuda', 's1d') 44.1/47.8 us, 54.1/57.1 us
+moe bs1 ('cuda', 's1dw'): not faster (45.8/43.7 us, 56.7/54.6 us)
+moe bs1 ('cuda', 's2w'): not faster (49.8/43.7 us, 61.9/54.4 us)
+moe bs1 ('cuda', 't2'): not faster (57.4/44.2 us, 72.7/54.2 us)
+moe bs1 ('cuda', 't4'): not faster (60.7/44.0 us, 72.5/54.4 us)
+moe bs1 ('cuda', 'v8'): not faster (64.3/43.7 us, 82.7/54.4 us)
+moe plan bs1   : ('cuda', 's1k4') 44.1 us (sglang 86.9 us)
+moe bs8 ('cuda', 's1'): adopted over ('fast', 8, False) 93.4/110.1 us, 108.7/120.8 us
+moe bs8 ('cuda', 's2'): not faster (101.3/93.2 us, 109.5/109.4 us)
+moe bs8 ('cuda', 's1d'): adopted over ('cuda', 's1') 85.6/93.9 us, 107.2/111.2 us
+moe bs8 ('cuda', 's1k4'): not faster (94.0/85.4 us, 101.9/106.9 us)
+moe bs8 ('cuda', 's1dw'): adopted over ('cuda', 's1d') 84.5/85.9 us, 100.6/107.0 us
+moe bs8 ('cuda', 's2w'): not faster (96.4/84.5 us, 103.3/100.4 us)
+moe bs8 ('cuda', 't2'): not faster (102.1/85.1 us, 113.9/100.3 us)
+moe bs8 ('cuda', 't4'): not faster (100.7/85.1 us, 126.3/100.0 us)
+moe bs8 ('cuda', 'v8'): not faster (97.6/84.4 us, 122.4/100.4 us)
+moe plan bs8   : ('cuda', 's1dw') 84.5 us (sglang 151.4 us)
+moe bs16 ('cuda', 's1'): adopted over ('fast', 8, False) 130.7/140.1 us, 132.9/150.6 us
+moe bs16 ('cuda', 's2'): adopted over ('cuda', 's1') 118.8/130.0 us, 122.5/132.6 us
+moe bs16 ('cuda', 's1d'): not faster (120.1/118.9 us, 125.9/123.1 us)
+moe bs16 ('cuda', 's1k4'): not faster (117.1/118.8 us, 124.3/122.4 us)
+moe bs16 ('cuda', 's1dw'): adopted over ('cuda', 's2') 110.4/119.0 us, 114.1/122.8 us
+moe bs16 ('cuda', 's2w'): not faster (110.9/109.9 us, 115.4/114.0 us)
+moe bs16 ('cuda', 't2'): not faster (137.3/110.3 us, 139.6/113.7 us)
+moe bs16 ('cuda', 't4'): not faster (141.4/110.3 us, 144.2/114.0 us)
+moe bs16 ('cuda', 'v8'): not faster (134.7/110.0 us, 137.1/113.6 us)
+moe plan bs16  : ('cuda', 's1dw') 110.4 us (sglang 186.0 us)
+moe bs32 ('cuda', 's1'): adopted over ('fast', 8, False) 168.5/211.2 us, 140.0/180.5 us
+moe bs32 ('cuda', 's2'): not faster (165.5/168.7 us, 139.7/140.0 us)
+moe bs32 ('cuda', 's1d'): not faster (168.9/167.0 us, 151.6/139.7 us)
+moe bs32 ('cuda', 's1k4'): not faster (168.5/169.3 us, 145.6/140.1 us)
+moe bs32 ('cuda', 's1dw'): adopted over ('cuda', 's1') 157.5/168.3 us, 136.9/139.8 us
+moe bs32 ('cuda', 's2w'): not faster (159.4/157.1 us, 129.8/136.9 us)
+moe bs32 ('cuda', 't2'): not faster (184.3/157.1 us, 138.3/136.4 us)
+moe bs32 ('cuda', 't4'): not faster (200.7/157.9 us, 143.8/137.3 us)
+moe bs32 ('cuda', 'v8'): not faster (192.1/158.2 us, 139.0/138.0 us)
+moe plan bs32  : ('cuda', 's1dw') 157.5 us (sglang 231.8 us)
+moe bs128 ('cuda', 's1'): adopted over ('fast', 16, False) 306.1/354.1 us, 305.9/364.7 us
+moe bs128 ('cuda', 's2'): adopted over ('cuda', 's1') 277.2/303.0 us, 283.4/304.6 us
+moe bs128 ('cuda', 's1d'): not faster (350.6/276.7 us, 372.3/283.0 us)
+moe bs128 ('cuda', 's1k4'): not faster (322.5/277.9 us, 340.0/283.0 us)
+moe bs128 ('cuda', 's1dw'): not faster (283.1/276.5 us, 300.4/283.1 us)
+moe bs128 ('cuda', 's2w'): adopted over ('cuda', 's2') 250.3/276.8 us, 249.8/282.7 us
+moe bs128 ('cuda', 't2'): not faster (272.3/251.4 us, 268.2/251.0 us)
+moe bs128 ('cuda', 't4'): not faster (277.4/252.7 us, 274.7/250.7 us)
+moe bs128 ('cuda', 'v8'): not faster (265.9/250.6 us, 253.5/251.0 us)
+moe plan bs128 : ('cuda', 's2w') 250.3 us (sglang 516.1 us)
+moe bs256 ('cuda', 's1'): adopted over ('fast', 16, False) 356.2/401.0 us, 438.5/455.6 us
+moe bs256 ('cuda', 's2'): adopted over ('cuda', 's1') 327.7/356.4 us, 383.7/438.5 us
+moe bs256 ('cuda', 's1d'): not faster (445.0/328.3 us, 544.7/383.6 us)
+moe bs256 ('cuda', 's1k4'): not faster (391.2/325.4 us, 480.1/381.1 us)
+moe bs256 ('cuda', 's1dw'): not faster (342.0/327.1 us, 411.8/381.4 us)
+moe bs256 ('cuda', 's2w'): adopted over ('cuda', 's2') 279.0/327.2 us, 315.7/380.6 us
+moe bs256 ('cuda', 't2'): not faster (287.1/279.4 us, 318.6/316.5 us)
+moe bs256 ('cuda', 't4'): not faster (287.4/283.6 us, 318.8/317.8 us)
+moe bs256 ('cuda', 'v8'): adopted over ('cuda', 's2w') 274.4/280.4 us, 278.2/316.7 us
+moe plan bs256 : ('cuda', 'v8') 274.4 us (sglang 614.8 us)
+prepare: tuned in 59 s
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 15:52:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop

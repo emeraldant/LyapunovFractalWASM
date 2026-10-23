@@ -1977,6 +1977,7 @@ static void launch_dec(const AttnParams& p, int grid_x, int grid_y) {
   cudaLaunchKernelEx(&cfg, kern, p);
 }
 
+#ifndef ATT_DEC_ONLY
 template <int S, bool COOP>
 static void launch_vwg(const AttnParams& p, int grid_x, int grid_y) {
   size_t smem = (size_t)S * 16384 + 2 * 8192 + 1024;
@@ -1992,6 +1993,8 @@ static void launch_ver(const AttnParams& p, int grid_x, int grid_y) {
   cudaFuncSetAttribute(kern, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   kern<<<dim3(grid_x, grid_y), 128, smem, at::cuda::getCurrentCUDAStream()>>>(p);
 }
+
+#endif  // ATT_DEC_ONLY
 
 void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens, torch::Tensor page_table,
               torch::Tensor cache_loc, torch::Tensor k_cache, torch::Tensor v_cache, torch::Tensor k_scale,
@@ -2023,6 +2026,9 @@ void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens,
   p.rope = (int)rope; p.n_ctas = (int)n_ctas; p.L = (int)L;
   p.qk_factor = (float)qk_factor; p.sm_scale_log2 = (float)sm_scale_log2; p.eps = (float)eps;
   int pairs = (int)HKV / 2;
+#ifdef ATT_DEC_ONLY
+  TORCH_CHECK(L == 1, "attn_dec: this build has the decode kernel only");
+#else
   if (L > 1 && stages >= 100) {
     if (stages == 103) launch_vwg<3, false>(p, (int)n_ctas, pairs);
     else if (stages == 104) launch_vwg<4, false>(p, (int)n_ctas, pairs);
@@ -2036,6 +2042,7 @@ void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens,
     else TORCH_CHECK(false, "attn_dec: unsupported stages for L > 1");
     return;
   }
+#endif
   if (stages == 3) launch_dec<3, false>(p, (int)n_ctas, pairs);
   else if (stages == 4) launch_dec<4, false>(p, (int)n_ctas, pairs);
   else if (stages == 203) launch_dec<3, true>(p, (int)n_ctas, pairs);
@@ -2068,13 +2075,20 @@ def _no_prof(device):
     return t
 
 
-def attn_cuda_module():
-    if "m" not in _ATTN_MODULES:
+def attn_cuda_module(dec_only=False):
+    """dec_only: a build with only the decode kernel (shorter compile, for the decode layer's
+    prepare, which has a time budget)."""
+    key = "dec" if dec_only else "m"
+    if key not in _ATTN_MODULES:
         from torch.utils.cpp_extension import load_inline
-        _ATTN_MODULES["m"] = load_inline(
-            name="okc_attn_dec", cpp_sources=ATTN_CUDA_CPP, cuda_sources=ATTN_CUDA_SRC, functions=["attn_dec"],
-            extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"], verbose=False)
-    return _ATTN_MODULES["m"]
+        src = ATTN_CUDA_SRC
+        if dec_only:
+            src = ATTN_HOST_SRC.replace("#include <ATen/cuda/CUDAContext.h>\n",
+                                        "#include <ATen/cuda/CUDAContext.h>\n#define ATT_DEC_ONLY\n" + ATTN_DEVICE_SRC, 1)
+        _ATTN_MODULES[key] = load_inline(
+            name="okc_attn_dec" + ("_only" if dec_only else ""), cpp_sources=ATTN_CUDA_CPP, cuda_sources=src,
+            functions=["attn_dec"], extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"], verbose=False)
+    return _ATTN_MODULES[key]
 
 
 def attn_cuda_supported(cfg, page_table):
@@ -2085,7 +2099,7 @@ def attn_cuda_supported(cfg, page_table):
             and page & (page - 1) == 0)
 
 
-def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=256, prof=None):
+def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=256, prof=None, dec_only=False):
     """qkv [B * L, W] bf16 -> [B * L, Hq * 64] bf16; writes the new cache entries. n_ctas: CTAs
     per KV-head pair at most (fewer when the batch has fewer than min_keys keys per CTA)."""
     batch, length = cfg["batch"], cfg["q_len"]
@@ -2114,7 +2128,7 @@ def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=25
     ws2_acc = torch.empty((pairs * batch * max_groups,) + acc_shape, dtype=torch.float32, device=device)
     ws2_ml = torch.empty((pairs * batch * max_groups, 2, rows, 2), dtype=torch.float32, device=device)
     out = torch.empty((batch * length, hq * 64), dtype=torch.bfloat16, device=device)
-    attn_cuda_module().attn_dec(
+    attn_cuda_module(dec_only).attn_dec(
         qkv, inv_freq, data["seq_lens"], page_table, data["cache_loc"], data["k_cache"], data["v_cache"],
         data["k_scale"], data["v_scale"], out, ws_acc, ws_ml, ws2_acc, ws2_ml, counters,
         prof if prof is not None else _no_prof(device), max_groups, batch, hq, hkv, page.bit_length() - 1,

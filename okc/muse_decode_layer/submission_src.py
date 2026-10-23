@@ -353,6 +353,18 @@ _INV_FREQ = {}
 
 # @bundle muse_attention_decode/submission.py _inv_freq _load_heads _attn_split_kernel _norm_gate_store _attn_combine_kernel _plan _fused_attention
 
+# Our CUDA decode-step attention (okc/attn_cuda, the attention board's decode path; decode-only
+# build here for a shorter compile in prepare), adopted per bucket by _tune_attention.
+# @bundle attn_cuda/kernel.py ATTN_DEVICE_SRC ATTN_VER_SRC ATTN_VWG_SRC ATTN_HOST_SRC ATTN_CUDA_SRC ATTN_CUDA_CPP _ATTN_MODULES _ATTN_COUNTERS _ATTN_EMPTY _no_prof attn_cuda_module attn_cuda_supported attn_cuda_decode
+
+
+def _cuda_attention(qkv, data, cfg):
+    """The attention board's CUDA decode kernel: qkv [B, W] -> [B, Hq * 64]."""
+    if not qkv.is_contiguous():
+        qkv = qkv.contiguous()
+    inv_freq = _inv_freq(cfg["rope_theta"], cfg["head_dim"], qkv.device)
+    return attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=396, stages=3, dec_only=True)
+
 # ---------------------------------------------------------------------------------------
 # Experts (muse_moe_w4a16)
 
@@ -497,7 +509,10 @@ def _attn_key(cfg):
 
 
 def _attention(qkv, data, cfg, state):
-    if state["attn_plans"].get(_attn_key(cfg), False):
+    plan = state["attn_plans"].get(_attn_key(cfg), False)
+    if plan == "cuda":
+        return _cuda_attention(qkv, data, cfg)
+    if plan:
         return _fused_attention(qkv, data, cfg)
     return _baseline_attention(qkv, data, cfg, state)
 
@@ -815,10 +830,33 @@ def _attn_reference(qkv, data, k_new, v_new):
     return (out.reshape(batch, length, hq * d) * torch.sigmoid(gate)).reshape(batch * length, hq * d)
 
 
+state_cuda_ok = [True]   # set by _check_attention: the CUDA decode attention matched the reference
+
+
+def _check_attention_impl(fn, batch, ctx, length, sliding, page, kv_scale, device, gen):
+    try:
+        qkv, data = _attn_inputs(batch, ctx, length, sliding, page, kv_scale, device, gen)
+        out = fn(qkv, data, data["config"])
+        slots = data["cache_loc"].view(batch, length)
+        k_new = data["k_cache"].view(-1, 2, 64)[slots]
+        v_new = data["v_cache"].view(-1, 2, 64)[slots]
+        err = _rel(out, _attn_reference(qkv, data, k_new, v_new))
+        ok = err <= 1e-2 and bool(torch.isfinite(out.float()).all())
+        if not ok:
+            print(f"cuda attention check failed: B{batch} ctx{ctx} sliding={sliding} page{page}: err {err:.2e}")
+        return ok
+    except Exception as e:
+        print(f"cuda attention check failed: {type(e).__name__}: {str(e)[:200]}")
+        return False
+
+
 def _check_attention(device, gen):
     for batch, ctx, length, sliding, page, kv_scale in ((2, 2600, 1, True, 1, 1.0), (2, 900, 8, False, 64, 1.0),
                                                        (3, 2100, 8, True, 64, 1 / 64), (1, 1500, 1, False, 1, 1 / 64)):
         qkv, data = _attn_inputs(batch, ctx, length, sliding, page, kv_scale, device, gen)
+        if length == 1 and not _check_attention_impl(_cuda_attention, batch, ctx, length, sliding, page, kv_scale,
+                                                     device, gen):
+            state_cuda_ok[0] = False
         out = _fused_attention(qkv, data, data["config"])
         slots = data["cache_loc"].view(batch, length)
         k_new = data["k_cache"].view(-1, 2, 64)[slots]
@@ -852,9 +890,16 @@ def _tune_attention(state, bench, t0):
                 except Exception as e:
                     print(f"attention B{batch} L{length}: {type(e).__name__}: {str(e)[:160]}")
                     continue
-                state["attn_plans"][_attn_key(cfg)] = tw < tb
+                tc = float("inf")
+                if length == 1 and state_cuda_ok[0]:
+                    try:
+                        tc = bench.time(lambda: _cuda_attention(qkv, data, cfg))
+                    except Exception as e:
+                        print(f"cuda attention B{batch}: {type(e).__name__}: {str(e)[:160]}")
+                best = min(tb, tw, tc)
+                state["attn_plans"][_attn_key(cfg)] = "cuda" if best == tc else tw < tb
                 print(f"attention B{batch:<3d} L{length} {'sliding' if sliding else 'full   '}:"
-                      f" fused {tw * 1e3:.1f} us, sglang {tb * 1e3:.1f} us")
+                      f" cuda {tc * 1e3:.1f} us, fused {tw * 1e3:.1f} us, sglang {tb * 1e3:.1f} us")
                 del qkv, data
 
 

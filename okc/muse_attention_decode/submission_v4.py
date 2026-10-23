@@ -1885,22 +1885,31 @@ __device__ __forceinline__ uint64_t att_desc128(uint32_t addr) {
 // the next partial's loads issued before the current one's math.
 __device__ __forceinline__ void att_merge_h(const float* ws_acc, const float* ws_ml, size_t slot0, int count, int h,
                                             int row, int half, float& M, float& Lsum, float o[32]) {
-  for (int k = 0; k < count; ++k) {
-    const size_t slot = slot0 + k;
-    const float2 ml = __ldcg(reinterpret_cast<const float2*>(ws_ml) + (slot * 2 + h) * 64 + row);
-    const float4* wa = reinterpret_cast<const float4*>(ws_acc + ((slot * 2 + h) * 64 + row) * 64 + 32 * half);
-    float4 cur[8];
+  for (int k = 0; k < count; k += 2) {
+    float2 ml[2];
+    float4 cur[2][8];
 #pragma unroll
-    for (int i = 0; i < 8; ++i) cur[i] = __ldcg(wa + i);
-    const float mn = fmaxf(M, ml.x);
-    const float ms = mn == -ATT_INF ? 0.f : mn;
-    const float fa = ex2(M - ms), fb = ex2(ml.x - ms);
-    M = mn;
-    Lsum = Lsum * fa + ml.y * fb;
+    for (int u = 0; u < 2; ++u) {
+      const size_t slot = slot0 + min(k + u, count - 1);
+      ml[u] = __ldcg(reinterpret_cast<const float2*>(ws_ml) + (slot * 2 + h) * 64 + row);
+      const float4* wa = reinterpret_cast<const float4*>(ws_acc + ((slot * 2 + h) * 64 + row) * 64 + 32 * half);
 #pragma unroll
-    for (int i = 0; i < 8; ++i) {
-      o[4 * i] = o[4 * i] * fa + cur[i].x * fb; o[4 * i + 1] = o[4 * i + 1] * fa + cur[i].y * fb;
-      o[4 * i + 2] = o[4 * i + 2] * fa + cur[i].z * fb; o[4 * i + 3] = o[4 * i + 3] * fa + cur[i].w * fb;
+      for (int i = 0; i < 8; ++i) cur[u][i] = __ldcg(wa + i);
+    }
+#pragma unroll
+    for (int u = 0; u < 2; ++u) {
+      if (k + u < count) {
+        const float mn = fmaxf(M, ml[u].x);
+        const float ms = mn == -ATT_INF ? 0.f : mn;
+        const float fa = ex2(M - ms), fb = ex2(ml[u].x - ms);
+        M = mn;
+        Lsum = Lsum * fa + ml[u].y * fb;
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+          o[4 * i] = o[4 * i] * fa + cur[u][i].x * fb; o[4 * i + 1] = o[4 * i + 1] * fa + cur[u][i].y * fb;
+          o[4 * i + 2] = o[4 * i + 2] * fa + cur[u][i].z * fb; o[4 * i + 3] = o[4 * i + 3] * fa + cur[u][i].w * fb;
+        }
+      }
     }
   }
 }
@@ -2292,14 +2301,29 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
       // partial (slot cta + b): acc [slot][h][d][row], d = 8 g + w (rows g) / 8 g + 4 + w (g + 8)
       const size_t slot = (size_t)pair * (p.n_ctas + B) + cta + b;
       {
-        float* wa = p.ws_acc + (slot * 2 + hw) * 4096;   // [row][d]
+        // O^T fragments -> shared [row][d] (head 0 in this consumed stage, head 1 in the P
+        // buffers), then coalesced 16 B rows to the partial slot
+        float* so = reinterpret_cast<float*>(hw == 0 ? stg : smem + STAGES * 16384);
+        __syncthreads();
 #pragma unroll
         for (int jj = 0; jj < 8; ++jj) {
           const int rr = 8 * jj + 2 * t;
-          wa[rr * 64 + 8 * g + w] = o[4 * jj];
-          wa[(rr + 1) * 64 + 8 * g + w] = o[4 * jj + 1];
-          wa[rr * 64 + 8 * g + 4 + w] = o[4 * jj + 2];
-          wa[(rr + 1) * 64 + 8 * g + 4 + w] = o[4 * jj + 3];
+          so[rr * 64 + ((8 * g + w) ^ (rr & 31))] = o[4 * jj];
+          so[(rr + 1) * 64 + ((8 * g + w) ^ ((rr + 1) & 31))] = o[4 * jj + 1];
+          so[rr * 64 + ((8 * g + 4 + w) ^ (rr & 31))] = o[4 * jj + 2];
+          so[(rr + 1) * 64 + ((8 * g + 4 + w) ^ ((rr + 1) & 31))] = o[4 * jj + 3];
+        }
+        __syncthreads();
+        {
+          const int hh = tid >> 7, row = tid & 63, half = (tid >> 6) & 1;
+          const float* src = reinterpret_cast<const float*>(hh == 0 ? stg : smem + STAGES * 16384) + row * 64;
+          float4* dst = reinterpret_cast<float4*>(p.ws_acc + ((slot * 2 + hh) * 64 + row) * 64 + 32 * half);
+#pragma unroll
+          for (int q = 0; q < 8; ++q) {
+            const int d0 = 32 * half + 4 * q;
+            dst[q] = make_float4(src[(d0) ^ (row & 31)], src[(d0 + 1) ^ (row & 31)], src[(d0 + 2) ^ (row & 31)],
+                                 src[(d0 + 3) ^ (row & 31)]);
+          }
         }
 #pragma unroll
         for (int hf = 0; hf < 2; ++hf) {

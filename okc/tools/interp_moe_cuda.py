@@ -53,4 +53,13 @@ f = f * torch.rsqrt(f.pow(2).mean(-1, keepdim=True) + 1e-8)
 ref = (f * (s * (pos >= 0)).unsqueeze(-1)).sum(1)
 err = float((out.float() - ref).norm() / ref.norm()); fails += err > 5e-3
 print(f"{'OK ' if err < 5e-3 else 'BAD'} post-norm rows: err {err:.2e}")
+# Post-norm through split-K parts (KP = 3).
+part = torch.randn(3, 40, 4096)
+out2 = torch.empty(bs, 4096, dtype=torch.bfloat16)
+K._post_norm_parts_kernel[(bs,)](part, w, s, pos, out2, 1e-8, 40, KP=3, TOPK=8, H=4096)
+f2 = part.sum(0).to(torch.bfloat16).float()[pos.clamp(min=0).long()] * w.float()
+f2 = f2 * torch.rsqrt(f2.pow(2).mean(-1, keepdim=True) + 1e-8)
+ref2 = (f2 * (s * (pos >= 0)).unsqueeze(-1)).sum(1)
+err2 = float((out2.float() - ref2).norm() / ref2.norm()); fails += err2 > 5e-3
+print(f"{'OK ' if err2 < 5e-3 else 'BAD'} post-norm parts: err {err2:.2e}")
 print("failures:", fails)

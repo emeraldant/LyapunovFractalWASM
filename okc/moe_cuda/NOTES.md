@@ -310,3 +310,17 @@ one wave) but loses at bs 16 (2 warps per scheduler on far more items).
   cumsum: 2.2 / 1.4 us (v7 route + gather: 13.5 -> 6.3 us).
 - Judge 233c679f: **1.834** (bs 1 1.883, bs 8 1.809, bs 16 1.722, bs 32 1.434, bs 128 2.039,
   bs 256 2.218); plans s1k4 / s1dw / s1dw / s1dw / s2w / v8.
+- Refuted: GEMM2-only split K (kparts2) for bs >= 8: GEMM2 stage unchanged (26.2 -> 25.3-26.4
+  us at bs 8) while post-norm grows 2-4 us; only bs 1 gains (47.0 vs 51.7). GEMM2 is not
+  stream-starved; it sits in the same compute ~ memory regime.
+- 32 KB copies: s2q (16 tokens, four-chunk stages, 2 CTAs/SM) bs 8 77.9 vs s2w 90.6, bs 128
+  217-219 vs 230 us; MT 1 s1dq ~ s1dw.
+- Exhaustive layout search (repack freedom): no bit layout makes two of the four unpack outputs
+  pure left shifts (IMAD, FMA pipe) with the fourth a multiply-gather, nor three of them
+  shifts/rotations; the present (direct, rot 10, rot 13, multiply) is the floor for moving ALU
+  work onto the FMA pipe.
+- Refuted at bs 1: warming L2 with GEMM2's weights from GEMM1 (GEMM1 +9 us, GEMM2 ~-1 us: GEMM2
+  at bs 1 is round-trip bound, not bandwidth bound); split configs whose parts fit the stage
+  ring (no gain). Kept: GEMM1 split parts reduced by the last-arriving CTA (fused, no reduction
+  kernel) + GEMM2 as a PDL dependent: bs 1 -5..-9% on one routing, neutral on another, +2-3% at
+  bs 4-8 (candidate config s1dw2fp). Post-norm kernels made branch-free (slot loads overlap).

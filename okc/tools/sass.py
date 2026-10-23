@@ -208,7 +208,7 @@ def moe_sab(args):
         f"template __global__ void moe_gemm_sab_kernel<{m}, {t}, {s}, {prof}>("
         "const __nv_bfloat16*, const int32_t*, const uint8_t*, const uint8_t*, "
         "const float*, const int32_t*, const int32_t*, const int32_t*, "
-        "__nv_bfloat16*, int, long long*, int*, int, float*, int, int);" for m, t, s in insts)
+        "__nv_bfloat16*, int, long long*, int*, int, float*, int, int, const uint8_t*, const uint8_t*, int*);" for m, t, s in insts)
     log, sass = compile_sass(nvrtc_ptx(src, names))
     for line in log.splitlines():
         if "Used" in line or "spill" in line:

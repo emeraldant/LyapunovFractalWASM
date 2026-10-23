@@ -149,8 +149,10 @@ __global__ void tma_stream(const uint8_t* __restrict__ src, const uint8_t* __res
     asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
   }
   __syncthreads();
-  const uint8_t* my = src + (size_t)blockIdx.x * nchunks * chunk;
-  const uint8_t* my2 = src2 + (size_t)blockIdx.x * nchunks * extra;
+  const bool inter = pair & 2;   // interleaved: CTA b's chunk k at (k * gridDim.x + b) * chunk
+  const uint8_t* my = src + (size_t)blockIdx.x * (inter ? 1 : nchunks) * chunk;
+  const uint8_t* my2 = src2 + (size_t)blockIdx.x * (inter ? 1 : nchunks) * extra;
+  const size_t step = inter ? (size_t)gridDim.x : 1;
   if (warp == 0) {
     if (lane == 0)
       for (int k = 0; k < nchunks; ++k) {
@@ -158,15 +160,15 @@ __global__ void tma_stream(const uint8_t* __restrict__ src, const uint8_t* __res
         if (k >= stages) {
           while (!mbar_try(bar_empty + 8 * st, ((k / stages) - 1) & 1)) {
           }
-          if (pair && (k % 2) == 0 && k + 1 < nchunks) {   // issue pairs back to back: wait for the next slot too
+          if ((pair & 1) && (k % 2) == 0 && k + 1 < nchunks) {   // issue pairs back to back: wait for the next slot too
             const int st1 = (k + 1) % stages;
             while (!mbar_try(bar_empty + 8 * st1, (((k + 1) / stages) - 1) & 1)) {
             }
           }
         }
         mbar_expect_tx(bar_full + 8 * st, stage_bytes);
-        bulk_g2s(base + st * stage_bytes, my + (size_t)k * chunk, chunk, bar_full + 8 * st);
-        if (extra) bulk_g2s(base + st * stage_bytes + chunk, my2 + (size_t)k * extra, extra, bar_full + 8 * st);
+        bulk_g2s(base + st * stage_bytes, my + (size_t)k * step * chunk, chunk, bar_full + 8 * st);
+        if (extra) bulk_g2s(base + st * stage_bytes + chunk, my2 + (size_t)k * step * extra, extra, bar_full + 8 * st);
       }
     return;
   }
@@ -266,6 +268,18 @@ def run_bw_probe():
     # holds a stage ~1.1 us (~2200 clk) with 4 CTAs/SM; the bytes alone need 1.2 us per stage per
     # CTA at 4.49 TB/s. Rate with no hold = HBM; the question is how fast it falls with the hold.
     # Bytes: 528 CTAs x 32 chunks (bs 8 GEMM1-sized), and 1 GB streams.
+    # Address order across CTAs: each CTA its own contiguous region (as v6's items) vs chunk k of
+    # every CTA adjacent ((k * G + b) * chunk), under v6-like pacing.
+    for cps, stages, chunk, extra in ((4, 4, 8192, 1024), (2, 4, 16384, 2048), (4, 2, 16384, 2048), (2, 2, 32768, 4096)):
+        for inter in (0, 2):
+            line = []
+            for per9k in (1, 2000, 2500):
+                hold = max(1, per9k * (chunk + extra) // 9216)
+                gbs = mod.run_bw(1, cps, 288, chunk, extra, stages, 0, 0, 0, hold, inter)
+                line.append(f"{per9k}:{gbs:.0f}")
+            print(f"bw order {cps} CTAs x {stages} x {chunk // 1024}K+{extra // 1024}K {'interleaved' if inter else 'per-CTA   '}:"
+                  f" GB/s by hold clk per 9 KB " + " ".join(line), flush=True)
+    return
     # Is it the copy size or the burst? 8 KB copies issued in back-to-back pairs vs 16 KB copies.
     for cps, stages, chunk, extra, th, pr in ((4, 4, 8192, 1024, 288, 0), (4, 4, 8192, 1024, 288, 1), (4, 2, 16384, 2048, 288, 0),
                                               (4, 4, 8192, 0, 288, 0), (4, 4, 8192, 0, 288, 1), (3, 4, 16384, 0, 288, 0),

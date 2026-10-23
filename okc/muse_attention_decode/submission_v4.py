@@ -1,7 +1,8 @@
 # okc: problem=muse_attention_decode
-"""Gated attention decode for Muse Spark Open: our Triton kernels on decode steps (v1 on
-sliding-window layers, v3 on full-attention layers), SGLang's FA3 path on verify blocks
-(see kernel_fn).
+"""Gated attention decode for Muse Spark Open. Decode steps (q_len 1) run our CUDA kernel
+attn_dec_kernel (okc/attn_cuda/kernel.py, bundled below: one launch, KV gather balanced
+across the batch, f16 mma, in-kernel split merge); verify blocks run SGLang's FA3 path (see
+kernel_fn). The Triton kernels below (v1, v3) are the previous decode path, kept as fallback.
 
 SGLang runs five or six kernels per call (QK-norm + RoPE, the cache store, the query's FP8
 cast, FA3 and its split combine, the gated norm). At these sizes most of that is launch
@@ -702,7 +703,45 @@ __device__ __forceinline__ void att_store_partial(float* ws_acc, float* ws_ml, s
   if (dc == 0) reinterpret_cast<float2*>(ws_ml)[(slot * 2 + h) * 8 + r] = make_float2(M, L);
 }
 
-template <int STAGES>
+// Thread-block cluster helpers (CL kernels): rank, cluster barrier, DSMEM mapping, mbarriers.
+__device__ __forceinline__ void att_cl_sync() {
+  asm volatile("barrier.cluster.arrive.release.aligned;\nbarrier.cluster.wait.acquire.aligned;\n" ::: "memory");
+}
+__device__ __forceinline__ uint32_t att_mapa(uint32_t addr, uint32_t rank) {
+  uint32_t r;
+  asm volatile("mapa.shared::cluster.u32 %0, %1, %2;\n" : "=r"(r) : "r"(addr), "r"(rank));
+  return r;
+}
+__device__ __forceinline__ void att_mbar_init(uint32_t addr, uint32_t count) {
+  asm volatile("mbarrier.init.shared::cta.b64 [%0], %1;\n" :: "r"(addr), "r"(count) : "memory");
+}
+__device__ __forceinline__ void att_mbar_arrive_remote(uint32_t cl_addr) {
+  asm volatile("mbarrier.arrive.release.cluster.shared::cluster.b64 _, [%0];\n" :: "r"(cl_addr) : "memory");
+}
+__device__ __forceinline__ void att_mbar_wait0(uint32_t addr) {
+  asm volatile("{\n .reg .pred P;\n WAIT%=:\n mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 P, [%0], 0;\n"
+               " @!P bra WAIT%=;\n}\n" :: "r"(addr) : "memory");
+}
+__device__ __forceinline__ float2 att_ld_cl2(uint32_t a) {
+  float2 v;
+  asm volatile("ld.shared::cluster.v2.f32 {%0,%1}, [%2];\n" : "=f"(v.x), "=f"(v.y) : "r"(a) : "memory");
+  return v;
+}
+__device__ __forceinline__ float4 att_ld_cl4(uint32_t a) {
+  float4 v;
+  asm volatile("ld.shared::cluster.v4.f32 {%0,%1,%2,%3}, [%4];\n" : "=f"(v.x), "=f"(v.y), "=f"(v.z), "=f"(v.w) : "r"(a) : "memory");
+  return v;
+}
+
+// CL: CTAs form clusters of 8 (consecutive blockIdx.x). A request's CTAs inside one cluster merge
+// their partials over DSMEM into the request's last CTA there (remote mbarrier arrive, no global
+// stores, fences or atomics); only one partial per cluster goes through global memory, and a
+// request inside one cluster never touches it. Each CTA keeps up to 2 segment partials in
+// shared memory slots ([2][2 heads][8 rows][72]: M, L, 6 pad, acc[64]) until the cluster's
+// final barrier. A request whose first CTA would need a third slot takes the per-CTA global path.
+#define ATT_SLOT_FLOATS (2 * 8 * 72)
+
+template <int STAGES, bool CL>
 __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   extern __shared__ __align__(128) uint8_t smem[];
   // per stage: K [64][128] | V [64][128] | Q [16][64] bf16 | new K, V [2][2][64] bf16
@@ -712,6 +751,7 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   __shared__ int s_pg[8][ATT_TILE];
   __shared__ __align__(16) __nv_bfloat16 s_q0[16 * 64];
   __shared__ float s_knew[2][64];
+  __shared__ __align__(8) unsigned long long s_mbar[2];
 
   const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
   const int g = lane >> 2, t = lane & 3;
@@ -744,8 +784,8 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   const int N = (int)min((long long)p.n_ctas, T);
   const int cta = blockIdx.x;
   ATT_STAMP(1);
-  if (cta >= N) return;
-  const long long r0 = T * cta / N, r1 = T * (cta + 1) / N;
+  if (!CL && cta >= N) return;   // CL: idle CTAs still take part in the cluster barriers
+  const long long r0 = cta < N ? T * cta / N : T, r1 = cta < N ? T * (cta + 1) / N : T;
 
   // This CTA's segments: (request, cached range [u0, uc), holds the new token, tiles); warp 0,
   // a lane per request.
@@ -775,6 +815,29 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   for (int s = 0; s < nseg; ++s) ntiles += s_stiles[s];
 
   const uint32_t smem_u32 = (uint32_t)__cvta_generic_to_shared(smem);
+  float* s_slots = reinterpret_cast<float*>(smem + STAGES * ATT_STAGE_BYTES);
+  // The request holding virtual key u (u < T).
+  auto req_of = [&](long long u) { int b = 0; while (b + 1 < B && s_pref[b + 1] <= u) ++b; return b; };
+  // Cluster mode for request b: every cluster it touches can merge it over DSMEM (only its first
+  // CTA can hold it at a segment index >= 2).
+  auto cl_mode = [&](int b, int i_first, int i_last) {
+    if (!CL) return false;
+    if (min(i_last, (i_first / 8) * 8 + 7) == i_first) return true;
+    return b - req_of(T * i_first / N) < 2;
+  };
+  if (CL) {
+    if (tid == 0) {
+      for (int s = 0; s < min(nseg, 2); ++s) {
+        const int b = s_sb[s];
+        const int i_first = att_cta_of(s_pref[b], T, N), i_last = att_cta_of(s_pref[b + 1] - 1, T, N);
+        const int k = cta / 8, cl_lo = max(i_first, 8 * k), cl_hi = min(i_last, 8 * k + 7);
+        const int cnt = (cta == cl_hi && cl_mode(b, i_first, i_last)) ? cl_hi - cl_lo : 0;
+        att_mbar_init((uint32_t)__cvta_generic_to_shared(&s_mbar[s]), (uint32_t)max(cnt, 1));
+      }
+      asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
+    }
+    att_cl_sync();
+  }
   const int pmask = (1 << p.page_shift) - 1;
   const size_t row_bytes = (size_t)HKV * 64;
   // Gather roles, coalesced: lanes 8r..8r+7 copy the eight 16 B granules of one 128 B row, so a
@@ -1080,6 +1143,7 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
         }
       }
       __syncthreads();
+      float mM, mL, mo[8];
       {
         const int h = tid >> 6, r = (tid >> 3) & 7, dc = tid & 7;
         float M = -ATT_INF;
@@ -1094,53 +1158,17 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
 #pragma unroll
           for (int i = 0; i < 8; ++i) o[i] += sw[2 + 8 * dc + i] * f;
         }
-        const size_t slot = (size_t)pair * (p.n_ctas + B) + cta + b;
-        att_store_partial(p.ws_acc, p.ws_ml, slot, h, r, dc, M, L, o);
+        mM = M; mL = L;
+#pragma unroll
+        for (int i = 0; i < 8; ++i) mo[i] = o[i];
       }
-      __threadfence();
-      __syncthreads();
-      // Merge: the last of each group of up to 16 partials merges its group; the last group
-      // (or, with one group, the last partial) merges into the output.
       const long long vb0 = s_pref[b], vb1 = s_pref[b + 1];
       const int i_first = att_cta_of(vb0, T, N), i_last = att_cta_of(vb1 - 1, T, N);
-      const int c = i_last - i_first + 1, ng = (c + ATT_GROUP - 1) / ATT_GROUP;
-      const int gi = (cta - i_first) / ATT_GROUP, gs = min(ATT_GROUP, c - gi * ATT_GROUP);
-      int* cnt_final = p.counters + b * gridDim.y + pair;
-      int* cnt_group = p.counters + B * gridDim.y + (size_t)(b * gridDim.y + pair) * p.max_groups + gi;
-      const size_t g_slot0 = ((size_t)pair * B + b) * p.max_groups;
-      if (tid == 0) {
-        int mode = 0;
-        if (ng == 1) {
-          if (atomicAdd(cnt_final, 1) == c - 1) { *cnt_final = 0; mode = 2; }
-        } else if (atomicAdd(cnt_group, 1) == gs - 1) {
-          *cnt_group = 0; mode = 1;
-        }
-        s_last = mode;
-      }
-      __syncthreads();
-      ATT_STAMP(41);
       const int h = tid >> 6, r = (tid >> 3) & 7, dc = tid & 7;
-      if (s_last == 1) {
-        __threadfence();
-        float M = -ATT_INF, L = 0.f, o[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        att_merge(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + gi * ATT_GROUP + b, gs, h, r, dc, M, L, o);
-        att_store_partial(p.ws2_acc, p.ws2_ml, g_slot0 + gi, h, r, dc, M, L, o);
-        __threadfence();
-        __syncthreads();
-        if (tid == 0) {
-          int mode = 0;
-          if (atomicAdd(cnt_final, 1) == ng - 1) { *cnt_final = 0; mode = 3; }
-          s_last = mode;
-        }
-        __syncthreads();
-      }
-      if (s_last >= 2) {
-        __threadfence();
+      // out = RMSNorm(o / L * v_scale) * sigmoid(gate) for this thread's (head, row, 8 d)
+      auto emit = [&](float M, float L, float o[8]) {
         const int qh = (2 * pair + h) * 8 + r;
         const uint4 gw = *reinterpret_cast<const uint4*>(p.qkv + (size_t)b * p.qkv_w + (HQ + 2 * HKV) * 64 + qh * 64 + 8 * dc);
-        float M = -ATT_INF, L = 0.f, o[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        if (s_last == 2) att_merge(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + b, c, h, r, dc, M, L, o);
-        else att_merge(p.ws2_acc, p.ws2_ml, g_slot0, ng, h, r, dc, M, L, o);
         float sc = v_scale / L, ss = 0.f;
 #pragma unroll
         for (int i = 0; i < 8; ++i) { o[i] *= sc; ss += o[i] * o[i]; }
@@ -1159,6 +1187,110 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
           oh[i] = __floats2bfloat162_rn(y0, y1);
         }
         *reinterpret_cast<uint4*>(p.out + (size_t)b * HQ * 64 + qh * 64 + 8 * dc) = ow;
+      };
+      if (cl_mode(b, i_first, i_last)) {
+        const int k = cta / 8, cl_lo = max(i_first, 8 * k), cl_hi = min(i_last, 8 * k + 7);
+        if (cta != cl_hi) {
+          // contributor: partial -> own slot cs, then arrive on the owner's barrier 0
+          float* sl = s_slots + (size_t)cs * ATT_SLOT_FLOATS + (h * 8 + r) * 72;
+          if (dc == 0) { sl[0] = mM; sl[1] = mL; }
+#pragma unroll
+          for (int i = 0; i < 8; ++i) sl[8 + 8 * dc + i] = mo[i];
+          asm volatile("fence.acq_rel.cluster;\n" ::: "memory");
+          __syncthreads();
+          if (tid == 0)
+            att_mbar_arrive_remote(att_mapa((uint32_t)__cvta_generic_to_shared(&s_mbar[0]), (uint32_t)(cl_hi & 7)));
+        } else {
+          float M = mM, L = mL, o[8];
+#pragma unroll
+          for (int i = 0; i < 8; ++i) o[i] = mo[i];
+          if (cl_hi > cl_lo) {
+            att_mbar_wait0((uint32_t)__cvta_generic_to_shared(&s_mbar[cs]));
+            const int idx_lo = cl_lo > i_first ? 0 : b - req_of(T * cl_lo / N);
+            for (int jc = cl_lo; jc < cl_hi; ++jc) {
+              const int idx = jc == cl_lo ? idx_lo : 0;
+              const uint32_t base = att_mapa((uint32_t)__cvta_generic_to_shared(
+                  s_slots + (size_t)idx * ATT_SLOT_FLOATS + (h * 8 + r) * 72), (uint32_t)(jc & 7));
+              const float2 ml = att_ld_cl2(base);
+              const float4 a0 = att_ld_cl4(base + 32 + 32 * dc), a1 = att_ld_cl4(base + 48 + 32 * dc);
+              const float mn = fmaxf(M, ml.x);
+              const float fa = ex2(M - mn), fb = ex2(ml.x - mn);
+              M = mn;
+              L = L * fa + ml.y * fb;
+              o[0] = o[0] * fa + a0.x * fb; o[1] = o[1] * fa + a0.y * fb; o[2] = o[2] * fa + a0.z * fb;
+              o[3] = o[3] * fa + a0.w * fb; o[4] = o[4] * fa + a1.x * fb; o[5] = o[5] * fa + a1.y * fb;
+              o[6] = o[6] * fa + a1.z * fb; o[7] = o[7] * fa + a1.w * fb;
+            }
+          }
+          const int k0 = i_first / 8, nclu = i_last / 8 - k0 + 1;
+          if (nclu == 1) {
+            emit(M, L, o);
+          } else {
+            const size_t base2 = (size_t)gridDim.y * (p.n_ctas + B) + (size_t)pair * (p.n_ctas / 8 + B) + b;
+            att_store_partial(p.ws_acc, p.ws_ml, base2 + k, h, r, dc, M, L, o);
+            __threadfence();
+            __syncthreads();
+            int* cnt_final = p.counters + b * gridDim.y + pair;
+            if (tid == 0) {
+              int last = atomicAdd(cnt_final, 1) == nclu - 1;
+              if (last) *cnt_final = 0;
+              s_last = last;
+            }
+            __syncthreads();
+            if (s_last) {
+              __threadfence();
+              float M2 = -ATT_INF, L2 = 0.f, o2[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+              att_merge(p.ws_acc, p.ws_ml, base2 + k0, nclu, h, r, dc, M2, L2, o2);
+              emit(M2, L2, o2);
+            }
+          }
+        }
+      } else {
+      {
+        const size_t slot = (size_t)pair * (p.n_ctas + B) + cta + b;
+        att_store_partial(p.ws_acc, p.ws_ml, slot, h, r, dc, mM, mL, mo);
+      }
+      __threadfence();
+      __syncthreads();
+      // Merge: the last of each group of up to 16 partials merges its group; the last group
+      // (or, with one group, the last partial) merges into the output.
+      const int c = i_last - i_first + 1, ng = (c + ATT_GROUP - 1) / ATT_GROUP;
+      const int gi = (cta - i_first) / ATT_GROUP, gs = min(ATT_GROUP, c - gi * ATT_GROUP);
+      int* cnt_final = p.counters + b * gridDim.y + pair;
+      int* cnt_group = p.counters + B * gridDim.y + (size_t)(b * gridDim.y + pair) * p.max_groups + gi;
+      const size_t g_slot0 = ((size_t)pair * B + b) * p.max_groups;
+      if (tid == 0) {
+        int mode = 0;
+        if (ng == 1) {
+          if (atomicAdd(cnt_final, 1) == c - 1) { *cnt_final = 0; mode = 2; }
+        } else if (atomicAdd(cnt_group, 1) == gs - 1) {
+          *cnt_group = 0; mode = 1;
+        }
+        s_last = mode;
+      }
+      __syncthreads();
+      ATT_STAMP(41);
+      if (s_last == 1) {
+        __threadfence();
+        float M = -ATT_INF, L = 0.f, o[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        att_merge(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + gi * ATT_GROUP + b, gs, h, r, dc, M, L, o);
+        att_store_partial(p.ws2_acc, p.ws2_ml, g_slot0 + gi, h, r, dc, M, L, o);
+        __threadfence();
+        __syncthreads();
+        if (tid == 0) {
+          int mode = 0;
+          if (atomicAdd(cnt_final, 1) == ng - 1) { *cnt_final = 0; mode = 3; }
+          s_last = mode;
+        }
+        __syncthreads();
+      }
+      if (s_last >= 2) {
+        __threadfence();
+        float M = -ATT_INF, L = 0.f, o[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        if (s_last == 2) att_merge(p.ws_acc, p.ws_ml, (size_t)pair * (p.n_ctas + B) + i_first + b, c, h, r, dc, M, L, o);
+        else att_merge(p.ws2_acc, p.ws2_ml, g_slot0, ng, h, r, dc, M, L, o);
+        emit(M, L, o);
+      }
       }
       __syncthreads();
       ATT_STAMP(42);
@@ -1168,6 +1300,7 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
     }
   }
   cp_wait<0>();
+  if (CL) att_cl_sync();   // contributors' slots stay readable until every owner has merged
   ATT_STAMP(61);
   if (p.prof != nullptr && tid == 0) p.prof[((size_t)blockIdx.y * gridDim.x + blockIdx.x) * 64 + 62] = att_gtime();
 }
@@ -2272,12 +2405,28 @@ ATTN_HOST_SRC = r"""
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 
-template <int S>
+template <int S, bool CL>
 static void launch_dec(const AttnParams& p, int grid_x, int grid_y) {
-  size_t smem = (size_t)S * ATT_STAGE_BYTES;
-  auto kern = attn_dec_kernel<S>;
+  size_t smem = (size_t)S * ATT_STAGE_BYTES + (CL ? 2 * ATT_SLOT_FLOATS * sizeof(float) : 0);
+  auto kern = attn_dec_kernel<S, CL>;
   cudaFuncSetAttribute(kern, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
-  kern<<<dim3(grid_x, grid_y), 128, smem, at::cuda::getCurrentCUDAStream()>>>(p);
+  if (!CL) {
+    kern<<<dim3(grid_x, grid_y), 128, smem, at::cuda::getCurrentCUDAStream()>>>(p);
+    return;
+  }
+  cudaLaunchConfig_t cfg = {};
+  cfg.gridDim = dim3(grid_x, grid_y);
+  cfg.blockDim = dim3(128);
+  cfg.dynamicSmemBytes = smem;
+  cfg.stream = at::cuda::getCurrentCUDAStream();
+  cudaLaunchAttribute attr[1];
+  attr[0].id = cudaLaunchAttributeClusterDimension;
+  attr[0].val.clusterDim.x = 8;
+  attr[0].val.clusterDim.y = 1;
+  attr[0].val.clusterDim.z = 1;
+  cfg.attrs = attr;
+  cfg.numAttrs = 1;
+  cudaLaunchKernelEx(&cfg, kern, p);
 }
 
 template <int S>
@@ -2338,10 +2487,10 @@ void attn_dec(torch::Tensor qkv, torch::Tensor inv_freq, torch::Tensor seq_lens,
     else TORCH_CHECK(false, "attn_dec: unsupported stages for L > 1");
     return;
   }
-  if (stages == 3) launch_dec<3>(p, (int)n_ctas, pairs);
-  else if (stages == 4) launch_dec<4>(p, (int)n_ctas, pairs);
-  else if (stages == 5) launch_dec<5>(p, (int)n_ctas, pairs);
-  else if (stages == 6) launch_dec<6>(p, (int)n_ctas, pairs);
+  if (stages == 3) launch_dec<3, false>(p, (int)n_ctas, pairs);
+  else if (stages == 4) launch_dec<4, false>(p, (int)n_ctas, pairs);
+  else if (stages == 203) launch_dec<3, true>(p, (int)n_ctas, pairs);
+  else if (stages == 204) launch_dec<4, true>(p, (int)n_ctas, pairs);
   else TORCH_CHECK(false, "attn_dec: unsupported stages");
 }
 """
@@ -2406,13 +2555,16 @@ def attn_cuda_decode(qkv, data, cfg, inv_freq, n_ctas=264, stages=4, min_keys=25
     capacity = page_table.shape[1] * page
     span = min(window, capacity) if window else capacity
     n = max(1, min(max(1, n_ctas // pairs), -(-batch * span // min_keys)))
+    cl = length == 1 and stages >= 200
+    if cl:
+        n = -(-n // 8) * 8   # whole clusters of 8
     device = qkv.device
     max_groups = n // 16 + 2
     key = (device, batch * pairs * (1 + max_groups))
     counters = _ATTN_COUNTERS.get(key)
     if counters is None:
         counters = _ATTN_COUNTERS[key] = torch.zeros(key[1], dtype=torch.int32, device=device)
-    slots = pairs * (n + batch)
+    slots = pairs * (n + batch) + (pairs * (n // 8 + batch) if cl else 0)
     rows = 8 if length == 1 else 64
     acc_shape = (2, 8, 64) if length == 1 else (2, 64, 64)
     ws_acc = torch.empty((slots,) + acc_shape, dtype=torch.float32, device=device)
@@ -2462,8 +2614,9 @@ def _kernel_v3(data):
 
 
 def kernel_fn(data: Inputs) -> torch.Tensor:
-    """Decode steps -> v4 (CUDA); verify blocks -> FA3 for now."""
+    """Decode steps -> v4 (CUDA, attn_dec_kernel); verify blocks -> SGLang's FA3 path for now
+    (attn_vwg_kernel is correct but slower there: check 644919ef)."""
     cfg = data["config"]
-    if attn_cuda_supported(cfg, data["page_table"]):
+    if cfg["q_len"] == 1 and attn_cuda_supported(cfg, data["page_table"]):
         return _attn_v4(data)
     return _kernel_v3(data)

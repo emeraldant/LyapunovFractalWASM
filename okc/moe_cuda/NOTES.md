@@ -425,3 +425,10 @@ s1dw ablations (profiling build, cold L2, synthetic weights, judge-like routing)
   fetch one step of the next item's chain per stage over the current item's last PF_LEAD = 5
   stages, claim kept late so balancing is unchanged. Compiles (sm_90a), registers unchanged.
   A/B probe moe_pf_attn.
+- Refuted (run after moe_pf_attn): the item-boundary metadata chain. mpf (next item's metadata
+  fetched over the current item's last stages) is neutral everywhere: bs 1 42.7 / 42.9, bs 8
+  GEMM1 61.1 / 61.1, bs 16 47.2 / 47.9, bs 32 81.9 / 82.1, bs 128 145.2 / 144.2. Correct, no hang;
+  the *pf gate candidates are removed again (option kept).
+- Open: GEMM1 bs 8 stage 61 us vs a 45 us item span. Profiling build now stamps per-CTA entry
+  and consumer exit (PCTA slots before the item records); probe moe_cta_pf prints the CTA
+  timeline (entry -> first producer issue -> first data -> last item end -> exits).

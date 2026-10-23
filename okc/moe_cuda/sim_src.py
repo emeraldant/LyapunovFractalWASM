@@ -190,8 +190,10 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
         for name, kw in cfgs.items():
             for abl in abls:
                 maxi = (32 + bs * 8 // ((8 if kw.get("sab") else 16) * kw["mt"]) + 1) * 64 * max(kw.get("kparts", 1), kw.get("kparts2") or 1)
-                prof = (torch.zeros(maxi * 12, dtype=torch.int64, device="cuda"),
-                        torch.zeros(maxi * 12, dtype=torch.int64, device="cuda"))
+                pcta = 2048   # v6 per-CTA entry / exit slots (PCTA) before the item records
+                prof_full = (torch.zeros(pcta + maxi * 12, dtype=torch.int64, device="cuda"),
+                             torch.zeros(pcta + maxi * 12, dtype=torch.int64, device="cuda"))
+                prof = (prof_full[0][pcta:], prof_full[1][pcta:])
                 fns, _ = moe_cuda_stages(data["hidden_states"], ids, data["topk_weights"], ls, bank, state["norm_w"],
                                          _SIM_EPS, prof=prof, abl=abl, **kw)
                 try:
@@ -203,14 +205,21 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
                 fns[0]()
                 torch.cuda.synchronize()
                 for g, (fn, nbytes) in enumerate(((fns[1], ne * W13_BYTES), (fns[2], ne * W2_BYTES))):
-                    prof[g].zero_()
+                    prof_full[g].zero_()
                     flush.zero_()
-                    ev0, ev1 = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
-                    ev0.record()
                     fn()
-                    ev1.record()
                     torch.cuda.synchronize()
-                    print(f"  event bs{bs} {name} abl {abl} gemm{g + 1}: {1e3 * ev0.elapsed_time(ev1):.1f} us (launch to end, eager, cold L2)")
+                    if kw.get("sab"):   # CTA timeline: entry -> first producer issue -> first data -> exits
+                        cta = prof_full[g][:pcta].view(-1, 2).cpu().double()
+                        cta = cta[cta[:, 0] > 0]
+                        if len(cta):
+                            it = prof[g].view(-1, 12).cpu().double()
+                            it = it[it[:, 2] > 0]
+                            e0 = float(cta[:, 0].min())
+                            q = lambda v: "/".join(f"{(float(v.quantile(x)) - e0) / 1e3:.1f}" for x in (0.0, 0.5, 1.0))
+                            print(f"  cta bs{bs} {name} abl {abl} gemm{g + 1}: {len(cta)} CTAs; entry {q(cta[:, 0])};"
+                                  f" producer first issue {q(it[:, 6])}; consumer first data {q(it[:, 1])};"
+                                  f" last item end {(float(it[:, 2].max()) - e0) / 1e3:.1f}; exit {q(cta[:, 1])} us (min/p50/max)")
                     n_items = int((prof[g].view(-1, 12)[:, 2] > 0).sum())
                     grid = 132 * (kw.get("ctas_per_sm", 4) if kw.get("ks", 1) == 1 else 1)
                     _prof_report(f"bs{bs} {name} {ABLATIONS[abl]:>12} gemm{g + 1} ({ne} exp)", prof[g], n_items,

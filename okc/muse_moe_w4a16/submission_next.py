@@ -639,6 +639,7 @@ struct WsCfg {
 // waiting on "full" (not measured: it perturbs the hot loop; read the ablations instead),
 // producer's cycles waiting on "empty", item cycles (warp 0), producer start ns, 0}.
 #define PSTR 12   // profiling record: int64 fields per item
+#define PCTA 2048   // v6 profiling: int64 per-CTA entry/exit slots before prof (grid <= 1024)
 __device__ __forceinline__ long long gtimer() {
   long long t;
   asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
@@ -1028,6 +1029,8 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
   const uint32_t bar_full = base + STAGES * C::STAGE, bar_empty = bar_full + 8 * STAGES;
   volatile int* hdr = reinterpret_cast<volatile int*>(smem + STAGES * (C::STAGE + 16));
   const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
+  // Profiling build: per-CTA entry / consumer-exit times, PCTA records before the item records.
+  if (PROF && tid == 0) prof[-PCTA + 2 * (int)blockIdx.x] = gtimer();
   if (tid == 0) {
     for (int s = 0; s < STAGES; ++s) {
       mbar_init(bar_full + 8 * s, 1);
@@ -1411,6 +1414,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       prof[prec * PSTR + 5] = clock64() - ct0;
     }
   }
+  if (PROF && tid == 0) prof[-PCTA + 2 * (int)blockIdx.x + 1] = gtimer();
   if (flags & 16) asm volatile("griddepcontrol.wait;\n" ::: "memory");
 }
 
@@ -2489,11 +2493,6 @@ CUDA_CONFIGS = {
                                                                  # on s2q as its PDL co-runner (bs 256)
     "s1dw2fp": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True),   # bs 1: K split 2,
                                                                  # parts reduced in GEMM1, GEMM2 a PDL dependent
-    # mpf: the v6 producer fetches the next item's metadata over the current item's last stages
-    "s1dwpf": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, mpf=True),
-    "s2wpf": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, mpf=True),
-    "s2qpf": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, mpf=True),
-    "s1k4pf": dict(mt=1, stages=4, ctas_per_sm=4, sab=True, kparts=4, mpf=True),
     "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens
     "t4": dict(mt=4, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA, 32 tokens (2 CTAs/SM)
     "v8": dict(mt=8, stages=504, ctas_per_sm=2, wg=True),        # v7, 64-row chunks, wgmma width per chunk

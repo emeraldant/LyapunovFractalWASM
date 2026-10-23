@@ -301,11 +301,6 @@ CUDA_CONFIGS = {
                                                                  # on s2q as its PDL co-runner (bs 256)
     "s1dw2fp": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True),   # bs 1: K split 2,
                                                                  # parts reduced in GEMM1, GEMM2 a PDL dependent
-    # mpf: the v6 producer fetches the next item's metadata over the current item's last stages
-    "s1dwpf": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, mpf=True),
-    "s2wpf": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, mpf=True),
-    "s2qpf": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, mpf=True),
-    "s1k4pf": dict(mt=1, stages=4, ctas_per_sm=4, sab=True, kparts=4, mpf=True),
     "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens
     "t4": dict(mt=4, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA, 32 tokens (2 CTAs/SM)
     "v8": dict(mt=8, stages=504, ctas_per_sm=2, wg=True),        # v7, 64-row chunks, wgmma width per chunk

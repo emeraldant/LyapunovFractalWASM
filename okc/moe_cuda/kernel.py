@@ -374,6 +374,7 @@ struct WsCfg {
 // waiting on "full" (not measured: it perturbs the hot loop; read the ablations instead),
 // producer's cycles waiting on "empty", item cycles (warp 0), producer start ns, 0}.
 #define PSTR 12   // profiling record: int64 fields per item
+#define PCTA 2048   // v6 profiling: int64 per-CTA entry/exit slots before prof (grid <= 1024)
 __device__ __forceinline__ long long gtimer() {
   long long t;
   asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
@@ -763,6 +764,8 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
   const uint32_t bar_full = base + STAGES * C::STAGE, bar_empty = bar_full + 8 * STAGES;
   volatile int* hdr = reinterpret_cast<volatile int*>(smem + STAGES * (C::STAGE + 16));
   const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
+  // Profiling build: per-CTA entry / consumer-exit times, PCTA records before the item records.
+  if (PROF && tid == 0) prof[-PCTA + 2 * (int)blockIdx.x] = gtimer();
   if (tid == 0) {
     for (int s = 0; s < STAGES; ++s) {
       mbar_init(bar_full + 8 * s, 1);
@@ -1146,6 +1149,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       prof[prec * PSTR + 5] = clock64() - ct0;
     }
   }
+  if (PROF && tid == 0) prof[-PCTA + 2 * (int)blockIdx.x + 1] = gtimer();
   if (flags & 16) asm volatile("griddepcontrol.wait;\n" ::: "memory");
 }
 

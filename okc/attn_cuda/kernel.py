@@ -78,7 +78,14 @@ __device__ __forceinline__ void mma_f16(float c[4], uint32_t a0, uint32_t a1, ui
                : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
 }
 
-struct PageSet { int pg[4]; int off[4]; };
+// sin, cos of an fp32 angle (up to ~1e6 rad): Cody-Waite reduction by 2 pi in two parts, then
+// the fast intrinsics on [-pi, pi] (abs error ~1e-6, far below the BF16 rounding that follows).
+__device__ __forceinline__ void att_sincos(float a, float& sn, float& cn) {
+  const float k = rintf(a * 0.15915494309189535f);
+  float r = fmaf(-k, 6.28318548202514648f, a);
+  r = fmaf(-k, -1.7484555314695172e-07f, r);
+  __sincosf(r, &sn, &cn);
+}
 
 // 16 B chunk swizzle of a 128 B key row: conflict-free for the K reads (rows 2m, 2m+1 x four
 // chunks of one head) and the V reads (rows 2t, t = 0..3, x two chunks).
@@ -143,6 +150,8 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   __shared__ int s_pref[ATT_MAXB + 1], s_first[ATT_MAXB], s_n[ATT_MAXB];
   __shared__ int s_sb[ATT_MAXB], s_su0[ATT_MAXB], s_suc[ATT_MAXB], s_snew[ATT_MAXB], s_stiles[ATT_MAXB];
   __shared__ int s_nseg, s_last;
+  __shared__ int s_pg[8][ATT_TILE];
+  __shared__ __align__(16) __nv_bfloat16 s_q0[16 * 64];
   __shared__ float s_knew[2][64];
 
   const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
@@ -179,20 +188,26 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   if (cta >= N) return;
   const long long r0 = T * cta / N, r1 = T * (cta + 1) / N;
 
-  // This CTA's segments: (request, cached range [u0, uc), holds the new token, tiles).
-  if (tid == 0) {
+  // This CTA's segments: (request, cached range [u0, uc), holds the new token, tiles); warp 0,
+  // a lane per request.
+  if (warp == 0) {
     int ns = 0;
-    for (int b = 0; b < B; ++b) {
-      long long lo = s_pref[b], hi = s_pref[b + 1];
-      if (hi <= r0 || lo >= r1) continue;
-      int u0 = (int)max(r0 - lo, 0LL), u1 = (int)min(r1 - lo, hi - lo);
-      int n = s_n[b];
-      int uc = min(u1, n);
-      s_sb[ns] = b; s_su0[ns] = u0; s_suc[ns] = max(uc, u0); s_snew[ns] = u1 > n;
-      s_stiles[ns] = uc > u0 ? (uc - u0 + ATT_TILE - 1) / ATT_TILE : 1;
-      ++ns;
+    for (int b0 = 0; b0 < B; b0 += 32) {
+      const int b = b0 + lane;
+      long long lo = 0, hi = 0;
+      bool hit = false;
+      if (b < B) { lo = s_pref[b]; hi = s_pref[b + 1]; hit = hi > r0 && lo < r1; }
+      const unsigned m = __ballot_sync(0xffffffffu, hit);
+      if (hit) {
+        const int i = ns + __popc(m & ((1u << lane) - 1u));
+        const int u0 = (int)max(r0 - lo, 0LL), u1 = (int)min(r1 - lo, hi - lo);
+        const int n = s_n[b], uc = min(u1, n);
+        s_sb[i] = b; s_su0[i] = u0; s_suc[i] = max(uc, u0); s_snew[i] = u1 > n;
+        s_stiles[i] = uc > u0 ? (uc - u0 + ATT_TILE - 1) / ATT_TILE : 1;
+      }
+      ns += __popc(m);
     }
-    s_nseg = ns;
+    if (lane == 0) s_nseg = ns;
   }
   __syncthreads();
   ATT_STAMP(2);
@@ -203,49 +218,46 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
   const uint32_t smem_u32 = (uint32_t)__cvta_generic_to_shared(smem);
   const int pmask = (1 << p.page_shift) - 1;
   const size_t row_bytes = (size_t)HKV * 64;
-  (void)row_bytes;
   // Gather roles, coalesced: lanes 8r..8r+7 copy the eight 16 B granules of one 128 B row, so a
   // warp instruction moves four whole rows (a row per thread made every instruction touch 32
   // rows with 16 B each: DRAM served scattered sectors at ~0.8 TB/s). Thread rows: K and V of
   // keys rs + 16q, q = 0..3.
   const int rs = tid >> 3, gr = tid & 7;
 
-  // Tile iterators (segment, tile within it) for: page-index loads, gathers, compute.
-  int ix_s = 0, ix_k = 0, is_s = 0, is_k = 0;
-  auto advance = [&](int& s, int& k) { if (s < nseg && ++k == s_stiles[s]) { ++s; k = 0; } };
-  // A tile's page entries for this thread's four keys: loaded two tiles before their gather,
-  // and only combined with the in-page offsets at the gather (no register move waits on them).
-  auto load_page = [&](int s, int k, PageSet& ps) {
-#pragma unroll
-    for (int q = 0; q < 4; ++q) { ps.pg[q] = -1; ps.off[q] = 0; }
-    if (s >= nseg) return;
-    int b = s_sb[s];
-    const int32_t* pt = p.page_table + (size_t)b * p.pt_stride;
-#pragma unroll
-    for (int q = 0; q < 4; ++q) {
-      int u = s_su0[s] + k * ATT_TILE + rs + 16 * q;
-      if (u < s_suc[s]) {
-        int pos = s_first[b] + u;
-        ps.off[q] = pos & pmask;
-        ps.pg[q] = __ldg(pt + (pos >> p.page_shift));
-      }
+  // Tile iterators (segment, tile within it): page-entry copies (STAGES - 1 tiles ahead of the
+  // gathers, into an 8-tile smem ring by 4 B cp.async: nothing waits on them in registers),
+  // gathers, compute. One commit group per tile: its gather plus a later tile's page entries.
+  int ip_s = 0, ip_k = 0, ip_t = 0, is_s = 0, is_k = 0, is_t = 0;
+  auto advance = [&](int& s, int& k, int& tt) { ++tt; if (s < nseg && ++k == s_stiles[s]) { ++s; k = 0; } };
+  auto copy_pages = [&]() {
+    if (tid < ATT_TILE && ip_s < nseg) {
+      const int b = s_sb[ip_s];
+      const int u = s_su0[ip_s] + ip_k * ATT_TILE + tid;
+      const bool ok = u < s_suc[ip_s];
+      const int pos = s_first[b] + (ok ? u : 0);
+      const int32_t* src = p.page_table + (size_t)b * p.pt_stride + (pos >> p.page_shift);
+      const uint32_t dst = (uint32_t)__cvta_generic_to_shared(&s_pg[ip_t & 7][tid]);
+      asm volatile("cp.async.ca.shared.global [%0], [%1], 4, %2;\n" :: "r"(dst), "l"(src), "r"(ok ? 4 : 0));
     }
+    advance(ip_s, ip_k, ip_t);
   };
-  auto issue = [&](int s, int k, const PageSet& ps, int stage) {
-    if (s < nseg) {
-      uint32_t st = smem_u32 + stage * ATT_STAGE_BYTES;
+  auto gather = [&](int stage) {
+    if (is_s < nseg) {
+      const int s = is_s, k = is_k, b = s_sb[s];
+      const uint32_t st = smem_u32 + stage * ATT_STAGE_BYTES;
 #pragma unroll
       for (int q = 0; q < 4; ++q) {
-        int key = rs + 16 * q;
-        long long row = ps.pg[q] < 0 ? 0 : ((long long)ps.pg[q] << p.page_shift) + ps.off[q];
-        uint32_t bytes = ps.pg[q] < 0 ? 0u : 16u;
-        size_t go = row * row_bytes + pair * 128 + gr * 16;
-        uint32_t dst = st + key * 128 + ((gr ^ att_swz(key)) << 4);
-        cp_async16(dst, p.k_cache + go, bytes);
-        cp_async16(dst + 8192, p.v_cache + go, bytes);
+        const int key = rs + 16 * q;
+        const int u = s_su0[s] + k * ATT_TILE + key;
+        const bool ok = u < s_suc[s];
+        const int pos = s_first[b] + u;
+        const long long row = ok ? ((long long)s_pg[is_t & 7][key] << p.page_shift) + (pos & pmask) : 0;
+        const size_t go = row * row_bytes + pair * 128 + gr * 16;
+        const uint32_t dst = st + key * 128 + ((gr ^ att_swz(key)) << 4);
+        cp_async16(dst, p.k_cache + go, ok ? 16u : 0u);
+        cp_async16(dst + 8192, p.v_cache + go, ok ? 16u : 0u);
       }
-      int b = s_sb[s];
-      if (k == 0) {  // the request's 16 query heads of this pair (2 KB); its gate rows to L2
+      if (k == 0 && s > 0) {  // a later request's 16 query heads of this pair (2 KB); its gate rows to L2
         const uint8_t* q = reinterpret_cast<const uint8_t*>(p.qkv + (size_t)b * p.qkv_w + pair * 16 * 64);
         cp_async16(st + 16384 + tid * 16, q + tid * 16, 16u);
         if (tid < 16) {
@@ -254,27 +266,31 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
         }
       }
       if (k == s_stiles[s] - 1 && s_snew[s] && tid < 32) {  // the new token's K and V rows (bf16)
-        int kv = tid >> 4, c = tid & 15;
+        const int kv = tid >> 4, c = tid & 15;
         const uint8_t* src2 = reinterpret_cast<const uint8_t*>(
             p.qkv + (size_t)b * p.qkv_w + (HQ + kv * HKV) * 64 + pair * 128);
         cp_async16(st + 16384 + 2048 + kv * 256 + c * 16, src2 + c * 16, 16u);
       }
     }
-    cp_commit();
+    advance(is_s, is_k, is_t);
   };
 
-  // Prologue: page rows of tiles 0..STAGES (gathers of 0..STAGES-2 issued now).
-  {
-    // all of the prologue's page loads first: one DRAM round trip, not one per tile
-    PageSet pre[STAGES - 1];
-#pragma unroll
-    for (int j = 0; j < STAGES - 1; ++j) { load_page(ix_s, ix_k, pre[j]); advance(ix_s, ix_k); }
-#pragma unroll
-    for (int j = 0; j < STAGES - 1; ++j) { issue(is_s, is_k, pre[j], j); advance(is_s, is_k); }
+  // Prologue: the first tiles' page entries and the first request's queries in one round trip,
+  // then the first STAGES - 1 gathers; the queries are prepared while those are in flight.
+  for (int m = 0; m < STAGES - 1; ++m) copy_pages();
+  if (nseg > 0) {
+    const int b = s_sb[0];
+    const uint8_t* q = reinterpret_cast<const uint8_t*>(p.qkv + (size_t)b * p.qkv_w + pair * 16 * 64);
+    cp_async16((uint32_t)__cvta_generic_to_shared(s_q0) + tid * 16, q + tid * 16, 16u);
+    if (tid < 16) {
+      const uint8_t* gp = reinterpret_cast<const uint8_t*>(p.qkv + (size_t)b * p.qkv_w + (HQ + 2 * HKV) * 64 + pair * 16 * 64);
+      asm volatile("prefetch.global.L2 [%0];" :: "l"(gp + tid * 128));
+    }
   }
-  PageSet ps0, ps1;
-  load_page(ix_s, ix_k, ps0); advance(ix_s, ix_k);
-  load_page(ix_s, ix_k, ps1); advance(ix_s, ix_k);
+  cp_commit();
+  cp_wait<0>();
+  __syncthreads();
+  for (int m = 0; m < STAGES - 1; ++m) { gather(m); copy_pages(); cp_commit(); }
 
   ATT_STAMP(3);
   const float k_scale = *p.k_scale, v_scale = *p.v_scale;
@@ -282,64 +298,66 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
 
   uint32_t qa[2][4][2];
   float m_r[2], l_r[2], acc[2][4][4];
+  // Queries: RMSNorm x factor (+ RoPE at the token's position), rounded to BF16, as f16 A
+  // fragments: k-step c holds d = 16t + 4c + {0,1} (a0) and {2,3} (a2) of head row g.
+  auto prep_q = [&](const __nv_bfloat16* qs, int b) {
+    const int pos = s_first[b] + s_n[b];
+#pragma unroll
+    for (int h = 0; h < 2; ++h) {
+      float x[16];
+      const uint4* src = reinterpret_cast<const uint4*>(qs + (8 * h + g) * 64 + 16 * t);
+      uint4 w0 = src[0], w1 = src[1];
+      const __nv_bfloat162* hw0 = reinterpret_cast<const __nv_bfloat162*>(&w0);
+      const __nv_bfloat162* hw1 = reinterpret_cast<const __nv_bfloat162*>(&w1);
+#pragma unroll
+      for (int i = 0; i < 4; ++i) {
+        float2 f0 = __bfloat1622float2(hw0[i]), f1 = __bfloat1622float2(hw1[i]);
+        x[2 * i] = f0.x; x[2 * i + 1] = f0.y; x[8 + 2 * i] = f1.x; x[8 + 2 * i + 1] = f1.y;
+      }
+      float ss = 0.f;
+#pragma unroll
+      for (int i = 0; i < 16; ++i) ss += x[i] * x[i];
+      ss += __shfl_xor_sync(0xffffffffu, ss, 1);
+      ss += __shfl_xor_sync(0xffffffffu, ss, 2);
+      float sc = rsqrtf(ss / 64.f + p.eps) * p.qk_factor;
+#pragma unroll
+      for (int i = 0; i < 16; ++i) x[i] *= sc;
+      if (p.rope) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+          float sn, cn;
+          att_sincos((float)pos * __ldg(p.inv_freq + 8 * t + i), sn, cn);
+          float e = x[2 * i], o = x[2 * i + 1];
+          x[2 * i] = e * cn - o * sn;
+          x[2 * i + 1] = o * cn + e * sn;
+        }
+      }
+#pragma unroll
+      for (int i = 0; i < 16; ++i) x[i] = __bfloat162float(__float2bfloat16_rn(x[i]));
+#pragma unroll
+      for (int c = 0; c < 4; ++c) {
+        qa[h][c][0] = pack_h2(x[4 * c], x[4 * c + 1]);
+        qa[h][c][1] = pack_h2(x[4 * c + 2], x[4 * c + 3]);
+      }
+      m_r[h] = -ATT_INF; l_r[h] = 0.f;
+#pragma unroll
+      for (int i = 0; i < 4; ++i) { acc[h][i][0] = acc[h][i][1] = acc[h][i][2] = acc[h][i][3] = 0.f; }
+    }
+  };
+  if (nseg > 0) prep_q(s_q0, s_sb[0]);
+
   int cs = 0, ck = 0;  // compute iterator
-  // Two tiles per iteration so the two page registers alternate without moves.
-  auto step = [&](int j, PageSet& ps) {
+  for (int j = 0; j < ntiles; ++j) {
     cp_wait<STAGES - 2>();
     __syncthreads();
     if (j < 16) ATT_STAMP(4 + 2 * j);
-    issue(is_s, is_k, ps, (j + STAGES - 1) % STAGES); advance(is_s, is_k);
-    load_page(ix_s, ix_k, ps); advance(ix_s, ix_k);
+    gather((j + STAGES - 1) % STAGES);
+    copy_pages();
+    cp_commit();
 
     const uint8_t* st = smem + (j % STAGES) * ATT_STAGE_BYTES;
     const int b = s_sb[cs];
-    if (ck == 0) {
-      // Queries: RMSNorm x factor (+ RoPE at the token's position), rounded to BF16, as f16
-      // A fragments: k-step c holds d = 16t + 4c + {0,1} (a0) and {2,3} (a2) of head row g.
-      const __nv_bfloat16* qs = reinterpret_cast<const __nv_bfloat16*>(st + 16384);
-      const int pos = s_first[b] + s_n[b];
-#pragma unroll
-      for (int h = 0; h < 2; ++h) {
-        float x[16];
-        const uint4* src = reinterpret_cast<const uint4*>(qs + (8 * h + g) * 64 + 16 * t);
-        uint4 w0 = src[0], w1 = src[1];
-        const __nv_bfloat162* hw0 = reinterpret_cast<const __nv_bfloat162*>(&w0);
-        const __nv_bfloat162* hw1 = reinterpret_cast<const __nv_bfloat162*>(&w1);
-#pragma unroll
-        for (int i = 0; i < 4; ++i) {
-          float2 f0 = __bfloat1622float2(hw0[i]), f1 = __bfloat1622float2(hw1[i]);
-          x[2 * i] = f0.x; x[2 * i + 1] = f0.y; x[8 + 2 * i] = f1.x; x[8 + 2 * i + 1] = f1.y;
-        }
-        float ss = 0.f;
-#pragma unroll
-        for (int i = 0; i < 16; ++i) ss += x[i] * x[i];
-        ss += __shfl_xor_sync(0xffffffffu, ss, 1);
-        ss += __shfl_xor_sync(0xffffffffu, ss, 2);
-        float sc = rsqrtf(ss / 64.f + p.eps) * p.qk_factor;
-#pragma unroll
-        for (int i = 0; i < 16; ++i) x[i] *= sc;
-        if (p.rope) {
-#pragma unroll
-          for (int i = 0; i < 8; ++i) {
-            float sn, cn;
-            sincosf((float)pos * __ldg(p.inv_freq + 8 * t + i), &sn, &cn);
-            float e = x[2 * i], o = x[2 * i + 1];
-            x[2 * i] = e * cn - o * sn;
-            x[2 * i + 1] = o * cn + e * sn;
-          }
-        }
-#pragma unroll
-        for (int i = 0; i < 16; ++i) x[i] = __bfloat162float(__float2bfloat16_rn(x[i]));
-#pragma unroll
-        for (int c = 0; c < 4; ++c) {
-          qa[h][c][0] = pack_h2(x[4 * c], x[4 * c + 1]);
-          qa[h][c][1] = pack_h2(x[4 * c + 2], x[4 * c + 3]);
-        }
-        m_r[h] = -ATT_INF; l_r[h] = 0.f;
-#pragma unroll
-        for (int i = 0; i < 4; ++i) { acc[h][i][0] = acc[h][i][1] = acc[h][i][2] = acc[h][i][3] = 0.f; }
-      }
-    }
+    if (ck == 0 && cs > 0) prep_q(reinterpret_cast<const __nv_bfloat16*>(st + 16384), b);
 
     const int nvalid = min(s_suc[cs] - (s_su0[cs] + ck * ATT_TILE) - 16 * warp, 16);
     if (nvalid > 0) {
@@ -423,7 +441,7 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
 #pragma unroll
           for (int i = 0; i < 2; ++i) {
             float sn, cn;
-            sincosf((float)pos * __ldg(p.inv_freq + d0 / 2 + i), &sn, &cn);
+            att_sincos((float)pos * __ldg(p.inv_freq + d0 / 2 + i), sn, cn);
             float e = k4[2 * i], o = k4[2 * i + 1];
             k4[2 * i] = e * cn - o * sn;
             k4[2 * i + 1] = o * cn + e * sn;
@@ -589,10 +607,6 @@ __global__ void __launch_bounds__(128) attn_dec_kernel(AttnParams p) {
     } else {
       ++ck;
     }
-  };
-  for (int j = 0; j < ntiles; j += 2) {
-    step(j, ps0);
-    if (j + 1 < ntiles) step(j + 1, ps1);
   }
   cp_wait<0>();
   ATT_STAMP(61);

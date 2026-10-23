@@ -1,0 +1,30 @@
+prof v4 B1 ctx80000 L1 slid tp8 soft p1: 8 CTAs, span 16.8us, start skew 0.0us, clk 1.85GHz | start 0.00/0.00 | lengths 0.81/0.83 | segments 1.31/1.33 | prologue 2.86/3.05 | t0 ready 3.46/3.57 | t0 done 6.73/6.88 | t1 ready 6.83/6.99 | t1 done 8.66/8.69 | t2 ready 8.84/8.87 | t2 done 9.40/9.44 | t3 ready 9.50/9.55 | t3 done 10.05/10.09 | seg end 10.11/10.16 | partial+atomic 12.02/13.60 | merged 12.17/16.99 | end 12.21/17.03
+prof v4 B1 ctx80000 L1 full tp8 cohe p1: 313 CTAs, span 28.9us, start skew 0.3us, clk 1.84GHz | start 0.00/0.00 | lengths 0.67/0.80 | segments 1.21/1.33 | prologue 3.12/3.66 | t0 ready 6.34/7.07 | t0 done 7.89/9.55 | t1 ready 8.04/9.70 | t1 done 9.11/11.48 | t2 ready 9.30/11.70 | t2 done 10.01/12.66 | t3 ready 10.19/12.86 | t3 done 10.93/13.50 | seg end 11.04/13.56 | partial+atomic 12.85/19.13 | merged 12.95/29.90 | end 13.00/29.94
+prof v4 B16 ctx80000 L1 slid tp8 soft p1: 128 CTAs, span 19.6us, start skew 0.2us, clk 1.85GHz | start 0.00/0.00 | lengths 0.74/0.82 | segments 1.84/1.93 | prologue 3.48/3.86 | t0 ready 5.30/5.84 | t0 done 8.50/9.36 | t1 ready 8.61/9.47 | t1 done 10.88/11.02 | t2 ready 11.07/11.22 | t2 done 11.64/11.83 | t3 ready 11.74/11.93 | t3 done 12.29/12.47 | seg end 12.35/12.53 | partial+atomic 14.24/16.11 | merged 14.38/19.79 | end 14.43/19.83
+prof v4 B16 ctx80000 L1 full tp8 cohe p1: 396 CTAs, span 127.3us, start skew 0.2us, clk 1.79GHz | start 0.00/0.00 | lengths 0.94/1.04 | segments 2.11/2.21 | prologue 4.67/5.12 | t0 ready 8.62/11.17 | t0 done 11.24/13.38 | t1 ready 11.36/13.50 | t1 done 14.26/15.40 | t2 ready 14.58/16.05 | t2 done 16.22/18.38 | t3 ready 16.44/18.64 | t3 done 17.89/20.06 | t4 ready 18.15/20.40 | t4 done 19.95/22.94 | t5 ready 20.34/23.12 | t5 done 21.64/24.71 | t6 ready 21.91/25.07 | t6 done 24.18/27.76 | t7 ready 24.55/27.92 | t7 done 25.79/29.51 | t8 ready 26.17/29.83 | t8 done 28.37/31.82 | t9 ready 28.78/32.43 | t9 done 30.14/34.11 | t10 ready 30.41/43.04 | t10 done 32.31/45.71 | t11 ready 32.74/45.89 | t11 done 34.06/47.94 | t12 ready 34.34/48.20 | t12 done 35.93/50.01 | t13 ready 36.36/50.25 | t13 done 37.73/52.61 | t14 ready 38.00/52.88 | t14 done 39.52/54.97 | t15 ready 39.72/55.11 | t15 done 41.20/57.22 | seg end 94.91/120.48 | partial+atomic 96.83/122.24 | merged 97.10/128.25 | end 97.15/128.31
+prof v4 B32 ctx80000 L1 slid tp8 soft p1: 256 CTAs, span 21.9us, start skew 0.2us, clk 1.88GHz | start 0.00/0.00 | lengths 0.68/0.73 | segments 2.28/2.36 | prologue 4.46/4.77 | t0 ready 7.20/8.13 | t0 done 10.41/11.29 | t1 ready 10.60/11.66 | t1 done 12.91/13.07 | t2 ready 13.08/13.23 | t2 done 13.82/14.06 | t3 ready 13.95/14.15 | t3 done 14.63/14.90 | seg end 14.75/15.11 | partial+atomic 16.83/18.62 | merged 16.94/22.03 | end 16.98/22.07
+prof v4 B32 ctx80000 L1 full tp8 cohe p1: 396 CTAs, span 219.8us, start skew 0.3us, clk 1.78GHz | start 0.00/0.00 | lengths 0.76/0.90 | segments 2.47/2.66 | prologue 5.52/6.00 | t0 ready 9.13/10.15 | t0 done 11.17/12.39 | t1 ready 11.35/12.59 | t1 done 14.85/15.42 | t2 ready 15.10/30.56 | t2 done 16.89/32.27 | t3 ready 17.09/32.62 | t3 done 18.52/33.99 | t4 ready 18.75/34.18 | t4 done 20.61/35.99 | t5 ready 20.96/36.15 | t5 done 22.29/37.35 | t6 ready 22.52/37.56 | t6 done 24.84/39.10 | t7 ready 25.29/39.50 | t7 done 26.57/44.52 | t8 ready 26.83/44.68 | t8 done 29.02/46.33 | t9 ready 29.39/46.55 | t9 done 30.65/48.32 | t10 ready 31.05/48.76 | t10 done 33.12/50.45 | t11 ready 33.45/51.16 | t11 done 34.83/52.93 | t12 ready 35.12/53.22 | t12 done 36.70/55.49 | t13 ready 37.03/55.62 | t13 done 38.49/57.52 | t14 ready 38.74/57.86 | t14 done 40.25/59.96 | t15 ready 40.49/60.08 | t15 done 42.01/62.50 | seg end 181.27/213.07 | partial+atomic 183.20/214.77 | merged 183.37/219.85 | end 183.43/219.89
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 13:57:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

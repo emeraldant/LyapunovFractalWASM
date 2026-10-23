@@ -745,6 +745,9 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
   // flags & 16: a PDL co-runner of the previous kernel (another GEMM's launch over other
   // experts): no input dependency, so no wait at the start; every thread waits for that grid
   // before exiting, so this kernel completes after it (the next launch then sees both).
+  // flags & 32: signal dependents at the start (the dualsab big launch: its co-runner reads none
+  // of its output, and with fewer items than CTAs the queue-empty signal would come only after
+  // the hot experts' weights had streamed, serializing the two launches).
   const int sk = flags & 1;
   // Split K (kparts > 1, small batches: too few items for the SMs): item = (chunk entry,
   // n block, k part); each part streams NCHUNK / kparts chunks and writes its scaled fp32
@@ -789,6 +792,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
   }
 
   if (warp == 8) {
+    if ((flags & 32) && lane == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
     if (flags & 2) {
       if (lane == 0 && !sk && (int)blockIdx.x < total) {
         const int it0 = (int)blockIdx.x / kparts, kb0 = ((int)blockIdx.x % kparts) * nch;
@@ -2036,12 +2040,16 @@ def ws_layout(bank):
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
-                    fuse=False, dualv8=0):
+                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
     64-row-chunk kernel whose wgmma width follows each chunk's rows (stages 504, 2 CTAs/SM);
     the rest stay on the configured kernel.
+    dualsab (v6 only): experts with more than `dualsab` routes run first on a v6 launch with
+    `mt2` 8-token groups per item (stages `stages_big`), so a hot expert's weights are decoded
+    once for up to 8 mt2 tokens instead of once per 8; the narrow launch over the rest is its PDL
+    co-runner (judge profile: a 16-token expert on 8-token tiles cost ~10 us of GEMM1 at bs 16).
     dualv8 (v6 only): experts with more than `dualv8` routes run on v8 (64-row chunks, wgmma
     width per chunk) first; the v6 launch over the rest is its PDL co-runner, taking SM slots
     as v8's CTAs retire (small experts keep mma.sync's N 8 / 16 instead of wgmma's N 16)."""
@@ -2071,7 +2079,8 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     def route():
         _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, rows_per_chunk,
                                         NE=256, E=count, CHUNK=max(256, triton.next_power_of_2(p)),
-                                        SPLIT=dual if wg else dualv8, ROWS2=64, num_warps=4)
+                                        SPLIT=dual if wg else (dualv8 or dualsab), ROWS2=8 * mt2 if dualsab else 64,
+                                        num_warps=4)
         if tma:
             _gather_rows_kernel[(triton.cdiv(p, 4),)](x, row_route, exp_start, xs, E=count, ROWS=4, H=4096, num_warps=4)
 
@@ -2109,9 +2118,13 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
             if dualv8:
                 mod.moe_gemm_wg(1, 64, 504, xs, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active2,
                                 n_active2, exp_start, inter, 64, 132 * 2, prof[0], sched[4:6], abl, pfd)
+            if dualsab:
+                mod.moe_gemm_sab(1, mt2, stages_big, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"],
+                                 active2, n_active2, exp_start, inter, 64, 132 * ctas2, prof[0], sched[4:6], abl, 1,
+                                 no_part, 32, no_u8, no_u8, no_i32)
             mod.moe_gemm_sab(1, mt, stages, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
                              n_active[0:1], exp_start, inter, 64, grid, prof[0], sched[0:2], abl, kparts, part1,
-                             int(sk) | (4 if l2pf else 0) | (8 if fuse1 else 0) | (16 if dualv8 else 0),
+                             int(sk) | (4 if l2pf else 0) | (8 if fuse1 else 0) | (16 if (dualv8 or dualsab) else 0),
                              bank["w2q_sab"] if l2pf else no_u8,
                              bank["w2s_sab"] if l2pf else no_u8, bank["cnt"] if fuse1 else no_i32)
             if split and not fuse1:
@@ -2133,9 +2146,13 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
             if dualv8:
                 mod.moe_gemm_wg(2, 64, 504, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active2,
                                 n_active2, exp_start, y, 32, 132 * 2, prof[1], sched[6:8], abl, pfd)
+            if dualsab:
+                mod.moe_gemm_sab(2, mt2, stages_big, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"],
+                                 active2, n_active2, exp_start, y, 32, 132 * ctas2, prof[1], sched[6:8], abl, 1, no_part,
+                                 32, no_u8, no_u8, no_i32)
             mod.moe_gemm_sab(2, mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
                              n_active[0:1], exp_start, y, 32, grid, prof[1], sched[2:4], abl, kparts2, part2,
-                             int(sk) | (2 if pdl else 0) | (16 if dualv8 else 0), no_u8, no_u8, no_i32)
+                             int(sk) | (2 if pdl else 0) | (16 if (dualv8 or dualsab) else 0), no_u8, no_u8, no_i32)
             return
         g2(2, mt, stages, inter, row_route, bank["w2q" + sfx], bank["w2s" + sfx], bank["w2_gs"], active, n_active,
              exp_start, y, 512 // 8, grid)

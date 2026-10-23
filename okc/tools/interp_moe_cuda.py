@@ -11,10 +11,11 @@ import kernel as K
 fails = 0
 gen = torch.Generator().manual_seed(0)
 import triton
-for bs, ls, rows_per, split in ((1, 0, 16, 0), (5, 32, 16, 0), (33, 224, 32, 0), (257, 96, 16, 0), (257, 96, 64, 0),
-                                (256, 96, 16, 16), (128, 0, 16, 16), (3, 7, 8, 0)):
+for bs, ls, rows_per, split, rows2 in ((1, 0, 16, 0, 64), (5, 32, 16, 0, 64), (33, 224, 32, 0, 64), (257, 96, 16, 0, 64),
+                                       (257, 96, 64, 0, 64), (256, 96, 16, 16, 64), (128, 0, 16, 16, 64), (3, 7, 8, 0, 64),
+                                       (16, 0, 8, 8, 16), (32, 64, 8, 8, 16), (128, 0, 8, 8, 16)):   # dualsab
     ids = torch.randint(0, 256, (bs, 8), generator=gen, dtype=torch.int32)
-    if bs >= 128:   # a few hot experts, as the routing's heavy tail makes them
+    if bs >= 16:    # a few hot experts, as the routing's heavy tail makes them
         ids[: bs // 2, 0] = (ls + 3) % 256
         ids[: bs // 4, 1] = (ls + 9) % 256
     p = bs * 8
@@ -23,7 +24,7 @@ for bs, ls, rows_per, split in ((1, 0, 16, 0), (5, 32, 16, 0), (33, 224, 32, 0),
     n_active = torch.zeros(2, dtype=torch.int32)
     K._route_compact_kernel[(32,)](ids, torch.tensor([ls], dtype=torch.int32), row_route, pos, exp_start, active,
                                    n_active, p, rows_per, NE=256, E=32, CHUNK=max(256, triton.next_power_of_2(p)),
-                                   SPLIT=split, ROWS2=64)
+                                   SPLIT=split, ROWS2=rows2)
     loc = ((ids.flatten().long() - ls) % 256)
     counts = torch.bincount(loc[loc < 32], minlength=32)
     ok = torch.equal(exp_start[:32].long(), torch.cumsum(counts, 0) - counts) and int(exp_start[32]) == int(counts.sum())
@@ -31,7 +32,7 @@ for bs, ls, rows_per, split in ((1, 0, 16, 0), (5, 32, 16, 0), (33, 224, 32, 0),
     act = torch.tensor([e | (j << 8) for e in small for j in range(-(-int(counts[e]) // rows_per))], dtype=torch.long)
     ok &= int(n_active[0]) == len(act) and torch.equal(active[:len(act)].long(), act)
     if split:
-        act2 = torch.tensor([e | (j << 8) for e in range(32) if counts[e] > split for j in range(-(-int(counts[e]) // 64))],
+        act2 = torch.tensor([e | (j << 8) for e in range(32) if counts[e] > split for j in range(-(-int(counts[e]) // rows2))],
                             dtype=torch.long)
         ok &= int(n_active[1]) == len(act2) and torch.equal(active[32 + p:32 + p + len(act2)].long(), act2)
     for e in range(32):
@@ -40,7 +41,7 @@ for bs, ls, rows_per, split in ((1, 0, 16, 0), (5, 32, 16, 0), (33, 224, 32, 0),
         ok &= torch.equal(pos[rows].long(), torch.arange(int(exp_start[e]), int(exp_start[e + 1])))
     ok &= bool((pos[loc >= 32] == -1).all())
     fails += not ok
-    print(f"{'OK ' if ok else 'BAD'} route bs{bs} local_start {ls}: rows/chunk {rows_per}, split {split}: {n_active.tolist()} chunks,"
+    print(f"{'OK ' if ok else 'BAD'} route bs{bs} local_start {ls}: rows/chunk {rows_per}, split {split}/{rows2}: {n_active.tolist()} chunks,"
           f" {int(exp_start[32])} rows")
 # Post-norm through the row map.
 bs = 5

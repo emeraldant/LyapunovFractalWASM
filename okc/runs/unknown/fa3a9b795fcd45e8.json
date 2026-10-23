@@ -1,0 +1,84 @@
+{
+ "id": "fa3a9b795fcd45e8",
+ "mode": "check",
+ "team": "emeraldant",
+ "board": "muse_bf16_proj",
+ "result": {
+  "gpu": "H200",
+  "error": null,
+  "flags": [],
+  "checks": {
+   "ok": true,
+   "flagged": [],
+   "rejected": []
+  },
+  "passed": false,
+  "status": "ok",
+  "machine": {
+   "node": "n-jilerexm7jzqtha3u5ugsjopko",
+   "gpu_after": {
+    "name": "NVIDIA H200",
+    "clocks.sm": 1980.0,
+    "clocks.mem": 3201.0,
+    "power.draw": 124.81,
+    "power.limit": 700.0,
+    "clocks.max.sm": 1980.0,
+    "driver_version": "580.159.03",
+    "temperature.gpu": 34.0
+   },
+   "gpu_before": {
+    "name": "NVIDIA H200",
+    "clocks.sm": 1980.0,
+    "clocks.mem": 3201.0,
+    "power.draw": 135.94,
+    "power.limit": 700.0,
+    "clocks.max.sm": 1980.0,
+    "driver_version": "580.159.03",
+    "temperature.gpu": 36.0
+   }
+  },
+  "records": [
+   {
+    "error": "NameError: name 'N_EXPERTS' is not defined",
+    "event": "setup",
+    "first": "baseline",
+    "copies": null,
+    "status": "fail",
+    "prepare_s": null,
+    "prepare_pad": null,
+    "baseline_copies": 16,
+    "baseline_prepare_pad": 6341120
+   }
+  ],
+  "speedup": null,
+  "score_us": null,
+  "evaluator": {
+   "files": {
+    "harness/eval.py": "0051a1bfac67a9f1fad06086b306653c6643b2bb253e15a794aa672312f070a9",
+    "harness/runner.py": "c905e5c80264c6d27620b6fc7d55b162dccdb8ed7282f8a513a4d2e6f2f226f2",
+    "harness/worker.py": "950437610f57ddffbc1176b65d9c2ae909c47bf67b1e3fe0716a81946986f568",
+    "challenge/nvfp4.py": "cfdf37c7bc14b10f7353aba7d4632f4767401b92b4b073941a8030d9a961aaaf",
+    "challenge/checks.py": "9a046c3c38db28b325dcd1557baecdf6bc9ef941d2175f9a900ba4c230bb8055",
+    "harness/static_checks.py": "c5588b69e9e86229459a525c61b30096f6f13ff2add6cadf98f272c4ac8ca0c2",
+    "configs/muse-spark-open.yaml": "98f07230e4e64fe91b7c76d9a3ce04948053c043d494d5f1fae56cfe2de033af",
+    "problems/muse_bf16_proj/task.yml": "18e9da6357144b0a1348434a18bd2d1938b1948d9f2130876f6b6706588470c9",
+    "problems/muse_bf16_proj/baseline.py": "39f52ea5b65505958aa9dee9c8129dd394cbba4e670046f862b5a88ce91a0574",
+    "problems/muse_bf16_proj/reference.py": "e62491abc9ddcad33f5faba8b0ee74cf6370b7be5dd2dc05031742f3ebf7147d"
+   },
+   "image": "localhost:30500/kc/judge@sha256:9a7f287b80d772c6f636bbcb57422c619fe326e2aabc53803b85007bca93f68e",
+   "code_sha256": "986ed3ebb096eab83d16797609f4c0e7895248d6bce33252d25dd306cbe5d018"
+  },
+  "returncode": 112,
+  "speedup_ci": null
+ },
+ "status": "done",
+ "call_id": "kc-fa3a9b795fcd45e8",
+ "cluster": "sfo3",
+ "dedicated": false,
+ "created_at": 1792720890.1511683,
+ "started_at": 1792720966.198133,
+ "finished_at": 1792721000.4664376,
+ "payload_ref": "muse_bf16_proj/7171b1e29554ee51f7efc642cacc8faeb82897316ef78800f5d544fa9395c202.py",
+ "content_hash": "7171b1e29554ee51f7efc642cacc8faeb82897316ef78800f5d544fa9395c202",
+ "duplicate_of": null
+}

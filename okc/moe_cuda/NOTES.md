@@ -78,6 +78,25 @@ batch limit is consumer-side latency (too few warps to hide decode -> MMA chains
 Judge check fb5afbd8: **1.638** (bs 1 1.64 Marlin, 8 1.68 v6 8-stage, 16 1.66, 32 1.37,
 128 1.77, 256 1.74 v7).
 
+### Consumer-side decomposition at bs 256 (synthetic-weight profiler, run f11e4b95)
+
+`run_moe_profile_synth` builds random NVFP4 weights for the 32 local experts and profiles in
+ANY problem's host (kernel speed does not depend on weight values): experiments no longer
+spend MoE checks. v7 (16 tokens/item) GEMM1 at bs 256:
+
+| mode | us | | mode | us |
+|---|---|---|---|---|
+| loop only (handshake + weight/scale LDS) | 46 | | weights + activations, no math | 133 |
+| loop + decode | 94 | | math only (no memory) | 161 |
+| loop + MMA | 93 | | full | 216 |
+
+HBM dream: 112 us. (1) Compute alone exceeds the HBM floor: loop / decode / tensor cost ~47 us
+each on different units, yet add up (6 consumer warps per SMSP, warpgroup-lockstepped wgmma:
+latency not hidden). (2) Tensor work is real at bs 256: 16-token items = 38.6 GFLOP padded in
+GEMM1, ~39 us at peak. (3) Memory alone is above dream: hot experts re-streamed per 16-token
+chunk (2304 items vs 1536 unique). Next levers: 256-k stages (half the handshakes per byte),
+more independent work per warp (decode overlapping wgmma), 32-token tiles without spills.
+
 ## Hopper facts used (per SM sub-partition = SMSP, per clock)
 
 | pipe | warp instructions / clk | what runs there |

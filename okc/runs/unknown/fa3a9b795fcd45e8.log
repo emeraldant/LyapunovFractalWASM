@@ -1,0 +1,20 @@
+Traceback (most recent call last):
+  File "/tmp/muse_bf16_proj-dfbz0wli/run/worker.py", line 423, in child_main
+    send(_setup_op(msg, module, state, sync, perf))
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/muse_bf16_proj-dfbz0wli/run/worker.py", line 318, in _setup_op
+    prepare = importlib.import_module(module).prepare
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_bf16_proj-dfbz0wli/run/submission.py", line 317, in <module>
+    LOCAL = {"ep8": (0, 32), "full": (0, N_EXPERTS)}  # (first local expert, count)
+                                         ^^^^^^^^^
+NameError: name 'N_EXPERTS' is not defined. Did you mean: 'D_EXPERT'?

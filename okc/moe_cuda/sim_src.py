@@ -10,7 +10,7 @@ import torch
 import triton
 import triton.language as tl
 
-# @bundle muse_moe_w4a16/reference.py D_HIDDEN D_EXPERT ROUTED_PER_TOKEN LOCAL POPULARITY generate_input
+# @bundle muse_moe_w4a16/reference.py D_HIDDEN D_EXPERT N_EXPERTS ROUTED_PER_TOKEN LOCAL POPULARITY generate_input
 # @bundle muse_moe_w4a16/nvfp4.py outlier_channels
 # @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULE moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_cuda_stages moe_cuda_forward
 # @bundle sim/harness.py SimBench rel_l2 row_worst SimReport
@@ -157,7 +157,7 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
     """Timeline of each GEMM (profiling build, cold L2) on scored shapes, and the same
     pipeline with parts switched off (ABLATIONS): which part closes the gap to the roofline."""
     try:
-        moe_cuda_module()
+        moe_cuda_module(prof=True)
     except Exception as e:
         print(f"moe prof: compile failed: {str(e)[-800:]}")
         return
@@ -192,3 +192,31 @@ def run_moe_profile(weights, state, cfgs=None, seed=9_200_000, sizes=(16, 128, 2
                     grid = 132 * (4 if kw["ks"] == 1 else 1)
                     _prof_report(f"bs{bs} {name} {ABLATIONS[abl]:>12} gemm{g + 1} ({ne} exp)", prof[g], n_items,
                                  nbytes, grid)
+
+
+POST_NORM_EPS = globals().get("POST_NORM_EPS", 1e-8)
+
+
+def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7):
+    """run_moe_profile on random NVFP4 weights for the 32 local experts: runs inside ANY
+    problem's host (the kernels' speed does not depend on the weight values), so kernel
+    experiments do not spend the MoE problem's checks."""
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    E, I, H = 32, 4096, 4096
+
+    def scales(n, k):   # positive normal E4M3 in [2^-3, 2^2): inside the fast decode's range
+        e = torch.randint(4, 9, (n, k), generator=g, device="cuda", dtype=torch.int32)
+        m = torch.randint(0, 8, (n, k), generator=g, device="cuda", dtype=torch.int32)
+        return ((e << 3) | m).to(torch.uint8).view(torch.float8_e4m3fn)
+
+    weights = {
+        "w13": torch.randint(0, 256, (E, 2 * I, H // 2), generator=g, device="cuda", dtype=torch.uint8),
+        "w2": torch.randint(0, 256, (E, H, I // 2), generator=g, device="cuda", dtype=torch.uint8),
+        "w13_gs": torch.full((E,), 1e-3, device="cuda"), "w2_gs": torch.full((E,), 1e-3, device="cuda"),
+    }
+    weights["w13_sf"] = torch.stack([scales(2 * I, H // 16) for _ in range(E)])
+    weights["w2_sf"] = torch.stack([scales(H, I // 16) for _ in range(E)])
+    state = {"norm_w": torch.ones(H, dtype=torch.bfloat16, device="cuda")}
+    run_moe_profile(weights, state, cfgs=cfgs, sizes=sizes, abls=abls)
+    del weights
+    torch.cuda.empty_cache()

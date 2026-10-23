@@ -225,6 +225,37 @@ def moe_sab(args):
             report(body, "", f"(per {m.group(3)} chunks x 2048 weights per warp)")
 
 
+def moe_wg(args):
+    """v7 (wgmma) instantiations: ptxas warnings (wgmma serialization), registers, loops."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "moe_cuda"))
+    import kernel as K
+    prof = "true" if "prof" in args else "false"
+    insts = [(1, 16, 4), (2, 16, 4), (1, 8, 4), (1, 32, 4)]
+    names = [f"moe_gemm_wg_kernel<{m}, {n}, {s}, {prof}>" for m, n, s in insts]
+    src = NVRTC_PRELUDE + K.MOE_DEVICE_SRC.replace("#include <stdint.h>", "") + "\n" + "\n".join(
+        f"template __global__ void moe_gemm_wg_kernel<{m}, {n}, {s}, {prof}>("
+        "const __nv_bfloat16*, const int32_t*, const uint8_t*, const uint8_t*, "
+        "const float*, const int32_t*, const int32_t*, const int32_t*, "
+        "__nv_bfloat16*, int, long long*, int*);" for m, n, s in insts)
+    log, sass = compile_sass(nvrtc_ptx(src, names))
+    for line in log.splitlines():
+        if "Used" in line or "spill" in line or "arning" in line:
+            print(line.strip()[:300])
+    for fname, lines in split_functions(sass).items():
+        if "wg_kernel" not in fname:
+            continue
+        instrs = parse(lines)
+        m = re.search(r"ILi(\d)ELi(\d+)ELi(\d)ELb", fname)
+        print(f"\n== WG MODE {m.group(1)} N {m.group(2)} STAGES {m.group(3)}: {len(instrs)} instructions")
+        ls = [b for b in hmma_loops(instrs)] or []
+        for lo, hi in loops(instrs):
+            body = [i for i in instrs if lo <= i[0] <= hi]
+            n_wg = sum(op.startswith("HGMMA") for _, op, _ in body)
+            if n_wg:
+                print(f"  -- loop {lo:#x}-{hi:#x} with {n_wg} HGMMA")
+                report(body, "", f"(per {m.group(3)} chunks x 2048 weights per warp)")
+
+
 def moe(args):
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "moe_cuda"))
     import kernel as K
@@ -252,4 +283,4 @@ def moe(args):
 
 
 if __name__ == "__main__":
-    {"moe": moe, "moe_ws": moe_ws, "moe_sab": moe_sab}[sys.argv[1]](sys.argv[2:])
+    {"moe": moe, "moe_ws": moe_ws, "moe_sab": moe_sab, "moe_wg": moe_wg}[sys.argv[1]](sys.argv[2:])

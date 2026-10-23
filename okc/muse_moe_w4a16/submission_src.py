@@ -293,6 +293,8 @@ CUDA_CONFIGS = {
     "k1": dict(mt=1, stages=4, ctas_per_sm=4, ws=True, ks=1),    # v5: 16 token rows as the A operand
     "s1": dict(mt=1, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB, 8 tokens per item
     "s2": dict(mt=2, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB, 16 tokens per item
+    "s1d": dict(mt=1, stages=8, ctas_per_sm=2, sab=True),        # v6, deeper pipeline: few items per SM
+    "w2": dict(mt=2, stages=4, ctas_per_sm=4, wg=True),          # v7 wgmma, 16 tokens: large batches
 }
 CUDA_MARGIN = 0.98   # a CUDA plan must take <= 98% of the incumbent's time on both timing routings
 

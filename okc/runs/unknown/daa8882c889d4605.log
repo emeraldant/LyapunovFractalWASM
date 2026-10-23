@@ -1,0 +1,100 @@
+wgmma probe: compiled in 30 s
+wgmma probe n8 ksteps1 K-stride in LBO: rel err 3.11e-08  <- matches
+wgmma probe n8 ksteps1 K-stride in SBO: rel err 3.11e-08  <- matches
+wgmma probe n8 ksteps4 K-stride in LBO: rel err 7.35e-08  <- matches
+wgmma probe n8 ksteps4 K-stride in SBO: rel err 7.35e-08  <- matches
+wgmma probe n16 ksteps1 K-stride in LBO: rel err 3.26e-08  <- matches
+wgmma probe n16 ksteps1 K-stride in SBO: rel err 9.90e-01
+wgmma probe n16 ksteps4 K-stride in LBO: rel err 8.11e-08  <- matches
+wgmma probe n16 ksteps4 K-stride in SBO: rel err 9.36e-01
+plan qkv_gate  m1    n2304 : ('fma', 1, 4, 1024, 1, 4, 2) 19.4 us (sglang 20.8 us)
+plan o         m1    n8192 : ('base',) 11.7 us (sglang 11.7 us)
+plan pooler    m1    n4096 : ('fma', 1, 8, 1024, 1, 4, 2) 26.2 us (sglang 29.8 us)
+plan unpooler  m1    n1024 : ('fma', 1, 4, 1024, 1, 4, 2) 11.1 us (sglang 11.3 us)
+plan router    m1    n256  : ('fma', 1, 8, 1024, 8, 4, 2) 10.9 us (sglang 15.4 us)
+plan qkv_gate  m8    n2304 : ('base',) 21.0 us (sglang 21.0 us)
+plan o         m8    n8192 : ('dot', 16, 32, 128, 1, 4, 4) 11.4 us (sglang 11.7 us)
+plan pooler    m8    n4096 : ('base',) 30.0 us (sglang 30.0 us)
+plan unpooler  m8    n1024 : ('base',) 11.6 us (sglang 11.6 us)
+plan router    m8    n256  : ('fma', 8, 4, 256, 4, 4, 2) 14.8 us (sglang 31.5 us)
+plan qkv_gate  m16   n2304 : ('base',) 21.0 us (sglang 21.0 us)
+plan o         m16   n8192 : ('dot', 16, 32, 128, 1, 4, 4) 11.5 us (sglang 11.8 us)
+plan pooler    m16   n4096 : ('base',) 30.3 us (sglang 30.3 us)
+plan unpooler  m16   n8192 : ('base',) 27.6 us (sglang 27.6 us)
+plan router    m16   n256  : ('dot', 16, 16, 128, 16, 4, 4) 14.8 us (sglang 20.4 us)
+plan qkv_gate  m32   n2304 : ('base',) 21.2 us (sglang 21.2 us)
+plan o         m32   n8192 : ('dot', 32, 32, 128, 1, 4, 4) 11.8 us (sglang 12.0 us)
+plan pooler    m32   n4096 : ('base',) 31.1 us (sglang 31.1 us)
+plan unpooler  m32   n8192 : ('base',) 27.9 us (sglang 27.9 us)
+plan router    m32   n256  : ('dot', 32, 16, 128, 16, 4, 4) 16.8 us (sglang 21.1 us)
+plan qkv_gate  m128  n2304 : ('base',) 24.6 us (sglang 24.6 us)
+plan o         m128  n8192 : ('base',) 12.5 us (sglang 12.5 us)
+plan pooler    m128  n4096 : ('base',) 31.7 us (sglang 31.7 us)
+plan unpooler  m128  n8192 : ('base',) 29.6 us (sglang 29.6 us)
+plan router    m128  n256  : ('base',) 22.0 us (sglang 22.0 us)
+plan qkv_gate  m256  n2304 : ('base',) 28.8 us (sglang 28.8 us)
+plan o         m256  n8192 : ('base',) 13.7 us (sglang 13.7 us)
+plan pooler    m256  n4096 : ('base',) 37.8 us (sglang 37.8 us)
+plan unpooler  m256  n8192 : ('base',) 33.4 us (sglang 33.4 us)
+plan router    m256  n256  : ('base',) 22.8 us (sglang 22.8 us)
+prepare: tuned in 60 s
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-23 01:41:44 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop

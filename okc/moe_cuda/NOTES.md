@@ -62,6 +62,22 @@ per chunk). bs 256 GEMM1 bounds: smem 140 us, HBM 112 us, issue 85 us, measured 
 smem and HBM are co-limiting. Next structural step: wgmma (a warpgroup's tensor core reads
 the token tile from smem once: 4x fewer activation reads), as Humming / fractalyze do.
 
+### v7 wgmma and pipeline depth (runs daa8882c probe, e8d6df4f, c2c158d0, fb5afbd8)
+
+Probe (in a bf16_proj host, to save MoE checks): wgmma's register A fragment = mma.sync's per
+warp; D layout = mma.sync's C per 8 columns; K-major no-swizzle B: K stride in LBO, 8-row
+block stride in SBO (the other way: 99% error at N = 16). v7 (wgmma m64nNk16, B tile via
+16-byte cp.async in the canonical layout, fence.proxy.async after the stage wait, A double-
+buffered by half chunk): correct and repeatable on all shapes; +5-6% at bs 128/256 only.
+bs 256 GEMM1 stayed ~220 us: smem was no longer the binding term after v6.
+
+Pipeline depth hypothesis (data + math behaved like a sum, not a max): 8 stages at 2 CTAs/SM
+helps small batches (bs 16 x1.09-1.11, bs 1 x1.04 vs plan) and hurts large ones (x0.73-0.90):
+at large batch, halving consumer warps costs more than the deeper prefetch gains, so the large
+batch limit is consumer-side latency (too few warps to hide decode -> MMA chains).
+Judge check fb5afbd8: **1.638** (bs 1 1.64 Marlin, 8 1.68 v6 8-stage, 16 1.66, 32 1.37,
+128 1.77, 256 1.74 v7).
+
 ## Hopper facts used (per SM sub-partition = SMSP, per clock)
 
 | pipe | warp instructions / clk | what runs there |

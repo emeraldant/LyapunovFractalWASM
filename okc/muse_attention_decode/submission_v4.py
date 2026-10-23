@@ -1922,6 +1922,66 @@ __device__ __forceinline__ void att_store_partial_h(float* ws_acc, float* ws_ml,
   if (half == 0) reinterpret_cast<float2*>(ws_ml)[(slot * 2 + h) * 64 + row] = make_float2(M, Lsum);
 }
 
+// The cooperative merge's work for one CTA (rank of c): its slice of the 128 (head, row) rows.
+// Out of line: it runs once per segment, and inlined its registers spilled the main loop.
+__device__ __noinline__ void att_coop_merge_v(const AttnParams& p, int rank, int c, size_t s0, int b, int pair, int L,
+                                              float v_scale) {
+  const int tid = threadIdx.x;
+  const int HQ = p.HQ, HKV = p.HKV;
+  const size_t W = p.qkv_w;
+  const int r_lo = rank * 128 / c, r_hi = (rank + 1) * 128 / c;
+  const int d4 = tid & 15;
+  for (int r0 = r_lo; r0 < r_hi; r0 += 16) {
+    const int hr = r0 + (tid >> 4);
+    const bool live = hr < r_hi;
+    float M = -ATT_INF, Ls = 0.f;
+    float4 acc = make_float4(0.f, 0.f, 0.f, 0.f);
+    for (int k0 = 0; k0 < c; k0 += 8) {   // 8 partials in flight per round
+      float4 a[8];
+      float2 ml[8];
+#pragma unroll
+      for (int k = 0; k < 8; ++k) {
+        if (k0 + k < c && live) {
+          a[k] = __ldcg(reinterpret_cast<const float4*>(p.ws_acc) + (s0 + k0 + k) * 2048 + hr * 16 + d4);
+          ml[k] = __ldcg(reinterpret_cast<const float2*>(p.ws_ml) + (s0 + k0 + k) * 128 + hr);
+        }
+      }
+#pragma unroll
+      for (int k = 0; k < 8; ++k) {
+        if (k0 + k < c && live) {
+          const float mn = fmaxf(M, ml[k].x);
+          const float ms = mn == -ATT_INF ? 0.f : mn;
+          const float fa = ex2(M - ms), fb = ex2(ml[k].x - ms);
+          M = mn;
+          Ls = Ls * fa + ml[k].y * fb;
+          acc.x = acc.x * fa + a[k].x * fb; acc.y = acc.y * fa + a[k].y * fb;
+          acc.z = acc.z * fa + a[k].z * fb; acc.w = acc.w * fa + a[k].w * fb;
+        }
+      }
+    }
+    const float sc = live ? v_scale / Ls : 0.f;
+    acc.x *= sc; acc.y *= sc; acc.z *= sc; acc.w *= sc;
+    float ss = acc.x * acc.x + acc.y * acc.y + acc.z * acc.z + acc.w * acc.w;
+    ss += __shfl_xor_sync(0xffffffffu, ss, 1);
+    ss += __shfl_xor_sync(0xffffffffu, ss, 2);
+    ss += __shfl_xor_sync(0xffffffffu, ss, 4);
+    ss += __shfl_xor_sync(0xffffffffu, ss, 8);
+    const float inv = rsqrtf(ss / 64.f + p.eps);
+    const int hh = hr >> 6, row = hr & 63, jt = row >> 3, qh = (2 * pair + hh) * 8 + (row & 7);
+    if (live && jt < L) {
+      const size_t tok = (size_t)b * L + jt;
+      const uint2 gw = *reinterpret_cast<const uint2*>(p.qkv + tok * W + (HQ + 2 * HKV) * 64 + qh * 64 + 4 * d4);
+      const __nv_bfloat162* gh = reinterpret_cast<const __nv_bfloat162*>(&gw);
+      const float2 g0 = __bfloat1622float2(gh[0]), g1 = __bfloat1622float2(gh[1]);
+      uint2 ow;
+      __nv_bfloat162* oh = reinterpret_cast<__nv_bfloat162*>(&ow);
+      oh[0] = __floats2bfloat162_rn(acc.x * inv / (1.f + __expf(-g0.x)), acc.y * inv / (1.f + __expf(-g0.y)));
+      oh[1] = __floats2bfloat162_rn(acc.z * inv / (1.f + __expf(-g1.x)), acc.w * inv / (1.f + __expf(-g1.y)));
+      *reinterpret_cast<uint2*>(p.out + tok * HQ * 64 + qh * 64 + 4 * d4) = ow;
+    }
+  }
+}
+
 template <int STAGES>
 __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
   extern __shared__ uint8_t smem_raw[];
@@ -2316,14 +2376,14 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
         }
         __syncthreads();
         {
-          const int hh = tid >> 7, row = tid & 63, half = (tid >> 6) & 1;
-          const float* src = reinterpret_cast<const float*>(hh == 0 ? stg : smem + STAGES * 16384) + row * 64;
-          float4* dst = reinterpret_cast<float4*>(p.ws_acc + ((slot * 2 + hh) * 64 + row) * 64 + 32 * half);
+          // flat, coalesced: float4 q * 256 + tid of the slot = (head, row) 16 q + (tid >> 4), d 4 (tid & 15)
+          float4* dst = reinterpret_cast<float4*>(p.ws_acc) + slot * 2048;
+          const int d0 = 4 * (tid & 15);
 #pragma unroll
           for (int q = 0; q < 8; ++q) {
-            const int d0 = 32 * half + 4 * q;
-            dst[q] = make_float4(src[(d0) ^ (row & 31)], src[(d0 + 1) ^ (row & 31)], src[(d0 + 2) ^ (row & 31)],
-                                 src[(d0 + 3) ^ (row & 31)]);
+            const int hr = 16 * q + (tid >> 4), row = hr & 63, x = row & 31;
+            const float* src = reinterpret_cast<const float*>(hr < 64 ? stg : smem + STAGES * 16384) + row * 64;
+            dst[q * 256 + tid] = make_float4(src[d0 ^ x], src[(d0 + 1) ^ x], src[(d0 + 2) ^ x], src[(d0 + 3) ^ x]);
           }
         }
 #pragma unroll
@@ -2347,6 +2407,27 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
       int* cnt_final = p.counters + b * gridDim.y + pair;
       int* cnt_group = p.counters + B * gridDim.y + (size_t)(b * gridDim.y + pair) * p.max_groups + gi;
       const size_t g_slot0 = ((size_t)pair * B + b) * p.max_groups;
+      if (c <= ATT_GROUP) {
+        // Cooperative merge: every CTA of the request waits for all partials (the grid is never
+        // larger than what is resident, and CTA ranges are contiguous, so no wait is circular),
+        // then merges its slice of the 128 (head, row) rows: 16 lanes per row, coalesced loads,
+        // all of the request's partials in flight at once.
+        int* cnt_done = p.counters + B * gridDim.y + (size_t)(b * gridDim.y + pair) * p.max_groups;
+        if (tid == 0) {
+          atomicAdd(cnt_final, 1);
+          int v;
+          do {
+            asm volatile("ld.acquire.gpu.global.s32 %0, [%1];\n" : "=r"(v) : "l"(cnt_final) : "memory");
+            if (v < c) __nanosleep(32);
+          } while (v < c);
+        }
+        __syncthreads();
+        ATT_STAMP(41);
+        att_coop_merge_v(p, cta - i_first, c, (size_t)pair * (p.n_ctas + B) + i_first + b, b, pair, L, v_scale);
+        ATT_STAMP(59);
+        __syncthreads();
+        if (tid == 0 && atomicAdd(cnt_done, 1) == c - 1) { *cnt_final = 0; *cnt_done = 0; }
+      } else {
       if (tid == 0) {
         int mode = 0;
         if (ng == 1) {
@@ -2415,6 +2496,7 @@ __global__ void __launch_bounds__(256, 2) attn_vwg_kernel(AttnParams p) {
             op[q] = ow;
           }
         }
+      }
       }
       __syncthreads();
       ATT_STAMP(42);

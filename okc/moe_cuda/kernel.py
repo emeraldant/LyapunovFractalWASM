@@ -1713,6 +1713,10 @@ __global__ void __launch_bounds__(288, RES ? 1 : 2) moe_tiny_kernel(
   const uint32_t bar_full = base + C::OFF_BAR, bar_empty = bar_full + 8 * TINY_RING, bar_w2 = bar_empty + 8 * TINY_RING;
   int* misc = reinterpret_cast<int*>(smem + C::OFF_MISC);   // [0] touched experts, [1..32] their ids, [33] flag
   const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
+  // flags & 0x8000 (probe): per-CTA phase times (globaltimer) at cnt + 4096: [cta][start, GEMM1 done,
+  // first GEMM2 wait passed, GEMM2 done] as int64.
+  long long* stamp = (flags & 0x8000) ? reinterpret_cast<long long*>(cnt + 4096) + 4 * blockIdx.x : nullptr;
+  if (stamp && tid == 0) stamp[0] = gtimer();
   if (tid == 0) {
     for (int s = 0; s < TINY_RING; ++s) {
       mbar_init(bar_full + 8 * s, 1);
@@ -1846,12 +1850,14 @@ __global__ void __launch_bounds__(288, RES ? 1 : 2) moe_tiny_kernel(
     asm volatile("bar.sync 1, 256;\n" ::: "memory");   // misc[33] is rewritten next unit
   }
 
+  if (stamp && tid == 0) stamp[1] = gtimer();
   for (int v = blockIdx.x, k = 0; v < U2; v += G, ++k) {
     const int h = v / (ne * 32), e = misc[1 + (v % (ne * 32)) / 32], b = v % 32;
     const int row0 = exp_start[e], rows_e = min(8, exp_start[e + 1] - row0);
     if (tid == 0)
       while (ld_acquire(cnt + TINY_DONE1 + e) < 64) {
       }
+    if (stamp && tid == 0 && k == 0) stamp[2] = gtimer();
     asm volatile("bar.sync 1, 256;\n" ::: "memory");
     // This expert's inter rows, K half h, into the activation region (row stride TINY_A2ROW).
     for (int o = tid; o < rows_e * 256; o += 256) {   // 16 B per thread step: 256 per row
@@ -1895,6 +1901,7 @@ __global__ void __launch_bounds__(288, RES ? 1 : 2) moe_tiny_kernel(
       }
     }
   }
+  if (stamp && tid == 0) stamp[3] = gtimer();
 }
 
 """
@@ -2480,7 +2487,7 @@ def ws_layout(bank):
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
-                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0, tiny=False):
+                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0, tiny=False, _tiny_stamps=False):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -2499,7 +2506,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     previous kernel's output."""
     if tiny:   # bs <= 8: one persistent grid for both GEMMs (moe_tiny_kernel)
         return moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=chain, topk=topk,
-                               tiny_ring=tiny if tiny is not True else 4)
+                               tiny_ring=tiny if tiny is not True else 4, stamps=_tiny_stamps)
     assert not chain or (sab and not (wg or dualv8 or dualsab or sk)), "chain: v6 single-launch configs"
     mod = moe_cuda_module(prof is not None, variant)
     x = x.contiguous()
@@ -2625,7 +2632,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     return (route, gemm1, gemm2, post), out
 
 
-def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=True, topk=8, tiny_ring=4, **_):
+def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=True, topk=8, tiny_ring=4, stamps=False, **_):
     """Tiny batches (<= 8 rows per local expert, i.e. bs <= 8): route, then ONE persistent grid for
     both expert GEMMs (moe_tiny_kernel: GEMM2's first unit per CTA resident in shared memory from
     the start), then the parts post-norm (KP 2). Same numerics as the split-K v6 path."""
@@ -2647,7 +2654,7 @@ def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=
     part1 = torch.empty((2, p, 8192), dtype=torch.float32, device=device)
     part2 = torch.empty((2, p, 4096), dtype=torch.float32, device=device)
     out = torch.empty((m, hidden), dtype=x.dtype, device=device)
-    cnt = bank.setdefault("tiny_cnt", torch.zeros((2112,), dtype=torch.int32, device=device))
+    cnt = bank.setdefault("tiny_cnt", torch.zeros((4096 + 2 * 4 * 512,), dtype=torch.int32, device=device))
 
     def route():
         _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, 8,
@@ -2657,7 +2664,7 @@ def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=
     def tiny():
         mod.moe_tiny(x, row_route, exp_start, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], bank["w2q_sab"],
                      bank["w2s_sab"], bank["w2_gs"], inter, part1, part2, cnt,
-                     (128 if chain else 0) | {4: 0, 16: 0x1000, 8: 0x2000, 6: 0x4000}[tiny_ring])
+                     (128 if chain else 0) | {4: 0, 16: 0x1000, 8: 0x2000, 6: 0x4000}[tiny_ring] | (0x8000 if stamps else 0))
 
     def post():
         _post_norm_parts_kernel[(m,)](part2, norm_w, topk_weights, pos_of_route, out, eps, p, KP=2, TOPK=topk, H=4096,

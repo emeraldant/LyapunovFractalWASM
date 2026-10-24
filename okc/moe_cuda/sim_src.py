@@ -406,3 +406,56 @@ def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7, timed=True, 
 
     del weights
     torch.cuda.empty_cache()
+
+
+def run_tiny_stamps(sizes=(1,), seeds=(8_950_000, 8_970_000, 8_990_000), rings=(4, 8)):
+    """moe_tiny_kernel phase timeline (per-CTA globaltimer stamps) under graph replay after the
+    cold-L2 flush, on random NVFP4 weights."""
+    g = torch.Generator(device="cuda").manual_seed(7)
+    E, I, H = 32, 4096, 4096
+    def scales(n, k):
+        e = torch.randint(4, 9, (n, k), generator=g, device="cuda", dtype=torch.int32)
+        m = torch.randint(0, 8, (n, k), generator=g, device="cuda", dtype=torch.int32)
+        return ((e << 3) | m).to(torch.uint8).view(torch.float8_e4m3fn)
+    weights = {"w13": torch.randint(0, 256, (E, 2 * I, H // 2), generator=g, device="cuda", dtype=torch.uint8),
+               "w2": torch.randint(0, 256, (E, H, I // 2), generator=g, device="cuda", dtype=torch.uint8),
+               "w13_gs": torch.full((E,), 1e-3, device="cuda"), "w2_gs": torch.full((E,), 1e-3, device="cuda")}
+    weights["w13_sf"] = torch.stack([scales(2 * I, H // 16) for _ in range(E)])
+    weights["w2_sf"] = torch.stack([scales(H, I // 16) for _ in range(E)])
+    bank = build_cuda_bank(weights)
+    ws_layout(bank)
+    norm_w = torch.ones(H, dtype=torch.bfloat16, device="cuda")
+    ls = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flush = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int32, device="cuda")
+    stream = torch.cuda.Stream()
+    for bs in sizes:
+        for seed in seeds:
+            data = generate_input(bs=bs, sharding="ep8", seed=seed, device="cuda")
+            for ring in rings:
+                fns, _ = moe_cuda_stages(data["hidden_states"], data["topk_ids"], data["topk_weights"], ls, bank, norm_w,
+                                         _SIM_EPS, mt=1, tiny=ring, chain=True, _tiny_stamps=True)
+                for fn in fns:
+                    fn()
+                torch.cuda.synchronize()
+                with torch.cuda.stream(stream):
+                    gr = torch.cuda.CUDAGraph()
+                    with torch.cuda.graph(gr, stream=stream):
+                        for fn in fns:
+                            fn()
+                rows = []
+                for _ in range(5):
+                    bank["tiny_cnt"][4096:].zero_()
+                    flush.zero_()
+                    torch.cuda.synchronize()
+                    gr.replay()
+                    torch.cuda.synchronize()
+                    st = bank["tiny_cnt"][4096:].view(torch.int64).view(-1, 4).cpu().double()
+                    st = st[st[:, 0] > 0]
+                    t0 = float(st[:, 0].min())
+                    rows.append([(float(st[:, j].quantile(q)) - t0) / 1e3 for j in (0, 1, 2, 3) for q in (0.5, 1.0)])
+                med = [sorted(c)[2] for c in zip(*rows)]
+                ids = data["topk_ids"]
+                ne = int(torch.unique(ids[ids < 32]).numel())
+                print(f"tiny stamps bs{bs} seed {seed} ring {ring} ({ne} exp): start p50/max {med[0]:.1f}/{med[1]:.1f};"
+                      f" GEMM1 done {med[2]:.1f}/{med[3]:.1f}; GEMM2 wait passed {med[4]:.1f}/{med[5]:.1f};"
+                      f" GEMM2 done {med[6]:.1f}/{med[7]:.1f} us", flush=True)

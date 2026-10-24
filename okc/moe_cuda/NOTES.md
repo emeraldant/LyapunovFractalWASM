@@ -490,3 +490,14 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   pipeline leaves ~35-40% on the table. Small sizes: LDG starts faster than TMA (10.7 vs 14.0 at 38 MB).
 - Next: graph-timed ablations of s1dw (full / no math / no act rows / weights only / math only /
   decode only / loop only), probe moe_gabl_pf.
+- Graph-timed ablations (run 2db7fe47, s1dw, judge conditions; this seed routes bs 8 to 10 experts,
+  so GEMM1 189 MB - the 132 MB comparison above used the wrong expert count):
+  bs 8 GEMM1 full 60.1 / no math 54.2 / no act rows 58.4 / weights only 53.8 / math only 41.6 /
+  decode only 28.0 / loop only 20.8 (floor at 189 MB ~50); GEMM2 37.4 / 32.8 / 37.0 / 32.4 / 24.8 /
+  17.0 / 15.8 (floor at 94 MB ~28). bs 32 GEMM1 (246 MB) 99.2 / 79.9 / 93.2 / 75.1 / 81.3 / 53.2 /
+  37.7 (floor ~63); GEMM2 49.8 / 41.1 / 46.6 / 39.6 / 39.8 / 27.4 / 23.4 (floor ~35).
+  -> small batch: memory path within 7-14% of the streaming floor, math adds ~6 us. bs 32: math
+  (81) > memory (75), poor overlap (99), and loop-only plumbing is 38 of math's 81 us. Per case vs
+  a fused-streaming floor: bs 1 48%, bs 8 69%, bs 16 66%, bs 32 62%, bs 128 54%, bs 256 46%;
+  geomean ceiling ~3.3x. Next: 32 rows per consumer warp (B-fragment reuse: today all 8 warps
+  ldmatrix the same activations every k step).

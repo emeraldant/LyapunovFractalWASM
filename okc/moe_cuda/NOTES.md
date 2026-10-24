@@ -535,3 +535,9 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   repeatable): bs 128 245.2 / 239.2 vs s2qc 241.9 / 225.7; bs 256 280.5 / 301.5 vs s2qv16 270.6 /
   268.4; bs 32 mixed. Cutting activation reads moves the limit to act-row copies (+14 us at bs
   256: 16 x 1 KB copies per stage) and math / memory overlap (+47 us over memory-only).
+- v7 / v8 (wgmma: activations read once per warpgroup, TMA token tiles) vs incumbents at large batch
+  (run 56892927, two routings): bs 128 s2qc 241.2 / 227.2 vs t2 271.3 / 232.4, t4 282.1 / 250.0, v8
+  269.3 / 242.8; bs 256 s2qv16 270.2 / 269.2 vs t2 287.8 / 296.5, t4 313.4 / 314.9, v8 280.8 / 276.0.
+  Removing the activation re-reads / small copies does not move large batch: the limit is the decode
+  (~88-117 us of ALU at bs 256) not overlapping the ~120 us memory stream. The wgmma redesign is not
+  pursued.

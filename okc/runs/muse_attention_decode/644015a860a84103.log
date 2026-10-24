@@ -1,0 +1,37 @@
+routing bs1 seed 8950000: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 6.0e-04, row worst 6.0e-04, repeat equal; 40.8 us (v6 s2 54.1, x1.337) | stages 0.7 17.5 12.4 4.5
+sim failed: ts=2, fuse=True, pdl=True, chain=True),\n      "s1dw2fpcA": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True, apost=True),\n      "s1dw2fpcA4": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, kparts2=4, fuse=True, pdl=True, chain=True, apost=True),\n      "s1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True),\n      "s1dwcA": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True, apost=True),\n      "s1dwcA2": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts2=2, chain=True, apost=True)}\nfor _base in (8_950_000, 8_970_000, 8_990_000):\n    for _i, (_bs, _ns) in enumerate([(1, ("s1dw2fpc", "s1dw2fpcA", "s1dw2fpcA4")), (8, ("s1dwc", "s1dwcA", "s1dwcA2")), (16, ("s1dwc", "s1dwcA", "s1dwcA2"))]):\n        run_moe_profile_synth({_n: _C[_n] for _n in _ns}, sizes=(_bs,), abls=(), timed=True, stage_detail=True, seed_base=_base + 10 * _i)\n')
+  File "<string>", line 9, in <module>
+  File "/tmp/muse_attention_decode-wrgshy3f/run/submission.py", line 6156, in run_moe_profile_synth
+    out = moe_cuda_forward(*args, **kw)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/muse_attention_decode-wrgshy3f/run/submission.py", line 5668, in moe_cuda_forward
+    fn()
+  File "/tmp/muse_attention_decode-wrgshy3f/run/submission.py", line 5642, in gemm2
+    mod.moe_gemm_sab(2, mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
+RuntimeError: moe_gemm_sab: split K needs a partial buffer
+
+USDT:2026-10-24 23:36:32 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:32 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:36:33 74:74 SyncActivityProfilerHandler.cpp:46] profiler_stop

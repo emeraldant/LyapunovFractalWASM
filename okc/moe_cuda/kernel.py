@@ -2221,7 +2221,7 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
   float* pt = part.numel() ? part.data_ptr<float>() : nullptr;
   const int prow = part.numel() ? (int)part.size(1) : 0;
   const int kp = (int)kparts;
-  TORCH_CHECK(kp == 1 || pt, "moe_gemm_sab: split K needs a partial buffer");
+  TORCH_CHECK(kp == 1 || pt || (mode == 2 && (pa.mode & 2)), "moe_gemm_sab: split K needs a partial buffer (or the atomic post)");
   long long* pp = prof.numel() ? reinterpret_cast<long long*>(prof.data_ptr<int64_t>()) : nullptr;
   if (pp) {
 #ifdef OKC_PROF

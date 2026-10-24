@@ -1630,16 +1630,18 @@ __global__ void __launch_bounds__(288, N >= 64 ? 2 : N >= 32 ? (W0 ? 3 : 2) : W0
 // memory. GEMM2 halves go out as fp32 parts for the post-norm (_post_norm_parts_kernel, KP 2).
 // Counters reset themselves (graph replay). Same partial-sum order and roundings as the
 // split-K v6 path (s1dw2fp), so the result matches it.
-#define TINY_RING 4
 #define TINY_WCH 8192
 #define TINY_SCH 1024
 #define TINY_AROW 272     // one 128-k chunk of a token row (256 B) + 16 B
 #define TINY_A2ROW 4112   // one GEMM2 K half of a token row (2048 k = 4096 B) + 16 B
+// RING: ring stages; RES: the first GEMM2 unit resident in shared memory (else every GEMM2 unit
+// is L2-prefetched at the start and streamed through the ring, and the ring gets that space).
+template <int TINY_RING, bool RES>
 struct TinyCfg {
   static constexpr int RSTAGE = TINY_WCH + TINY_SCH + 8 * TINY_AROW;   // ring stage: W, S, act rows
   static constexpr int W2W = 16 * TINY_WCH, W2S = 16 * TINY_SCH;        // resident GEMM2 unit
   static constexpr int OFF_W2 = TINY_RING * RSTAGE;
-  static constexpr int OFF_A2 = OFF_W2 + W2W + W2S;
+  static constexpr int OFF_A2 = OFF_W2 + (RES ? W2W + W2S : 0);
   static constexpr int OFF_BAR = OFF_A2 + 8 * TINY_A2ROW;
   static constexpr int OFF_MISC = OFF_BAR + 8 * (2 * TINY_RING + 1);
   static constexpr int SMEM = OFF_MISC + 4 * 40 + 64;
@@ -1698,13 +1700,14 @@ __device__ __forceinline__ int ld_acquire(const int* p) {
 
 // flags & 128: a programmatic dependent of the route (waits for it before reading its output,
 // signals its own dependent, the post-norm, at the start).
+template <int TINY_RING, bool RES>
 __global__ void __launch_bounds__(288, 1) moe_tiny_kernel(
     const __nv_bfloat16* __restrict__ x, const int32_t* __restrict__ row_route, const int32_t* __restrict__ exp_start,
     const uint8_t* __restrict__ w13q, const uint8_t* __restrict__ w13s, const float* __restrict__ gs13,
     const uint8_t* __restrict__ w2q, const uint8_t* __restrict__ w2s, const float* __restrict__ gs2,
     __nv_bfloat16* __restrict__ inter, float* __restrict__ part1, float* __restrict__ part2, int P, int* __restrict__ cnt,
     int flags) {
-  using C = TinyCfg;
+  using C = TinyCfg<TINY_RING, RES>;
   extern __shared__ __align__(128) uint8_t smem[];
   const uint32_t base = (uint32_t)__cvta_generic_to_shared(smem);
   const uint32_t bar_full = base + C::OFF_BAR, bar_empty = bar_full + 8 * TINY_RING, bar_w2 = bar_empty + 8 * TINY_RING;
@@ -1738,9 +1741,14 @@ __global__ void __launch_bounds__(288, 1) moe_tiny_kernel(
     if (lane == 0 && (int)blockIdx.x < U2) {   // the first GEMM2 unit: into shared memory now
       const int v = blockIdx.x, h = v / (ne * 32), e = misc[1 + (v % (ne * 32)) / 32], b = v % 32;
       const size_t c0 = ((size_t)e * 32 + b) * 32 + h * 16;
-      mbar_expect_tx(bar_w2, C::W2W + C::W2S);
-      bulk_g2s(base + C::OFF_W2, w2q + c0 * TINY_WCH, C::W2W, bar_w2);
-      bulk_g2s(base + C::OFF_W2 + C::W2W, w2s + c0 * TINY_SCH, C::W2S, bar_w2);
+      if (RES) {
+        mbar_expect_tx(bar_w2, C::W2W + C::W2S);
+        bulk_g2s(base + C::OFF_W2, w2q + c0 * TINY_WCH, C::W2W, bar_w2);
+        bulk_g2s(base + C::OFF_W2 + C::W2W, w2s + c0 * TINY_SCH, C::W2S, bar_w2);
+      } else {
+        prefetch_l2(w2q + c0 * TINY_WCH, C::W2W);
+        prefetch_l2(w2s + c0 * TINY_SCH, C::W2S);
+      }
       for (int v2 = v + G; v2 < U2; v2 += G) {   // further units: to L2, streamed through the ring later
         const int h2 = v2 / (ne * 32), e2 = misc[1 + (v2 % (ne * 32)) / 32], b2 = v2 % 32;
         const size_t c2 = ((size_t)e2 * 32 + b2) * 32 + h2 * 16;
@@ -1769,7 +1777,7 @@ __global__ void __launch_bounds__(288, 1) moe_tiny_kernel(
         if (lane < live) bulk_g2s(sb + TINY_WCH + TINY_SCH + lane * TINY_AROW, a_row + (h * 16 + c) * 256, 256, full);
       }
     }
-    for (int v = blockIdx.x + G; v < U2; v += G) {   // GEMM2 units beyond the first: weights via the ring
+    for (int v = blockIdx.x + (RES ? G : 0); v < U2; v += G) {   // GEMM2 units not resident: weights via the ring
       const int h = v / (ne * 32), e = misc[1 + (v % (ne * 32)) / 32], b = v % 32;
       const size_t cb = ((size_t)e * 32 + b) * 32 + h * 16;
       for (int c = 0; c < 16; ++c, ++f) {
@@ -1853,7 +1861,7 @@ __global__ void __launch_bounds__(288, 1) moe_tiny_kernel(
     }
     asm volatile("bar.sync 1, 256;\n" ::: "memory");
     float acc[2][4] = {};
-    if (k == 0) {
+    if (RES && k == 0) {
       mbar_wait(bar_w2, 0);
       const uint32_t wb = base + C::OFF_W2, sbb = base + C::OFF_W2 + C::W2W;
       for (int q = 0; q < 16; ++q)
@@ -2153,8 +2161,9 @@ void moe_gemm(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, tor
 void moe_tiny(torch::Tensor x, torch::Tensor row_route, torch::Tensor exp_start, torch::Tensor w13q, torch::Tensor w13s,
               torch::Tensor gs13, torch::Tensor w2q, torch::Tensor w2s, torch::Tensor gs2, torch::Tensor inter,
               torch::Tensor part1, torch::Tensor part2, torch::Tensor cnt, int64_t flags) {
-  const int smem = TinyCfg::SMEM;
-  cudaFuncSetAttribute(moe_tiny_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
+  auto k = (flags & 0x1000) ? moe_tiny_kernel<16, false> : (flags & 0x2000) ? moe_tiny_kernel<8, false> : moe_tiny_kernel<4, true>;
+  const int smem = (flags & 0x1000) ? TinyCfg<16, false>::SMEM : (flags & 0x2000) ? TinyCfg<8, false>::SMEM : TinyCfg<4, true>::SMEM;
+  cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
   int dev = 0, sms = 0;
   cudaGetDevice(&dev);
   cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
@@ -2168,7 +2177,7 @@ void moe_tiny(torch::Tensor x, torch::Tensor row_route, torch::Tensor exp_start,
   attr[0].val.programmaticStreamSerializationAllowed = 1;
   cfg.attrs = attr;
   cfg.numAttrs = (flags & 128) ? 1 : 0;
-  cudaLaunchKernelEx(&cfg, moe_tiny_kernel,
+  cudaLaunchKernelEx(&cfg, k,
       reinterpret_cast<const __nv_bfloat16*>(x.data_ptr()), (const int32_t*)row_route.data_ptr<int32_t>(),
       (const int32_t*)exp_start.data_ptr<int32_t>(), (const uint8_t*)w13q.data_ptr<uint8_t>(),
       (const uint8_t*)w13s.data_ptr<uint8_t>(), (const float*)gs13.data_ptr<float>(),
@@ -2486,7 +2495,8 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     GEMM2's first weight stages overlap the previous kernel; each waits only before reading the
     previous kernel's output."""
     if tiny:   # bs <= 8: one persistent grid for both GEMMs (moe_tiny_kernel)
-        return moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=chain, topk=topk)
+        return moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=chain, topk=topk,
+                               tiny_ring=tiny if tiny is not True else 4)
     assert not chain or (sab and not (wg or dualv8 or dualsab or sk)), "chain: v6 single-launch configs"
     mod = moe_cuda_module(prof is not None, variant)
     x = x.contiguous()
@@ -2612,7 +2622,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     return (route, gemm1, gemm2, post), out
 
 
-def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=True, topk=8, **_):
+def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=True, topk=8, tiny_ring=4, **_):
     """Tiny batches (<= 8 rows per local expert, i.e. bs <= 8): route, then ONE persistent grid for
     both expert GEMMs (moe_tiny_kernel: GEMM2's first unit per CTA resident in shared memory from
     the start), then the parts post-norm (KP 2). Same numerics as the split-K v6 path."""
@@ -2643,7 +2653,8 @@ def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=
 
     def tiny():
         mod.moe_tiny(x, row_route, exp_start, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], bank["w2q_sab"],
-                     bank["w2s_sab"], bank["w2_gs"], inter, part1, part2, cnt, 128 if chain else 0)
+                     bank["w2s_sab"], bank["w2_gs"], inter, part1, part2, cnt,
+                     (128 if chain else 0) | {4: 0, 16: 0x1000, 8: 0x2000}[tiny_ring])
 
     def post():
         _post_norm_parts_kernel[(m,)](part2, norm_w, topk_weights, pos_of_route, out, eps, p, KP=2, TOPK=topk, H=4096,

@@ -10,6 +10,7 @@ import torch
 
 _BW_SRC = r"""
 #include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
 #include <stdint.h>
 
 __device__ __forceinline__ void mbar_init(uint32_t bar, uint32_t count) {
@@ -168,8 +169,35 @@ double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int 
 }
 """
 
+_BW_JUDGE_SRC = r"""
+// Judge-condition streaming: launches only (on the current stream, so a CUDA graph can capture
+// them); timing is done by the caller (graph replay after the cold-L2 flush, as SimBench).
+void bw_setup(int smem) {
+  if (!g_buf.defined()) {
+    const size_t total = (size_t)1 << 30;
+    g_buf = torch::ones({(long)total}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
+    g_buf2 = torch::ones({(long)(total / 4)}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
+    g_sink = torch::zeros({4}, torch::dtype(torch::kInt32).device(torch::kCUDA));
+  }
+  cudaFuncSetAttribute(tma_stream, cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
+}
+void bw_launch(int mode, int grid, int threads, int chunk, int extra, int stages, int nchunks, int pair) {
+  auto st = at::cuda::getCurrentCUDAStream();
+  if (mode == 0) {
+    const size_t n = (size_t)grid * nchunks * (chunk + extra) / 16;
+    ldg_stream<<<grid, threads, 0, st>>>(reinterpret_cast<const uint4*>(g_buf.data_ptr()), n,
+                                         reinterpret_cast<uint32_t*>(g_sink.data_ptr()));
+  } else {
+    const int smem = stages * (chunk + extra) + 16 * stages;
+    tma_stream<<<grid, threads, smem, st>>>(g_buf.data_ptr<uint8_t>(), g_buf2.data_ptr<uint8_t>(), nchunks, chunk,
+                                            extra, stages, 0, reinterpret_cast<uint32_t*>(g_sink.data_ptr()), 1, pair);
+  }
+}
+"""
+
 _BW_CPP = ("double run_bw(int mode, int ctas_per_sm, int threads, int chunk, int extra, int stages, int lds, int grid_override, "
-           "int nch_fixed, int hold, int pair);")
+           "int nch_fixed, int hold, int pair);\n"
+           "void bw_setup(int smem);\nvoid bw_launch(int mode, int grid, int threads, int chunk, int extra, int stages, int nchunks, int pair);")
 
 
 def run_bw_probe():
@@ -219,3 +247,33 @@ def run_bw_probe():
             line.append(f"{per9k}:{gbs:.0f}")
         print(f"bw paced {cps} CTAs x {stages} x {chunk // 1024}K+{extra // 1024}K ({cps * stages * (chunk + extra) // 1024} KB/SM):"
               f" GB/s by hold clk per 9 KB " + " ".join(line), flush=True)
+
+
+def run_bw_judge(sizes_mb=(37.8, 66.0, 132.0, 264.0, 523.0)):
+    """Pure weight streaming under the judge's conditions (graph replay right after the cold-L2
+    zero-fill flush, replay overhead subtracted: SimBench), at the byte counts our GEMM stages
+    move, with v6's copy shapes. The floor our GEMMs are measured against."""
+    import time
+    from torch.utils.cpp_extension import load_inline
+    t = time.time()
+    mod = load_inline(name="okc_bw_judge", cpp_sources=_BW_CPP, cuda_sources=_BW_SRC + _BW_JUDGE_SRC,
+                      functions=["run_bw", "bw_setup", "bw_launch"],
+                      extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"], verbose=False)
+    print(f"bw judge: compiled in {time.time() - t:.0f} s", flush=True)
+    bench = SimBench()
+    tiny = torch.zeros(1, device="cuda")
+    shapes = (("tma 2x4x16K+2K (s1dw)", 1, 2, 4, 16384, 2048), ("tma 2x2x32K+4K (s2q)", 1, 2, 2, 32768, 4096),
+              ("tma 4x4x8K+1K (s1)", 1, 4, 4, 8192, 1024), ("tma 1x8x16K+2K", 1, 1, 8, 16384, 2048),
+              ("tma 2x6x16K+2K", 1, 2, 6, 16384, 2048), ("ldg 2x288", 0, 2, 4, 16384, 2048))
+    mod.bw_setup(6 * (16384 + 2048) + 16 * 8)
+    mod.bw_setup(max(st * (c + e) + 16 * st for _, _, _, st, c, e in shapes))
+    for mb in sizes_mb:
+        line = []
+        for name, mode, cps, stages, chunk, extra in shapes:
+            grid = 132 * cps
+            nch = max(1, round(mb * 1e6 / (grid * (chunk + extra))))
+            nbytes = grid * nch * (chunk + extra)
+            fn = (lambda m=mode, g=grid, c=chunk, e=extra, s=stages, n=nch: mod.bw_launch(m, g, 288, c, e, s, n, 0))
+            us, _, _, _ = bench.compare(fn, lambda: tiny.add_(1), pairs=10)
+            line.append(f"{name} {us:.1f} us ({nbytes / us / 1e6:.2f} TB/s)")
+        print(f"bw judge {mb:.0f} MB: " + "; ".join(line), flush=True)

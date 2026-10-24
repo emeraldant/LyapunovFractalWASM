@@ -566,3 +566,11 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   block scales cannot be applied inside FP8 wgmma's k32.
 - Every published Hopper W4A16 design is now measured against ours under judge conditions; ours is
   the fastest. The leaders' edge is not a published design.
+- bs 1 deeper split K refuted (three routings): GEMM1 17.7 / 19.0 (k2) vs 23.1 / 23.6 (k8); GEMM2 -1 us
+  but post +3 us. bs 1 graph ablation: GEMM1 memory-only 16-17 us (= its full 18.4: memory path),
+  GEMM2 math-only 11.5 > memory 8.7 (latency-bound, ~0.5 us per chunk per CTA).
+- Judge weights (run after the split-K probe, prepare-time stats): FP4 codes exactly uniform (4.000
+  bits entropy: synthetic random, incompressible); E4M3 block scales ~31 distinct values per tensor
+  (entropy 3.71 bits), per-row range mean 18 / max 29 codes; global scales all 3.85e-5. A lossless
+  scale repack (base byte per 8 scales + 4-bit deltas, exact fallback) saves ~37% of scale bytes =
+  ~4% of HBM bytes. Real but small.

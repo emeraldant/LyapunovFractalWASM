@@ -439,3 +439,24 @@ s1dw ablations (profiling build, cold L2, synthetic weights, judge-like routing)
   the same (27.4 life vs 37.6 stage). Two GEMMs -> ~20 us of the ~100 us bs 8 MoE, if real.
   Probe moe_launch_attn: [globaltimer stamp] -> GEMM -> [stamp] in one graph, cold L2, plus the
   same GEMM with no items and a stamp-only graph.
+
+## PDL chain (flag 128 / chain=True): judge GPU, run df7fe776 (decode_layer-hosted, triton 3.8.0, torch 2.14.1+cu130)
+
+route -> GEMM1 -> (split-K reduction) -> GEMM2 -> post-norm as programmatic dependent launches,
+each signalling at its start; GEMM1 waits for the route at its start; GEMM2 issues its first
+item's weight + scale stages before its wait (only activation rows wait); post loads route data
+and norm weights before its wait. Full-forward graph timing, cold L2, standard seeds, two rounds
+(second in reversed order):
+
+| bs | incumbent | chained | change |
+|---|---|---|---|
+| 1 | s1k4 42.4 / 42.6 | s1k4c 39.4 / 41.2 | -5% |
+| 1 | s1dw2fp 38.5 / 37.7 | s1dw2fpc 38.5 / 38.0 | 0 (GEMM2 was already a PDL dependent) |
+| 8 | s1dw 99.5 / 98.4 | s1dwc 93.2 / 93.2 | -5.8% |
+| 16 | s1dw 77.8 / 78.1 | s1dwc 72.3 / 72.8 | -6.9% |
+| 32 | s2w 132.9 / 132.2 | s2wc 126.4 / 126.7 | -4.6% |
+| 128 | s2q 239.2 / 237.7 | s2qc 237.1 / 236.5 | -0.7% |
+
+All correct (rel diff vs v6 s2 identical to the unchained configs, bitwise repeatable). ~5-6 us
+saved per call at bs 1-32: about a third of the ~20 us measured outside the GEMMs' CTA lifetimes.
+Not yet overlapped: GEMM1's first fill (its weights depend on the route).

@@ -1,0 +1,59 @@
+triton 3.8.0 torch 2.14.1+cu130
+routing bs1 seed 8950000: tokens per local expert [1, 1]
+check s1k4 bs1: rel diff vs v6 6.5e-04, row worst 6.5e-04, repeat equal; 42.4 us (v6 s2 52.0, x1.224)
+check s1k4c bs1: rel diff vs v6 6.5e-04, row worst 6.5e-04, repeat equal; 39.4 us (v6 s2 51.8, x1.313)
+check s1dw2fp bs1: rel diff vs v6 6.0e-04, row worst 6.0e-04, repeat equal; 38.5 us (v6 s2 51.7, x1.337)
+check s1dw2fpc bs1: rel diff vs v6 6.0e-04, row worst 6.0e-04, repeat equal; 38.5 us (v6 s2 51.7, x1.342)
+routing bs8 seed 8950010: tokens per local expert [3, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+check s1dw bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 99.5 us (v6 s2 109.8, x1.105)
+check s1dwc bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 93.2 us (v6 s2 110.3, x1.182)
+routing bs16 seed 8950020: tokens per local expert [16, 3, 2, 1, 1, 1]
+check s1dw bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 77.8 us (v6 s2 102.9, x1.323)
+check s1dwc bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 72.3 us (v6 s2 103.2, x1.429)
+routing bs32 seed 8950030: tokens per local expert [24, 7, 4, 3, 3, 3, 3, 2, 2, 1, 1, 1, 1, 1]
+check s2w bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 132.9 us (v6 s2 147.9, x1.109)
+check s2wc bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 126.4 us (v6 s2 146.6, x1.157)
+routing bs128 seed 8950040: tokens per local expert [56, 14, 13, 13, 12, 10, 10, 8, 7, 7, 6, 6, 5, 5, 4, 4, 4, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1]
+check s2q bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 239.2 us (v6 s2 283.1, x1.183)
+check s2qc bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 237.1 us (v6 s2 283.8, x1.202)
+routing bs1 seed 8950000: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 6.0e-04, row worst 6.0e-04, repeat equal; 38.0 us (v6 s2 51.7, x1.386)
+check s1dw2fp bs1: rel diff vs v6 6.0e-04, row worst 6.0e-04, repeat equal; 37.7 us (v6 s2 50.9, x1.353)
+check s1k4c bs1: rel diff vs v6 6.5e-04, row worst 6.5e-04, repeat equal; 41.2 us (v6 s2 52.0, x1.262)
+check s1k4 bs1: rel diff vs v6 6.5e-04, row worst 6.5e-04, repeat equal; 42.6 us (v6 s2 52.3, x1.237)
+routing bs8 seed 8950010: tokens per local expert [3, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+check s1dwc bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 93.2 us (v6 s2 109.4, x1.175)
+check s1dw bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 98.4 us (v6 s2 109.9, x1.121)
+routing bs16 seed 8950020: tokens per local expert [16, 3, 2, 1, 1, 1]
+check s1dwc bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 72.8 us (v6 s2 103.1, x1.421)
+check s1dw bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 78.1 us (v6 s2 103.6, x1.327)
+routing bs32 seed 8950030: tokens per local expert [24, 7, 4, 3, 3, 3, 3, 2, 2, 1, 1, 1, 1, 1]
+check s2wc bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 126.7 us (v6 s2 148.3, x1.161)
+check s2w bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 132.2 us (v6 s2 146.8, x1.107)
+routing bs128 seed 8950040: tokens per local expert [56, 14, 13, 13, 12, 10, 10, 8, 7, 7, 6, 6, 5, 5, 4, 4, 4, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1]
+check s2qc bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 236.5 us (v6 s2 284.6, x1.208)
+check s2q bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 237.7 us (v6 s2 285.3, x1.198)
+USDT:2026-10-24 00:48:25 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:25 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 00:48:25 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:25 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 00:48:25 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:26 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 00:48:26 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:26 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 00:48:27 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:27 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 00:48:28 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:28 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 00:48:29 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:29 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 00:48:29 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:29 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 00:48:30 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:30 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 00:48:31 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:31 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 00:48:31 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:32 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 00:48:32 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 00:48:33 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop

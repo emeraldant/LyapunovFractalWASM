@@ -1,0 +1,23 @@
+gemv probe: compiled in 41 s
+gemv 132 MB bf16x2 HFMA2: T1 61.0 us (2.17 TB/s, 4 CTA/SM); T2 61.6 us (2.14 TB/s, 4 CTA/SM); T4 84.5 us (1.56 TB/s, 4 CTA/SM); T8 65.9 us (2.00 TB/s, 4 CTA/SM)
+gemv 132 MB fp32 FFMA: T1 72.9 us (1.81 TB/s, 4 CTA/SM); T2 78.6 us (1.68 TB/s, 4 CTA/SM); T4 73.4 us (1.80 TB/s, 8 CTA/SM); T8 103.3 us (1.28 TB/s, 8 CTA/SM)
+gemv 264 MB bf16x2 HFMA2: T1 131.0 us (2.02 TB/s, 4 CTA/SM); T2 132.7 us (1.99 TB/s, 4 CTA/SM); T4 193.2 us (1.37 TB/s, 4 CTA/SM); T8 129.3 us (2.04 TB/s, 4 CTA/SM)
+gemv 264 MB fp32 FFMA: T1 163.6 us (1.61 TB/s, 4 CTA/SM); T2 192.6 us (1.37 TB/s, 4 CTA/SM); T4 143.6 us (1.84 TB/s, 8 CTA/SM); T8 203.6 us (1.30 TB/s, 8 CTA/SM)
+gemv 523 MB bf16x2 HFMA2: T1 258.9 us (2.02 TB/s, 4 CTA/SM); T2 263.4 us (1.99 TB/s, 4 CTA/SM); T4 409.3 us (1.28 TB/s, 4 CTA/SM); T8 387.5 us (1.35 TB/s, 4 CTA/SM)
+gemv 523 MB fp32 FFMA: T1 340.4 us (1.54 TB/s, 8 CTA/SM); T2 415.0 us (1.26 TB/s, 4 CTA/SM); T4 283.8 us (1.84 TB/s, 4 CTA/SM); T8 399.1 us (1.31 TB/s, 8 CTA/SM)
+USDT:2026-10-24 21:53:10 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:53:10 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:53:10 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:53:10 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:53:11 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:53:11 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:53:12 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:53:12 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:53:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:53:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:53:14 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:53:14 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:53:16 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:53:16 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:53:18 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:53:18 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

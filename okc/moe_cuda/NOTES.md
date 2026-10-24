@@ -557,3 +557,12 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   largely serialize on the judge's H200. Ping-pong (LiquidGEMM-style) is off the table; compute ~
   plumbing + decode + MMA, and the plumbing (smem ring, LDS, ldmatrix, barriers) is the largest part
   at large batch -> next: TRT-GEMV-style direct-to-register weight streaming, micro-benchmark first.
+- GEMV upper bound (TRT-style: LDG.128 straight to registers, our decode + scale, T token FMAs with
+  activations assumed free; judge timing): 132 MB bf16x2 HFMA2 T1/2/4/8 2.17 / 2.14 / 1.56 / 2.00
+  TB/s, fp32 FFMA 1.81 / 1.68 / 1.80 / 1.28; 523 MB at most 2.02. Flat in T: the load + decode path,
+  not the FMAs. Slower than our TMA ring (~3+ TB/s): refuted.
+- FP8 compute is out: the MoE tolerance is 1.5% relative L2 (rows 7.5%); FP8 rounding of
+  activations or of e2m1 x scale products adds ~2% per stage (we are at ~0.4%), and NVFP4's 16-k
+  block scales cannot be applied inside FP8 wgmma's k32.
+- Every published Hopper W4A16 design is now measured against ours under judge conditions; ours is
+  the fastest. The leaders' edge is not a published design.

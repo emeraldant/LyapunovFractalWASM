@@ -518,3 +518,9 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   GEMM1 56.7 -> 61.9 / 65.7 / 72.6 (D 2 / 4 / 8), bs 32 83.8 -> 89.1 / 91.2 / 98.0, bs 16 (routing
   2) 100.1 -> 107.6 / 115.4 / 120.4; bs 128 D 8 equal only because s2q items have 8 stages (never
   fires). The math / memory overlap gap is not a shortage of bytes in flight.
+- H2 (tiny: one persistent grid for both GEMMs at bs <= 8) correct but no gain. bs 1: resident W2
+  39.2-40.5 vs s1dw2fpc 38.3-39.2; W2 via L2 + 8 / 16-stage ring 39.0-39.2 / 41.0-41.8; 2 CTAs/SM
+  42.6; 3-expert routing worse (55 vs 49.5). Phase stamps (graph, cold L2): GEMM1 phase 24-27 us
+  (W13 + the concurrent W2 prefetch: ~2.2 TB/s), expert wait ~1 us, GEMM2 phase 5.4 us (vs 12.5 as
+  its own kernel). GEMM2's saving is eaten by GEMM1 sharing HBM with W2: both designs move the
+  56.6 MB at ~2.2 TB/s; at these sizes the ramp dominates. Realistic bs 1 floor ~25-30 us. Closed.

@@ -1,0 +1,28 @@
+graph abl bs128 s2q (27 exp, GEMM1 510 MB / GEMM2 254 MB) gemm1 / gemm2 us: full 150.4 / 84.8; no math 129.8 / 69.9; weights only 126.4 / 68.0; math only 123.1 / 65.5; decode only 80.7 / 42.9; loop only 65.3 / 34.7
+graph abl bs256 s2q (27 exp, GEMM1 510 MB / GEMM2 254 MB) gemm1 / gemm2 us: full 209.2 / 109.2; no math 162.0 / 81.2; weights only 148.3 / 74.6; math only 177.8 / 91.3; decode only 117.3 / 59.5; loop only 96.9 / 51.9
+routing bs128 seed 8950040: tokens per local expert [56, 14, 13, 13, 12, 10, 10, 8, 7, 7, 6, 6, 5, 5, 4, 4, 4, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1]
+check s2q bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal
+routing bs256 seed 8950041: tokens per local expert [130, 56, 27, 22, 18, 14, 13, 12, 10, 9, 9, 8, 7, 7, 6, 5, 5, 4, 4, 4, 4, 3, 3, 3, 2, 1, 1]
+check s2q bs256: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal
+graph abl bs128 s2q (24 exp, GEMM1 454 MB / GEMM2 226 MB) gemm1 / gemm2 us: full 143.4 / 76.8; no math 117.3 / 66.5; weights only 116.7 / 62.9; math only 116.6 / 57.2; decode only 75.8 / 40.8; loop only 62.8 / 33.2
+graph abl bs256 s2q (23 exp, GEMM1 435 MB / GEMM2 216 MB) gemm1 / gemm2 us: full 202.1 / 103.4; no math 155.7 / 80.4; weights only 137.2 / 71.4; math only 167.6 / 83.8; decode only 112.2 / 56.7; loop only 94.2 / 48.7
+routing bs128 seed 8970040: tokens per local expert [26, 22, 18, 15, 13, 10, 10, 9, 6, 6, 5, 5, 5, 5, 5, 4, 3, 3, 3, 2, 2, 1, 1, 1]
+check s2q bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal
+routing bs256 seed 8970041: tokens per local expert [256, 21, 13, 12, 11, 10, 10, 9, 8, 7, 7, 6, 6, 5, 5, 4, 3, 3, 3, 2, 2, 1, 1]
+check s2q bs256: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal
+USDT:2026-10-24 18:44:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 18:44:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 18:44:27 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 18:44:27 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 18:44:27 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 18:44:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 18:44:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 18:44:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 18:44:29 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 18:44:30 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 18:44:31 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 18:44:31 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 18:44:32 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 18:44:33 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 18:44:34 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 18:44:35 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

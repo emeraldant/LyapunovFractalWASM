@@ -507,3 +507,6 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   ~112 items on 264 slots); **bs 32 135.8 vs 136.0 / 124.5 (s1r2wc -8.3%: GEMM1 86.1 -> 78.2)**;
   bs 128 s2qc 238.6 vs s1r2c 302.4 / s2r2c 267.6 (MT 2 rb 2 spills). Gate candidates s1r2c,
   s1r2wc; gate check after.
+- Gate check e8a1ed39 (rb 2 candidates): not adopted anywhere. bs 32 s1r2wc 163.6 vs 151.6 on
+  routing 1 (+8%), 127.2 vs 133.2 on routing 2 (-4.5%): the single sim seed (8950030) favoured it.
+  Score 1.879 (= chained build). Lesson: probes must time >= 2 routings per size, as the gate does.

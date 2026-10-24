@@ -762,6 +762,7 @@ __global__ void __launch_bounds__(288, RB == 2 ? 2 : (MT == 1 ? 4 : 3)) moe_gemm
   // With flags & 2 (GEMM2) the producer's wait guards the activations; the signal comes first
   // (the post-norm reads GEMM2's output only after its own wait).
   const int sk = flags & 1;
+  const int l2d = (flags >> 8) & 15;   // L2 prefetch distance in stages (0: off)
   // Split K (kparts > 1, small batches: too few items for the SMs): item = (chunk entry,
   // n block, k part); each part streams NCHUNK / kparts chunks and writes its scaled fp32
   // partial to part[k part][row][column] (GEMM1: gate at n, up at 4096 + n); the parts are
@@ -970,6 +971,12 @@ __global__ void __launch_bounds__(288, RB == 2 ? 2 : (MT == 1 ? 4 : 3)) moe_gemm
               bulk_g2s(sb + C::A_STAGE + h * C::W_STAGE, w_blk + ((size_t)h * NCHUNK + kc) * C::W_STAGE, C::W_STAGE, full);
               bulk_g2s(sb + C::A_STAGE + RB * C::W_STAGE + h * C::S_STAGE,
                        s_blk + ((size_t)h * NCHUNK + kc) * C::S_STAGE, C::S_STAGE, full);
+              // flags bits 8-11 (L2 distance D, in stages): chunk kc + D goes to L2 now, so the
+              // HBM stream runs ahead of the smem ring when the consumers hold its stages.
+              if (l2d && kc + l2d < ke) {
+                prefetch_l2(w_blk + ((size_t)h * NCHUNK + kc + l2d) * C::W_STAGE, C::W_STAGE);
+                prefetch_l2(s_blk + ((size_t)h * NCHUNK + kc + l2d) * C::S_STAGE, C::S_STAGE);
+              }
             }
           }
         }
@@ -2163,7 +2170,7 @@ def ws_layout(bank):
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
-                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1):
+                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -2230,7 +2237,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     kparts2 = kparts if kparts2 is None else kparts2
     split = sab and kparts > 1
     split2 = sab and kparts2 > 1
-    pf64 = 64 if mpf else 0   # v6 producer: next item's metadata fetched over the current item's last stages
+    pf64 = (64 if mpf else 0) | (l2d << 8)   # v6 producer: mpf next-item metadata; l2d L2 prefetch distance (stages)
     # rb 2 (stages 1000 + 100 * SUB + S): two 128-row blocks per v6 item, 32 rows per consumer warp
     assert rb == 1 or (sab and stages >= 1000 and kparts == 1 and (kparts2 or 1) == 1 and not sk and not l2pf
                        and not mpf and not dualv8 and not dualsab), "rb 2: plain v6 path only"

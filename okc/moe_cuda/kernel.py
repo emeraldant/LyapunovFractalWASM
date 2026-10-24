@@ -1228,42 +1228,64 @@ __global__ void __launch_bounds__(288, RB > 1 ? 2 : (MT == 1 ? 4 : 3)) moe_gemm_
       }
       asm volatile("bar.sync 1, 256;\n" ::: "memory");
       if (hdr[STAGES]) {   // this chunk's rows are complete: RMSNorm, weight, add into the tokens
+        // All 256 consumer threads per row: 4 float4 each (loads issued together), block-reduced
+        // sum of squares, float4 atomics into the token; the token's last route converts it.
         __threadfence();
+        float* red = reinterpret_cast<float*>(const_cast<int*>(hdr) + STAGES + 1);   // 8 warp partials + flag
         const int nrows = min(MT * 8, rows_e);
-        for (int rr = warp; rr < nrows; rr += 8) {
+        for (int rr = 0; rr < nrows; ++rr) {
           const int row = row0 + rr;
           const int route = row_route[row], tk = route / 8;
-          const float* yr = pa.y32 + (size_t)row * KTOT;
+          const float4* yr = reinterpret_cast<const float4*>(pa.y32 + (size_t)row * KTOT);
+          float4 v[4];
           float ss = 0.f;
-          for (int i = lane; i < KTOT; i += 32) {
-            const float v = __bfloat162float(__float2bfloat16_rn(__ldcg(yr + i))) * __bfloat162float(pa.norm_w[i]);
-            ss += v * v;
+#pragma unroll
+          for (int j = 0; j < 4; ++j) v[j] = __ldcg(yr + tid + 256 * j);
+#pragma unroll
+          for (int j = 0; j < 4; ++j) {
+            const int i = 4 * (tid + 256 * j);
+            const __nv_bfloat162 w01 = *reinterpret_cast<const __nv_bfloat162*>(pa.norm_w + i);
+            const __nv_bfloat162 w23 = *reinterpret_cast<const __nv_bfloat162*>(pa.norm_w + i + 2);
+            v[j].x = __bfloat162float(__float2bfloat16_rn(v[j].x)) * __bfloat162float(w01.x);
+            v[j].y = __bfloat162float(__float2bfloat16_rn(v[j].y)) * __bfloat162float(w01.y);
+            v[j].z = __bfloat162float(__float2bfloat16_rn(v[j].z)) * __bfloat162float(w23.x);
+            v[j].w = __bfloat162float(__float2bfloat16_rn(v[j].w)) * __bfloat162float(w23.y);
+            ss += v[j].x * v[j].x + v[j].y * v[j].y + v[j].z * v[j].z + v[j].w * v[j].w;
           }
 #pragma unroll
           for (int o = 16; o > 0; o >>= 1) ss += __shfl_xor_sync(0xffffffffu, ss, o);
-          const float sc = rsqrtf(ss / KTOT + pa.eps) * pa.topk_w[route];
-          float* orow = pa.out32 + (size_t)tk * KTOT;
-          for (int i = lane; i < KTOT; i += 32) {
-            const float v = __bfloat162float(__float2bfloat16_rn(__ldcg(yr + i))) * __bfloat162float(pa.norm_w[i]);
-            atomicAdd(orow + i, v * sc);
-          }
+          if (lane == 0) red[warp] = ss;
+          asm volatile("bar.sync 1, 256;\n" ::: "memory");
+          float tot = 0.f;
+#pragma unroll
+          for (int w8 = 0; w8 < 8; ++w8) tot += red[w8];
+          const float sc = rsqrtf(tot / KTOT + pa.eps) * pa.topk_w[route];
+          float4* orow = reinterpret_cast<float4*>(pa.out32 + (size_t)tk * KTOT);
+#pragma unroll
+          for (int j = 0; j < 4; ++j)
+            atomicAdd(orow + tid + 256 * j, make_float4(v[j].x * sc, v[j].y * sc, v[j].z * sc, v[j].w * sc));
           __threadfence();
-          int last = 0;
-          if (lane == 0) {
+          asm volatile("bar.sync 1, 256;\n" ::: "memory");
+          if (tid == 0) {
             int need = 0;
 #pragma unroll
             for (int j = 0; j < 8; ++j) need += pa.pos[tk * 8 + j] >= 0;
             const int old = atomicAdd(pa.tok_cnt + tk, 1);
-            last = old == need - 1;
-            if (last) pa.tok_cnt[tk] = 0;
+            reinterpret_cast<volatile int*>(red)[8] = old == need - 1;
+            if (old == need - 1) pa.tok_cnt[tk] = 0;
           }
-          last = __shfl_sync(0xffffffffu, last, 0);
-          if (last) {   // every local route of this token is in: the bf16 output row
+          asm volatile("bar.sync 1, 256;\n" ::: "memory");
+          if (reinterpret_cast<volatile int*>(red)[8]) {   // every local route of this token is in
             __threadfence();
-            for (int i = lane * 2; i < KTOT; i += 64)
-              *reinterpret_cast<__nv_bfloat162*>(pa.outb + (size_t)tk * KTOT + i) =
-                  __floats2bfloat162_rn(__ldcg(orow + i), __ldcg(orow + i + 1));
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+              const float4 o4 = __ldcg(orow + tid + 256 * j);
+              __nv_bfloat162* ob = reinterpret_cast<__nv_bfloat162*>(pa.outb + (size_t)tk * KTOT + 4 * (tid + 256 * j));
+              ob[0] = __floats2bfloat162_rn(o4.x, o4.y);
+              ob[1] = __floats2bfloat162_rn(o4.z, o4.w);
+            }
           }
+          asm volatile("bar.sync 1, 256;\n" ::: "memory");   // red[] is rewritten next row
         }
       }
       asm volatile("bar.sync 1, 256;\n" ::: "memory");   // hdr[STAGES] is rewritten next item
@@ -2164,7 +2186,7 @@ void launch_sab(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, 
                 torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
                 int n_blocks, int grid, long long* prof, int* sched, int kparts, float* part, int part_rows, int sk,
                 const uint8_t* pf_w, const uint8_t* pf_s, int* counters, PostArgs pa) {
-  size_t smem = (size_t)STAGES * (SabCfg<MT, SUB, RB>::STAGE + 32);
+  size_t smem = (size_t)STAGES * (SabCfg<MT, SUB, RB>::STAGE + 32) + 64;   // + atomic-post reduction scratch
   auto k = moe_gemm_sab_kernel<MODE, MT, STAGES, PROF, ABL, SUB, RB>;
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   int per_sm = 0, sms = 0, dev = 0;

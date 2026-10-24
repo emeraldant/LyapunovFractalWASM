@@ -1,0 +1,62 @@
+routing bs1 seed 8950000: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 6.0e-04, row worst 6.0e-04, repeat equal; 40.8 us (v6 s2 54.1, x1.336) | stages 0.6 18.4 12.7 4.5
+/opt/sglang/lib/python3.12/site-packages/torch/cuda/graphs.py:630: UserWarning: The CUDA Graph is empty. This usually means that the graph was attempted to be captured on wrong device or stream. (Triggered internally at /__w/pytorch/pytorch/aten/src/ATen/cuda/CUDAGraph.cpp:249.)
+  super().capture_end_pre()
+check s1dw2fpcA bs1: rel diff vs v6 6.0e-04, row worst 6.0e-04, repeat equal; 100.2 us (v6 s2 54.4, x0.545) | stages 0.9 18.1 88.3 0.1
+check s1dw2fpcA4 bs1: rel diff vs v6 6.0e-04, row worst 6.0e-04, repeat equal; 96.2 us (v6 s2 53.8, x0.560) | stages 0.9 18.0 82.1 0.1
+routing bs8 seed 8950010: tokens per local expert [3, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+check s1dwc bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 92.5 us (v6 s2 111.4, x1.199) | stages 1.0 57.9 36.7 3.6
+check s1dwcA bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 169.7 us (v6 s2 112.5, x0.671) | stages 1.2 58.4 159.8 0.1
+check s1dwcA2 bs8: rel diff vs v6 5.1e-05, row worst 9.3e-05, repeat equal; 229.5 us (v6 s2 112.4, x0.497) | stages 1.1 58.4 177.9 0.1
+routing bs16 seed 8950020: tokens per local expert [16, 3, 2, 1, 1, 1]
+check s1dwc bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 75.4 us (v6 s2 105.2, x1.386) | stages 0.9 48.0 25.8 3.4
+check s1dwcA bs16: rel diff vs v6 6.5e-07, row worst 2.9e-06, repeat equal; 150.7 us (v6 s2 105.1, x0.695) | stages 1.2 48.5 99.2 0.1
+check s1dwcA2 bs16: rel diff vs v6 9.6e-05, row worst 1.9e-04, repeat equal; 208.4 us (v6 s2 105.1, x0.497) | stages 1.3 48.4 162.2 0.1
+routing bs1 seed 8970000: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 6.9e-07, row worst 6.9e-07, repeat equal; 39.6 us (v6 s2 53.6, x1.342) | stages 1.1 17.6 12.9 4.7
+check s1dw2fpcA bs1: rel diff vs v6 6.9e-07, row worst 6.9e-07, repeat equal; 96.8 us (v6 s2 54.2, x0.560) | stages 1.1 18.7 88.3 0.1
+check s1dw2fpcA4 bs1: rel diff vs v6 6.9e-07, row worst 6.9e-07, repeat equal; 95.0 us (v6 s2 53.6, x0.570) | stages 1.2 18.4 82.1 0.1
+routing bs8 seed 8970010: tokens per local expert [3, 3, 3, 2, 2]
+check s1dwc bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 67.7 us (v6 s2 73.4, x1.113) | stages 1.0 38.6 23.1 4.0
+check s1dwcA bs8: rel diff vs v6 2.7e-10, row worst 5.4e-10, repeat equal; 140.7 us (v6 s2 74.6, x0.533) | stages 1.4 38.2 95.5 0.1
+check s1dwcA2 bs8: rel diff vs v6 1.2e-04, row worst 2.2e-04, repeat equal; 142.4 us (v6 s2 74.3, x0.541) | stages 1.2 38.7 166.3 0.1
+routing bs16 seed 8970020: tokens per local expert [9, 3, 2, 2, 2, 2, 2, 1, 1, 1, 1]
+check s1dwc bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 102.4 us (v6 s2 117.9, x1.153) | stages 0.6 63.0 42.0 3.7
+check s1dwcA bs16: rel diff vs v6 5.8e-09, row worst 2.1e-08, repeat equal; 175.9 us (v6 s2 118.9, x0.680) | stages 0.9 64.0 168.2 0.1
+check s1dwcA2 bs16: rel diff vs v6 1.3e-04, row worst 2.1e-04, repeat equal; 242.6 us (v6 s2 119.0, x0.497) | stages 0.6 64.3 177.3 0.1
+routing bs1 seed 8990000: tokens per local expert [1, 1, 1]
+check s1dw2fpc bs1: rel diff vs v6 4.5e-04, row worst 4.5e-04, repeat equal; 50.5 us (v6 s2 67.3, x1.338) | stages 0.8 27.3 14.9 5.1
+check s1dw2fpcA bs1: rel diff vs v6 4.5e-04, row worst 4.5e-04, repeat equal; 114.7 us (v6 s2 67.2, x0.585) | stages 1.3 27.2 82.7 0.1
+check s1dw2fpcA4 bs1: rel diff vs v6 4.4e-04, row worst 4.4e-04, repeat equal; 159.9 us (v6 s2 67.2, x0.421) | stages 1.0 27.1 130.3 0.1
+routing bs8 seed 8990010: tokens per local expert [2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+check s1dwc bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 103.8 us (v6 s2 116.4, x1.120) | stages 0.6 66.5 39.2 3.5
+check s1dwcA bs8: rel diff vs v6 5.3e-07, row worst 1.4e-06, repeat equal; 179.6 us (v6 s2 117.9, x0.658) | stages 1.2 67.5 181.0 0.1
+check s1dwcA2 bs8: rel diff vs v6 6.8e-05, row worst 1.1e-04, repeat equal; 227.8 us (v6 s2 117.4, x0.510) | stages 1.3 66.2 163.2 0.1
+routing bs16 seed 8990020: tokens per local expert [4, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+check s1dwc bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 122.0 us (v6 s2 138.6, x1.132) | stages 0.6 75.1 46.2 3.3
+check s1dwcA bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 268.1 us (v6 s2 140.1, x0.521) | stages 0.9 76.3 183.8 0.1
+check s1dwcA2 bs16: rel diff vs v6 1.5e-04, row worst 3.9e-04, repeat equal; 258.6 us (v6 s2 139.1, x0.552) | stages 0.9 76.6 185.1 0.1
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 23:47:06 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop

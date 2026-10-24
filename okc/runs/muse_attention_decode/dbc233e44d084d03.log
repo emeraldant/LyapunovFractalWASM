@@ -1,0 +1,42 @@
+routing bs1 seed 8950000: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 6.0e-04, row worst 6.0e-04, repeat equal; 38.8 us (v6 s2 53.4, x1.382) | stages 0.6 17.7 12.7 4.7
+check s1k4fc bs1: rel diff vs v6 6.5e-04, row worst 6.5e-04, repeat equal; 40.4 us (v6 s2 53.7, x1.319) | stages 0.9 18.3 11.5 5.7
+check s1k8fc bs1: rel diff vs v6 6.3e-04, row worst 6.3e-04, repeat equal; 43.5 us (v6 s2 53.2, x1.236) | stages 0.6 23.1 11.3 8.2
+check s1k8fc2 bs1: rel diff vs v6 6.5e-04, row worst 6.5e-04, repeat equal; 44.0 us (v6 s2 54.0, x1.231) | stages 0.7 23.3 11.4 5.6
+check s1dw4fc bs1: rel diff vs v6 6.5e-04, row worst 6.5e-04, repeat equal; 41.4 us (v6 s2 53.7, x1.310) | stages 0.7 22.8 11.6 5.8
+routing bs1 seed 8970000: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 6.9e-07, row worst 6.9e-07, repeat equal; 38.3 us (v6 s2 53.3, x1.393) | stages 0.9 19.0 13.3 4.7
+check s1k4fc bs1: rel diff vs v6 6.9e-07, row worst 6.9e-07, repeat equal; 40.5 us (v6 s2 53.7, x1.318) | stages 1.1 18.8 11.9 6.0
+check s1k8fc bs1: rel diff vs v6 3.7e-04, row worst 3.7e-04, repeat equal; 43.2 us (v6 s2 53.8, x1.228) | stages 1.0 23.6 11.9 8.8
+check s1k8fc2 bs1: rel diff vs v6 3.7e-04, row worst 3.7e-04, repeat equal; 43.8 us (v6 s2 53.2, x1.221) | stages 1.0 23.6 11.7 6.0
+check s1dw4fc bs1: rel diff vs v6 6.9e-07, row worst 6.9e-07, repeat equal; 41.5 us (v6 s2 53.8, x1.296) | stages 1.0 23.0 11.8 5.9
+routing bs1 seed 8990000: tokens per local expert [1, 1, 1]
+check s1dw2fpc bs1: rel diff vs v6 4.5e-04, row worst 4.5e-04, repeat equal; 49.1 us (v6 s2 67.7, x1.376) | stages 1.1 27.1 14.5 5.2
+check s1k4fc bs1: rel diff vs v6 4.4e-04, row worst 4.4e-04, repeat equal; 49.2 us (v6 s2 67.8, x1.376) | stages 0.9 28.8 15.1 6.9
+check s1k8fc bs1: rel diff vs v6 4.4e-04, row worst 4.4e-04, repeat equal; 58.4 us (v6 s2 68.1, x1.157) | stages 1.2 32.3 17.1 9.8
+check s1k8fc2 bs1: rel diff vs v6 4.4e-04, row worst 4.4e-04, repeat equal; 53.7 us (v6 s2 67.2, x1.243) | stages 1.0 32.6 15.7 6.4
+check s1dw4fc bs1: rel diff vs v6 4.4e-04, row worst 4.4e-04, repeat equal; 54.9 us (v6 s2 67.5, x1.230) | stages 0.8 31.2 17.3 6.7
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:55:38 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop

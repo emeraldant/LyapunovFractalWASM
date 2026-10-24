@@ -301,6 +301,13 @@ CUDA_CONFIGS = {
                                                                  # on s2q as its PDL co-runner (bs 256)
     "s1dw2fp": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True),   # bs 1: K split 2,
                                                                  # parts reduced in GEMM1, GEMM2 a PDL dependent
+    # chain: route -> GEMM1 -> (split-K reduction) -> GEMM2 -> post-norm as programmatic dependent
+    # launches, each signalling at its start (launches, setup, GEMM2's first weight stages overlap)
+    "s1k4c": dict(mt=1, stages=4, ctas_per_sm=4, sab=True, kparts=4, chain=True),
+    "s1dw2fpc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True),
+    "s1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True),
+    "s2wc": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, chain=True),
+    "s2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True),
     "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens
     "t4": dict(mt=4, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA, 32 tokens (2 CTAs/SM)
     "v8": dict(mt=8, stages=504, ctas_per_sm=2, wg=True),        # v7, 64-row chunks, wgmma width per chunk

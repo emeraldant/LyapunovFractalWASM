@@ -1014,6 +1014,14 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
   // flags & 32: signal dependents at the start (the dualsab big launch: its co-runner reads none
   // of its output, and with fewer items than CTAs the queue-empty signal would come only after
   // the hot experts' weights had streamed, serializing the two launches).
+  // flags & 128 (chain): every launch of the pipeline is a programmatic dependent of the one
+  // before (route -> GEMM1 -> [split-K reduction] -> GEMM2 -> post-norm) and signals its own
+  // dependents at its start, so launch, CTA setup and (GEMM2) the first stages' weight copies
+  // overlap the previous kernel. Without flags & 2 (GEMM1 after the route) every thread waits
+  // for the previous grid before the first read of anything (the route's output), then signals:
+  // the next kernels' pre-wait code reads only the route's output and weights, complete by then.
+  // With flags & 2 (GEMM2) the producer's wait guards the activations; the signal comes first
+  // (the post-norm reads GEMM2's output only after its own wait).
   const int sk = flags & 1;
   // Split K (kparts > 1, small batches: too few items for the SMs): item = (chunk entry,
   // n block, k part); each part streams NCHUNK / kparts chunks and writes its scaled fp32
@@ -1039,6 +1047,10 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
     asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
   }
   __syncthreads();
+  if (flags & 128) {
+    if (!(flags & 2)) asm volatile("griddepcontrol.wait;\n" ::: "memory");
+    if (tid == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
+  }
   const int total = *n_active_ptr * n_blocks * kparts;
   const int nch = NCHUNK / kparts;   // chunks per item
   // Stream K (sk, kparts = partial slots >= 2): the items' K ranges, in units of STAGES chunks,
@@ -1061,8 +1073,31 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
 
   if (warp == 8) {
     if ((flags & 32) && lane == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
+    int pre = 0;   // chain: stages of the first item whose weights + scales were issued before the wait
     if (flags & 2) {
-      if (lane == 0 && !sk && (int)blockIdx.x < total) {
+      if ((flags & 128) && abl == 0 && !sk && (int)blockIdx.x < total) {
+        // The first item's metadata is the route's output (complete before this grid launched);
+        // only its activation rows (the previous GEMM's output) wait for griddepcontrol.wait.
+        const int it0 = (int)blockIdx.x / kparts, kb0 = ((int)blockIdx.x % kparts) * nch;
+        const int ch0 = active[it0 / n_blocks];
+        const int e0 = ch0 & 255, nb0 = it0 % n_blocks;
+        const int r00 = exp_start[e0] + (ch0 >> 8) * MT * 8;
+        const int live0 = min(MT * 8, exp_start[e0 + 1] - r00);
+        const uint32_t tx0 = live0 * 256 * SUB + C::W_STAGE + C::S_STAGE;
+        const uint8_t* w0 = wq + (((size_t)e0 * n_blocks + nb0) * NCHUNK + kb0) * C::W_STAGE;
+        const uint8_t* s0p = ws + (((size_t)e0 * n_blocks + nb0) * NCHUNK + kb0) * C::S_STAGE;
+        pre = min(STAGES, nch);
+        if (lane == 0) {
+          for (int st = 0; st < pre; ++st) {
+            const uint32_t sb = base + st * C::STAGE, full = bar_full + 8 * st;
+            hdr[st] = (int)blockIdx.x;
+            mbar_expect_tx(full, tx0);
+            bulk_g2s(sb + C::A_STAGE, w0 + (size_t)st * C::W_STAGE, C::W_STAGE, full);
+            bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s0p + (size_t)st * C::S_STAGE, C::S_STAGE, full);
+          }
+        }
+        __syncwarp();
+      } else if (lane == 0 && !sk && (int)blockIdx.x < total) {
         const int it0 = (int)blockIdx.x / kparts, kb0 = ((int)blockIdx.x % kparts) * nch;
         const int e0 = active[it0 / n_blocks] & 255, nb0 = it0 % n_blocks;
         const uint8_t* w0 = wq + (((size_t)e0 * n_blocks + nb0) * NCHUNK + kb0) * C::W_STAGE;
@@ -1182,7 +1217,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
         if (f >= STAGES) mbar_wait(bar_empty + 8 * st, ((f / STAGES) - 1) & 1);
         if (PROF) pw += clock64() - c0;
         const uint32_t sb = base + st * C::STAGE, full = bar_full + 8 * st;
-        if (lane == 0) {
+        if (lane == 0 && f >= (uint32_t)pre) {   // (chain: the first item's first stages went out pre-wait)
           hdr[st] = item;
           mbar_expect_tx(full, tx);
           if (!(abl & 4)) {
@@ -1948,7 +1983,7 @@ void launch_sab(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, 
   attr[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
   attr[0].val.programmaticStreamSerializationAllowed = 1;
   cfg.attrs = attr;
-  cfg.numAttrs = (sk & 18) ? 1 : 0;   // flags 2 / 16: launched as a programmatic dependent of the previous kernel
+  cfg.numAttrs = (sk & (2 | 16 | 128)) ? 1 : 0;   // flags 2 / 16 / 128: a programmatic dependent of the previous kernel
   cudaLaunchKernelEx(&cfg, k,
       reinterpret_cast<const __nv_bfloat16*>(a_src.data_ptr()), (const int32_t*)row_route.data_ptr<int32_t>(),
       (const uint8_t*)wq.data_ptr<uint8_t>(), (const uint8_t*)ws.data_ptr<uint8_t>(), (const float*)gs.data_ptr<float>(),
@@ -2184,7 +2219,7 @@ def scales_supported(sf):
 @triton.jit
 def _route_compact_kernel(ids_ptr, local_start_ptr, row_route_ptr, pos_of_route_ptr, exp_start_ptr,
                           active_ptr, n_active_ptr, P, ROWS, NE: tl.constexpr, E: tl.constexpr, CHUNK: tl.constexpr,
-                          SPLIT: tl.constexpr = 0, ROWS2: tl.constexpr = 64):
+                          SPLIT: tl.constexpr = 0, ROWS2: tl.constexpr = 64, PDL: tl.constexpr = False):
     """One program per local expert e: places e's routes (in route order) at rows
     exp_start[e] .. exp_start[e+1]; row_route[row] = route p (= token * 8 + slot) and
     pos_of_route[p] = row (-1 for non-local routes, written by program 0). Program 0 also
@@ -2193,7 +2228,11 @@ def _route_compact_kernel(ids_ptr, local_start_ptr, row_route_ptr, pos_of_route_
     rows, at active_ptr + E + P (count at n_active_ptr + 1).
     CHUNK >= P (a power of two): all route ids in one load, counts by histogram, ranks by one
     cumsum (a loop over 256-id chunks cost ~0.6 us of dependent load latency per pass: 10 us
-    at bs 256)."""
+    at bs 256).
+    PDL (chain): GEMM1, a programmatic dependent that reads nothing before its own wait, may
+    launch at once."""
+    if PDL:
+        tl.extra.cuda.gdc_launch_dependents()
     e = tl.program_id(0)
     experts = tl.arange(0, 2 * E)   # histogram bins: E local experts + "not local" (bin E)
     p = tl.arange(0, CHUNK)
@@ -2241,8 +2280,14 @@ def _gather_rows_kernel(x_ptr, row_route_ptr, exp_start_ptr, out_ptr, E: tl.cons
 
 
 @triton.jit
-def _splitk_silu_kernel(part_ptr, exp_start_ptr, inter_ptr, P, E: tl.constexpr, KP: tl.constexpr, H: tl.constexpr):
-    """GEMM1 split K: inter[row] = silu(sum_k gate parts) * sum_k up parts, parts summed in order."""
+def _splitk_silu_kernel(part_ptr, exp_start_ptr, inter_ptr, P, E: tl.constexpr, KP: tl.constexpr, H: tl.constexpr,
+                        PDL: tl.constexpr = False):
+    """GEMM1 split K: inter[row] = silu(sum_k gate parts) * sum_k up parts, parts summed in order.
+    PDL (chain): signal GEMM2 (whose pre-wait code reads only the route's output and weights),
+    then wait for GEMM1's parts."""
+    if PDL:
+        tl.extra.cuda.gdc_launch_dependents()
+        tl.extra.cuda.gdc_wait()
     row = tl.program_id(0)
     if row < tl.load(exp_start_ptr + E):
         cols = tl.arange(0, H)
@@ -2257,7 +2302,7 @@ def _splitk_silu_kernel(part_ptr, exp_start_ptr, inter_ptr, P, E: tl.constexpr, 
 
 @triton.jit
 def _post_norm_parts_kernel(part_ptr, w_ptr, s_ptr, pos_ptr, out_ptr, eps, P, KP: tl.constexpr, TOPK: tl.constexpr,
-                            H: tl.constexpr):
+                            H: tl.constexpr, PDL: tl.constexpr = False):
     """_post_norm_rows_kernel reading GEMM2's split-K fp32 parts (summed in order) for y."""
     t = tl.program_id(0)
     offs = tl.arange(0, H)
@@ -2265,6 +2310,8 @@ def _post_norm_parts_kernel(part_ptr, w_ptr, s_ptr, pos_ptr, out_ptr, eps, P, KP
     rows = tl.load(pos_ptr + t * TOPK + ks)
     scales = tl.load(s_ptr + t * TOPK + ks)
     w = tl.load(w_ptr + offs).to(tl.float32)
+    if PDL:   # chain: the route's output and the weights above are complete; the parts wait for GEMM2
+        tl.extra.cuda.gdc_wait()
     acc = tl.zeros((H,), tl.float32)
     for k in tl.static_range(TOPK):   # branch-free: every slot's loads can be issued up front
         row = tl.sum(tl.where(ks == k, rows, 0), axis=0)
@@ -2280,7 +2327,8 @@ def _post_norm_parts_kernel(part_ptr, w_ptr, s_ptr, pos_ptr, out_ptr, eps, P, KP
 
 
 @triton.jit
-def _post_norm_rows_kernel(y_ptr, w_ptr, s_ptr, pos_ptr, out_ptr, eps, TOPK: tl.constexpr, H: tl.constexpr):
+def _post_norm_rows_kernel(y_ptr, w_ptr, s_ptr, pos_ptr, out_ptr, eps, TOPK: tl.constexpr, H: tl.constexpr,
+                           PDL: tl.constexpr = False):
     """out[t] = sum over slots k with a local row of s[t, k] * RMSNorm(y[row] * w). Branch-free
     (slot positions loaded as one vector, row loads masked) so the row loads overlap: a branch
     per slot serialized ~2 dependent loads per local route (~4 us at bs 1)."""
@@ -2290,6 +2338,8 @@ def _post_norm_rows_kernel(y_ptr, w_ptr, s_ptr, pos_ptr, out_ptr, eps, TOPK: tl.
     rows = tl.load(pos_ptr + t * TOPK + ks)
     scales = tl.load(s_ptr + t * TOPK + ks)
     w = tl.load(w_ptr + offs).to(tl.float32)
+    if PDL:   # chain: the route's output and the weights above are complete; y waits for GEMM2
+        tl.extra.cuda.gdc_wait()
     acc = tl.zeros((H,), tl.float32)
     for k in tl.static_range(TOPK):
         row = tl.sum(tl.where(ks == k, rows, 0), axis=0)
@@ -2342,7 +2392,7 @@ def ws_layout(bank):
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
-                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False):
+                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -2354,7 +2404,12 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     co-runner (judge profile: a 16-token expert on 8-token tiles cost ~10 us of GEMM1 at bs 16).
     dualv8 (v6 only): experts with more than `dualv8` routes run on v8 (64-row chunks, wgmma
     width per chunk) first; the v6 launch over the rest is its PDL co-runner, taking SM slots
-    as v8's CTAs retire (small experts keep mma.sync's N 8 / 16 instead of wgmma's N 16)."""
+    as v8's CTAs retire (small experts keep mma.sync's N 8 / 16 instead of wgmma's N 16).
+    chain (v6 only): every launch after the route is a programmatic dependent (PDL) of the one
+    before and each signals its dependents at its start (flag 128): launches, CTA setup and
+    GEMM2's first weight stages overlap the previous kernel; each waits only before reading the
+    previous kernel's output."""
+    assert not chain or (sab and not (wg or dualv8 or dualsab or sk)), "chain: v6 single-launch configs"
     mod = moe_cuda_module(prof is not None, variant)
     x = x.contiguous()
     m, hidden = x.shape
@@ -2382,7 +2437,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
         _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, rows_per_chunk,
                                         NE=256, E=count, CHUNK=max(256, triton.next_power_of_2(p)),
                                         SPLIT=dual if wg else (dualv8 or dualsab), ROWS2=8 * mt2 if dualsab else 64,
-                                        num_warps=4)
+                                        PDL=chain, num_warps=4)
         if tma:
             _gather_rows_kernel[(triton.cdiv(p, 4),)](x, row_route, exp_start, xs, E=count, ROWS=4, H=4096, num_warps=4)
 
@@ -2405,6 +2460,8 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     split = sab and kparts > 1
     split2 = sab and kparts2 > 1
     pf64 = 64 if mpf else 0   # v6 producer: next item's metadata fetched over the current item's last stages
+    ch1, ch2 = (128, 2 | 128) if chain else (0, 0)   # chain: GEMM1 waits at its start; GEMM2 as flag 2
+    pdl_kw = dict(launch_pdl=True) if chain else {}
     fuse1 = fuse and split and not sk   # GEMM1's split parts reduced by their last CTA (no reduction kernel)
     part1 = torch.empty((kparts, p, 8192), dtype=torch.float32, device=device) if split else no_part
     part2 = torch.empty((kparts2, p, 4096), dtype=torch.float32, device=device) if split2 else no_part
@@ -2427,11 +2484,13 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
                                  no_part, 32 | pf64, no_u8, no_u8, no_i32)
             mod.moe_gemm_sab(1, mt, stages, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
                              n_active[0:1], exp_start, inter, 64, grid, prof[0], sched[0:2], abl, kparts, part1,
-                             int(sk) | (4 if l2pf else 0) | (8 if fuse1 else 0) | (16 if (dualv8 or dualsab) else 0) | pf64,
+                             int(sk) | (4 if l2pf else 0) | (8 if fuse1 else 0) | (16 if (dualv8 or dualsab) else 0) | pf64
+                             | ch1,
                              bank["w2q_sab"] if l2pf else no_u8,
                              bank["w2s_sab"] if l2pf else no_u8, bank["cnt"] if fuse1 else no_i32)
             if split and not fuse1:
-                _splitk_silu_kernel[(p,)](part1, exp_start, inter, p, E=count, KP=kparts, H=4096, num_warps=8)
+                _splitk_silu_kernel[(p,)](part1, exp_start, inter, p, E=count, KP=kparts, H=4096, PDL=chain,
+                                          num_warps=8, **pdl_kw)
             return
         # 64 work items per active expert per GEMM: 8 warps x (MODE 1: a gate/up pair, MODE 2: an n8 group).
         g1(1, mt, stages, x, row_route, bank["w13q" + sfx], bank["w13s" + sfx], bank["w13_gs"], active, n_active,
@@ -2455,7 +2514,8 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
                                  32 | pf64, no_u8, no_u8, no_i32)
             mod.moe_gemm_sab(2, mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
                              n_active[0:1], exp_start, y, 32, grid, prof[1], sched[2:4], abl, kparts2, part2,
-                             int(sk) | (2 if pdl else 0) | (16 if (dualv8 or dualsab) else 0) | pf64, no_u8, no_u8, no_i32)
+                             int(sk) | (2 if pdl else 0) | (16 if (dualv8 or dualsab) else 0) | pf64 | ch2, no_u8, no_u8,
+                             no_i32)
             return
         g2(2, mt, stages, inter, row_route, bank["w2q" + sfx], bank["w2s" + sfx], bank["w2_gs"], active, n_active,
              exp_start, y, 512 // 8, grid)
@@ -2463,10 +2523,10 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     def post():
         if split2:
             _post_norm_parts_kernel[(m,)](part2, norm_w, topk_weights, pos_of_route, out, eps, p, KP=kparts2, TOPK=topk,
-                                          H=hidden, num_warps=8)
+                                          H=hidden, PDL=chain, num_warps=8, **pdl_kw)
             return
-        _post_norm_rows_kernel[(m,)](y, norm_w, topk_weights, pos_of_route, out, eps, TOPK=topk, H=hidden,
-                                     num_warps=8)
+        _post_norm_rows_kernel[(m,)](y, norm_w, topk_weights, pos_of_route, out, eps, TOPK=topk, H=hidden, PDL=chain,
+                                     num_warps=8, **pdl_kw)
 
     return (route, gemm1, gemm2, post), out
 
@@ -2493,6 +2553,13 @@ CUDA_CONFIGS = {
                                                                  # on s2q as its PDL co-runner (bs 256)
     "s1dw2fp": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True),   # bs 1: K split 2,
                                                                  # parts reduced in GEMM1, GEMM2 a PDL dependent
+    # chain: route -> GEMM1 -> (split-K reduction) -> GEMM2 -> post-norm as programmatic dependent
+    # launches, each signalling at its start (launches, setup, GEMM2's first weight stages overlap)
+    "s1k4c": dict(mt=1, stages=4, ctas_per_sm=4, sab=True, kparts=4, chain=True),
+    "s1dw2fpc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True),
+    "s1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True),
+    "s2wc": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, chain=True),
+    "s2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True),
     "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens
     "t4": dict(mt=4, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA, 32 tokens (2 CTAs/SM)
     "v8": dict(mt=8, stages=504, ctas_per_sm=2, wg=True),        # v7, 64-row chunks, wgmma width per chunk

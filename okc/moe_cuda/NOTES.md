@@ -574,3 +574,9 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   (entropy 3.71 bits), per-row range mean 18 / max 29 codes; global scales all 3.85e-5. A lossless
   scale repack (base byte per 8 scales + 4-bit deltas, exact fallback) saves ~37% of scale bytes =
   ~4% of HBM bytes. Real but small.
+- Atomic post (apost: GEMM2 partials by red.add into fp32 y, the chunk's last item RMS-norms its rows
+  into the tokens, GEMM1 zeroes the accumulators; three routings): correct (rel diff <= 1.5e-4, mostly
+  repeatable). First epilogue (one warp per row, serial cold loads) made GEMM2 88 us; CTA-wide float4
+  version: bs 1 39.8 / 39.0 / 49.8 vs 39.8 / 39.9 / 49.2 (equal), bs 8 +6-16%, bs 16 +12-36%. The
+  norm on GEMM2's critical path costs more than the separate post kernel (parallel over tokens,
+  launch overlapped by the chain). Refuted.

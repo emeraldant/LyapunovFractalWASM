@@ -524,3 +524,14 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   (W13 + the concurrent W2 prefetch: ~2.2 TB/s), expert wait ~1 us, GEMM2 phase 5.4 us (vs 12.5 as
   its own kernel). GEMM2's saving is eaten by GEMM1 sharing HBM with W2: both designs move the
   56.6 MB at ~2.2 TB/s; at these sizes the ramp dominates. Realistic bs 1 floor ~25-30 us. Closed.
+- Large-batch graph ablations (s2q, run after the tiny closing): bs 128 GEMM1 (510 MB) full 150.4 /
+  no math 129.8 / weights only 126.4 / math only 123.1 / decode only 80.7 / loop only 65.3 (floor
+  ~120); bs 256 GEMM1 209.2 / 162.0 / 148.3 / 177.8 / 117.3 / 96.9; GEMM2 bs 256 109.2 / 81.2 /
+  74.6 / 91.3 / 59.5 / 51.9. Memory path near the floor; math is the limit at bs 256 and the bare
+  loop (loads, ldmatrix, barriers) grows with tokens: per-warp activation re-reads ~4 B of smem per
+  weight byte -> ~166 B/clk/SM needed at bs 256 vs 128 available.
+- H4 refuted in full runs: rb 2 with activation fragments loaded once per chunk and shared by both
+  row blocks (MT 2: 95 registers, no spills; one accumulator chain per block, rel diff 5e-4,
+  repeatable): bs 128 245.2 / 239.2 vs s2qc 241.9 / 225.7; bs 256 280.5 / 301.5 vs s2qv16 270.6 /
+  268.4; bs 32 mixed. Cutting activation reads moves the limit to act-row copies (+14 us at bs
+  256: 16 x 1 KB copies per stage) and math / memory overlap (+47 us over memory-only).

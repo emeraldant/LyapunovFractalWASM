@@ -1701,7 +1701,7 @@ __device__ __forceinline__ int ld_acquire(const int* p) {
 // flags & 128: a programmatic dependent of the route (waits for it before reading its output,
 // signals its own dependent, the post-norm, at the start).
 template <int TINY_RING, bool RES>
-__global__ void __launch_bounds__(288, 1) moe_tiny_kernel(
+__global__ void __launch_bounds__(288, RES ? 1 : 2) moe_tiny_kernel(
     const __nv_bfloat16* __restrict__ x, const int32_t* __restrict__ row_route, const int32_t* __restrict__ exp_start,
     const uint8_t* __restrict__ w13q, const uint8_t* __restrict__ w13s, const float* __restrict__ gs13,
     const uint8_t* __restrict__ w2q, const uint8_t* __restrict__ w2s, const float* __restrict__ gs2,
@@ -2161,14 +2161,17 @@ void moe_gemm(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, tor
 void moe_tiny(torch::Tensor x, torch::Tensor row_route, torch::Tensor exp_start, torch::Tensor w13q, torch::Tensor w13s,
               torch::Tensor gs13, torch::Tensor w2q, torch::Tensor w2s, torch::Tensor gs2, torch::Tensor inter,
               torch::Tensor part1, torch::Tensor part2, torch::Tensor cnt, int64_t flags) {
-  auto k = (flags & 0x1000) ? moe_tiny_kernel<16, false> : (flags & 0x2000) ? moe_tiny_kernel<8, false> : moe_tiny_kernel<4, true>;
-  const int smem = (flags & 0x1000) ? TinyCfg<16, false>::SMEM : (flags & 0x2000) ? TinyCfg<8, false>::SMEM : TinyCfg<4, true>::SMEM;
+  // 0x4000: 2 CTAs per SM (6-stage ring, GEMM2 weights from L2): twice the consumer warps per SM.
+  auto k = (flags & 0x4000) ? moe_tiny_kernel<6, false> : (flags & 0x1000) ? moe_tiny_kernel<16, false>
+         : (flags & 0x2000) ? moe_tiny_kernel<8, false> : moe_tiny_kernel<4, true>;
+  const int smem = (flags & 0x4000) ? TinyCfg<6, false>::SMEM : (flags & 0x1000) ? TinyCfg<16, false>::SMEM
+                 : (flags & 0x2000) ? TinyCfg<8, false>::SMEM : TinyCfg<4, true>::SMEM;
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
   int dev = 0, sms = 0;
   cudaGetDevice(&dev);
   cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
   cudaLaunchConfig_t cfg = {};
-  cfg.gridDim = dim3(sms);   // one CTA per SM, all resident (the dependency waits need it)
+  cfg.gridDim = dim3((flags & 0x4000) ? 2 * sms : sms);   // all CTAs resident (the dependency waits need it)
   cfg.blockDim = dim3(288);
   cfg.dynamicSmemBytes = smem;
   cfg.stream = at::cuda::getCurrentCUDAStream();
@@ -2654,7 +2657,7 @@ def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=
     def tiny():
         mod.moe_tiny(x, row_route, exp_start, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], bank["w2q_sab"],
                      bank["w2s_sab"], bank["w2_gs"], inter, part1, part2, cnt,
-                     (128 if chain else 0) | {4: 0, 16: 0x1000, 8: 0x2000}[tiny_ring])
+                     (128 if chain else 0) | {4: 0, 16: 0x1000, 8: 0x2000, 6: 0x4000}[tiny_ring])
 
     def post():
         _post_norm_parts_kernel[(m,)](part2, norm_w, topk_weights, pos_of_route, out, eps, p, KP=2, TOPK=topk, H=4096,

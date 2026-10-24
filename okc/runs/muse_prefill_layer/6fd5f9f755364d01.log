@@ -1,0 +1,26 @@
+graph abl bs1 s1dw2fp (2 exp, GEMM1 38 MB / GEMM2 19 MB) gemm1 / gemm2 us: full 18.4 / 13.3; no math 17.1 / 8.4; weights only 16.0 / 8.9; math only 11.9 / 11.5; loop only 7.4 / 7.2
+graph abl bs1 s1dw (2 exp, GEMM1 38 MB / GEMM2 19 MB) gemm1 / gemm2 us: full 22.7 / 13.8; no math 15.7 / 10.4; weights only 15.0 / 9.7; math only 18.4 / 10.5; loop only 9.4 / 6.0
+routing bs1 seed 8950000: tokens per local expert [1, 1]
+check s1dw2fp bs1: rel diff vs v6 6.0e-04, row worst 6.0e-04, repeat equal
+check s1dw bs1: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal
+graph abl bs1 s1dw2fp (2 exp, GEMM1 38 MB / GEMM2 19 MB) gemm1 / gemm2 us: full 18.6 / 13.3; no math 16.4 / 8.9; weights only 15.8 / 8.7; math only 12.1 / 11.6; loop only 7.6 / 7.4
+graph abl bs1 s1dw (2 exp, GEMM1 38 MB / GEMM2 19 MB) gemm1 / gemm2 us: full 22.3 / 13.9; no math 15.6 / 9.8; weights only 14.8 / 9.7; math only 18.4 / 10.7; loop only 9.4 / 5.7
+routing bs1 seed 8970000: tokens per local expert [1, 1]
+check s1dw2fp bs1: rel diff vs v6 6.9e-07, row worst 6.9e-07, repeat equal
+check s1dw bs1: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal
+USDT:2026-10-24 22:47:23 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:47:23 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:47:24 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:47:24 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:47:24 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:47:25 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:47:25 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:47:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:47:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:47:27 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:47:28 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:47:28 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:47:29 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:47:30 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 22:47:31 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 22:47:32 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

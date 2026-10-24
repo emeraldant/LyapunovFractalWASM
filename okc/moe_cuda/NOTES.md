@@ -501,3 +501,9 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   a fused-streaming floor: bs 1 48%, bs 8 69%, bs 16 66%, bs 32 62%, bs 128 54%, bs 256 46%;
   geomean ceiling ~3.3x. Next: 32 rows per consumer warp (B-fragment reuse: today all 8 warps
   ldmatrix the same activations every k step).
+- rb 2 (two 128-row blocks per item, 32 rows per consumer warp; run 71f58265, chained, graph stage
+  times): correct everywhere (rel diff 0, repeat equal). bs 8 s1dwc 91.4 vs s1r2c 111.8 / s1r2wc
+  104.8; bs 16 72.8 vs 91.4 / 82.7 (GEMM1 47.1 -> 43.9 but GEMM2 25.2 -> 36.6: 16 row-block groups,
+  ~112 items on 264 slots); **bs 32 135.8 vs 136.0 / 124.5 (s1r2wc -8.3%: GEMM1 86.1 -> 78.2)**;
+  bs 128 s2qc 238.6 vs s1r2c 302.4 / s2r2c 267.6 (MT 2 rb 2 spills). Gate candidates s1r2c,
+  s1r2wc; gate check after.

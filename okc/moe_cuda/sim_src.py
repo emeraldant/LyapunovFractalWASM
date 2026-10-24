@@ -297,8 +297,40 @@ def _launch_probe(bank, state, cfgs, bs, seed, reps=7):
             timeline(fns[0], None, f"{name} route{label}")
 
 
+def _graph_abl(bank, state, cfgs, bs, seed, abls):
+    """Our GEMMs under the judge's timing (graph replay after the cold-L2 flush, overhead
+    subtracted), full and with parts switched off (profiling build): which part of the pipeline
+    keeps a GEMM above the pure-streaming floor at the same bytes (run_bw_judge)."""
+    ls = torch.zeros(1, dtype=torch.int32, device="cuda")
+    bench = SimBench()
+    tiny = torch.zeros(1, device="cuda")
+    data = generate_input(bs=bs, sharding="ep8", seed=seed, device="cuda")
+    ids = data["topk_ids"]
+    ne = int(torch.unique(ids[ids < 32]).numel())
+    pcta = 2048
+    for name, kw in cfgs.items():
+        line = []
+        for abl in abls:
+            maxi = (32 + bs * 8 // (8 * kw["mt"]) + 1) * 64 * max(kw.get("kparts", 1), kw.get("kparts2") or 1)
+            pf = (torch.zeros(pcta + maxi * 12, dtype=torch.int64, device="cuda"),
+                  torch.zeros(pcta + maxi * 12, dtype=torch.int64, device="cuda"))
+            try:
+                fns, _ = moe_cuda_stages(data["hidden_states"], ids, data["topk_weights"], ls, bank, state["norm_w"],
+                                         _SIM_EPS, prof=(pf[0][pcta:], pf[1][pcta:]), abl=abl, **kw)
+                for fn in fns:
+                    fn()
+                torch.cuda.synchronize()
+                g1 = bench.compare(fns[1], lambda: tiny.add_(1), pairs=8)[0]
+                g2 = bench.compare(fns[2], lambda: tiny.add_(1), pairs=8)[0]
+                line.append(f"{ABLATIONS[abl]} {g1:.1f} / {g2:.1f}")
+            except Exception as e:
+                line.append(f"{ABLATIONS[abl]} failed ({type(e).__name__}: {str(e)[:80]})")
+        print(f"graph abl bs{bs} {name} ({ne} exp, GEMM1 {ne * 18.9:.0f} MB / GEMM2 {ne * 9.4:.0f} MB) gemm1 / gemm2 us: "
+              + "; ".join(line), flush=True)
+
+
 def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7, timed=True, stage_detail=False, seed_base=8_800_000,
-                          launch=False):
+                          launch=False, graph_abls=()):
     """run_moe_profile on random NVFP4 weights for the 32 local experts: runs inside ANY
     problem's host (the kernels' speed does not depend on the weight values), so kernel
     experiments do not spend the MoE problem's checks."""
@@ -326,6 +358,14 @@ def run_moe_profile_synth(cfgs, sizes=(16, 256), abls=(0,), seed=7, timed=True, 
     if bank is None:
         bank = build_cuda_bank(weights)
         ws_layout(bank)
+    if graph_abls:
+        try:
+            moe_cuda_module(prof=True)
+            for i, bs in enumerate(sizes):
+                _graph_abl(bank, state, cfgs, bs, seed_base + i, graph_abls)
+        except Exception as e:
+            import traceback
+            print("graph abl failed:", traceback.format_exc()[-1500:], flush=True)
     if launch:
         try:
             moe_cuda_module(prof=True)

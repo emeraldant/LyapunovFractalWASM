@@ -475,3 +475,18 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
 - Builder A's PDL chain (chain=True): gate check 56dc4994 1.889 vs 1.825 (174486, same day,
   without chain); plans s1dw2fpc / s1dwc / s1dwc / s1dwc / s2q / s2qv16 for bs 1 / 8 / 16 / 32 /
   128 / 256 at 43.4 / 78.5 / 105.7 / 151.7 / 244.2 / 268.8 us.
+
+## Oct 24: judge speed-of-light and the pure-streaming floor
+
+- Judge records carry speed_of_light_ns per case (check 56dc4994): decode 1 / 16 / 32 = 11.4 / 52.5 /
+  70.8 us, verify 1 / 16 / 32 = 37.3 / 101.3 / 108.9 us; ours 39.6 / 102.9 / 140.1 / 75.3 / 219.9 /
+  273.7 -> 29 / 51 / 51 / 50 / 46 / 40% of SOL. SOL = routed weight bytes at 4.8 TB/s (bs 1 matches
+  two experts exactly). Leaders' 2.18-2.34 ~ 55-60% of SOL. Scored run c5681b25: 1.879 (chained).
+- Pure streaming under judge conditions (run 99a005b0: graph replay after the 256 MB zero-fill
+  flush, overhead subtracted; per-CTA contiguous, balanced): 38 MB 13.0-14.0 us TMA / 10.7 LDG; 66 MB
+  21.2-21.8 / 17.9; 132 MB 37.7-38.8 / 33.4; 264 MB 66.8-68.0 / 66.6; 523 MB 122.9-123.9 / 129.8
+  (4.24 TB/s). Ring shape (2x4x16K, 2x2x32K, 4x4x8K, 1x8x16K, 2x6x16K) makes no difference. Our
+  GEMMs at the same bytes: GEMM1 bs 8 (132 MB) ~59 us vs 38; GEMM2 (66 MB) ~37 vs 21.6: the
+  pipeline leaves ~35-40% on the table. Small sizes: LDG starts faster than TMA (10.7 vs 14.0 at 38 MB).
+- Next: graph-timed ablations of s1dw (full / no math / no act rows / weights only / math only /
+  decode only / loop only), probe moe_gabl_pf.

@@ -1,0 +1,32 @@
+spec ops probe: compiled in 32 s
+spec ops decode mix (64 LOP3 + 32 HMUL2)  vs RS N16: both 400, wgmma only 119, alu only 307 (max 307, sum 426; hidden 22% of the smaller)
+spec ops decode mix (64 LOP3 + 32 HMUL2)  vs RS N64: both 502, wgmma only 286, alu only 307 (max 307, sum 592; hidden 32% of the smaller)
+spec ops decode mix (64 LOP3 + 32 HMUL2)  vs SS N64: both 513, wgmma only 286, alu only 307 (max 307, sum 592; hidden 28% of the smaller)
+spec ops LOP3 x96                         vs RS N16: both 490, wgmma only 119, alu only 405 (max 405, sum 524; hidden 28% of the smaller)
+spec ops LOP3 x96                         vs RS N64: both 587, wgmma only 286, alu only 405 (max 405, sum 690; hidden 36% of the smaller)
+spec ops LOP3 x96                         vs SS N64: both 602, wgmma only 286, alu only 405 (max 405, sum 690; hidden 31% of the smaller)
+spec ops HMUL2 bf16x2 x96                 vs RS N16: both 469, wgmma only 119, alu only 213 (max 213, sum 333; hidden -114% of the smaller)
+spec ops HMUL2 bf16x2 x96                 vs RS N64: both 560, wgmma only 286, alu only 213 (max 286, sum 499; hidden -29% of the smaller)
+spec ops HMUL2 bf16x2 x96                 vs SS N64: both 553, wgmma only 286, alu only 213 (max 286, sum 499; hidden -26% of the smaller)
+spec ops IMAD x96                         vs RS N16: both 442, wgmma only 119, alu only 378 (max 378, sum 498; hidden 46% of the smaller)
+spec ops IMAD x96                         vs RS N64: both 543, wgmma only 286, alu only 378 (max 378, sum 664; hidden 42% of the smaller)
+spec ops IMAD x96                         vs SS N64: both 531, wgmma only 286, alu only 378 (max 378, sum 664; hidden 47% of the smaller)
+spec ops FFMA x96                         vs RS N16: both 341, wgmma only 119, alu only 214 (max 214, sum 334; hidden -6% of the smaller)
+spec ops FFMA x96                         vs RS N64: both 504, wgmma only 286, alu only 214 (max 286, sum 500; hidden -2% of the smaller)
+spec ops FFMA x96                         vs SS N64: both 502, wgmma only 286, alu only 214 (max 286, sum 500; hidden -1% of the smaller)
+USDT:2026-10-24 21:35:40 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:35:40 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:35:40 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:35:40 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:35:41 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:35:41 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:35:42 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:35:42 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:35:43 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:35:43 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:35:44 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:35:44 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:35:46 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:35:46 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-24 21:35:48 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-24 21:35:48 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop

@@ -541,3 +541,19 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   Removing the activation re-reads / small copies does not move large batch: the limit is the decode
   (~88-117 us of ALU at bs 256) not overlapping the ~120 us memory stream. The wgmma redesign is not
   pursued.
+
+## Oct 24: prior art and the overlap re-check
+
+- Prior art read: LiquidGEMM (W4A8, Hopper: two compute warpgroups ping-pong, each dequantizes into
+  registers and issues wgmma; a load warpgroup does TMA), Machete (= our v7: swap-AB, RS wgmma,
+  prepacked weights; wins only at >= 128 tokens), Marlin FP4 decode (~18 instructions per 8 values:
+  we use ~12), TRT-LLM weightOnlyBatchedGemv (CUDA-core HFMA2, weights LDG.128 straight to registers:
+  no shared memory, no barriers; decode once, reuse for every token; warp-shuffle reduction). The
+  sglang baseline on Hopper W4A16 NVFP4 is Marlin.
+- Overlap re-check by instruction type (run after 56892927, one wgmma warpgroup + one ALU warpgroup per
+  CTA, 2 CTAs/SM, clocks per iteration, both / wgmma only / ALU only): decode mix vs RS N64 502 / 286 /
+  307 (32% of the smaller hidden); LOP3 587 / 286 / 405 (36%); IMAD 543 / 286 / 378 (42%); HMUL2 560 /
+  286 / 213 (worse than serial); FFMA 504 / 286 / 214 (0%). The old claim holds: ALU and tensor work
+  largely serialize on the judge's H200. Ping-pong (LiquidGEMM-style) is off the table; compute ~
+  plumbing + decode + MMA, and the plumbing (smem ring, LDS, ldmatrix, barriers) is the largest part
+  at large batch -> next: TRT-GEMV-style direct-to-register weight streaming, micro-benchmark first.

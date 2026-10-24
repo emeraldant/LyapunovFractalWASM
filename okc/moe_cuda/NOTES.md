@@ -460,3 +460,18 @@ and norm weights before its wait. Full-forward graph timing, cold L2, standard s
 All correct (rel diff vs v6 s2 identical to the unchained configs, bitwise repeatable). ~5-6 us
 saved per call at bs 1-32: about a third of the ~20 us measured outside the GEMMs' CTA lifetimes.
 Not yet overlapped: GEMM1's first fill (its weights depend on the route).
+
+## Oct 24: launch gap resolved; PDL chain adopted (gate check 56dc4994: 1.889)
+
+- In-graph launch probe (run 59fa2c2e, bs 8 s1dw, stamp kernels around one GEMM in a graph after
+  the cold-L2 flush): stamp -> first CTA entry 0.8 us, CTA life 59.1 (GEMM1) / 37.6 (GEMM2), last
+  exit -> stamp 0.8; empty GEMM 2.8 us total; no-kernel graph 0.8. There is no launch-side gap:
+  the earlier "~12 us outside the CTAs" came from eager profiling, where the GEMM ran after a
+  Python launch delay. Most likely cause of the eager vs graph difference (48 vs 59 us CTA life):
+  the 256 MB zero-fill flush leaves L2 full of dirty lines; in graph replay the GEMM starts right
+  away and its reads compete with ~50 MB of write-back (~11 us at 4.5 TB/s). Effective roofline =
+  (weights + ~50 MB) / BW: bs 8 ~74 us. (The bs 128 part of the probe failed: no profiling
+  build for s2q's stage count.)
+- Builder A's PDL chain (chain=True): gate check 56dc4994 1.889 vs 1.825 (174486, same day,
+  without chain); plans s1dw2fpc / s1dwc / s1dwc / s1dwc / s2q / s2qv16 for bs 1 / 8 / 16 / 32 /
+  128 / 256 at 43.4 / 78.5 / 105.7 / 151.7 / 244.2 / 268.8 us.

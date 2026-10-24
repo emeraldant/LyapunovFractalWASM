@@ -979,17 +979,21 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
 // SUB = 128-k chunks per pipeline stage: 2 makes each weight copy 16 KB (one cp.async.bulk),
 // which the memory system serves better when the consumers pace it (bandwidth probe
 // 692595f8: 3.58 vs 3.11 TB/s at v6's bs 8 pace; two back-to-back 8 KB copies: no gain).
-template <int MT, int SUB = 1>
+// RB = 128-row blocks per item: 2 gives each consumer warp 32 output rows (two m16 tiles) that
+// share every activation fragment, halving the ldmatrix traffic per weight byte (the loop's
+// shared-memory bandwidth bound, graph ablations 2db7fe47). A stage holds the RB blocks' weights
+// [block 0][block 1], then their scales; the global layout is unchanged (RB adjacent blocks).
+template <int MT, int SUB = 1, int RB = 1>
 struct SabCfg {
   static constexpr int A_ROW = 256 * SUB + 16;   // + 16 B: conflict-free ldmatrix rows
   static constexpr int A_STAGE = MT * 8 * A_ROW;
   static constexpr int W_STAGE = SUB * 16 * 512;
   static constexpr int S_STAGE = SUB * 16 * 64;
-  static constexpr int STAGE = A_STAGE + W_STAGE + S_STAGE;
+  static constexpr int STAGE = A_STAGE + RB * (W_STAGE + S_STAGE);
 };
 
-template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0, int SUB = 1>
-__global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
+template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0, int SUB = 1, int RB = 1>
+__global__ void __launch_bounds__(288, RB == 2 ? 2 : (MT == 1 ? 4 : 3)) moe_gemm_sab_kernel(
     const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
     const uint8_t* __restrict__ wq, const uint8_t* __restrict__ ws, const float* __restrict__ gs,
     const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
@@ -1029,7 +1033,9 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
   // summed in a fixed order afterwards (_splitk_silu_kernel, _post_norm_parts_kernel), so the
   // result stays bitwise repeatable.
   constexpr int abl = PROF ? ABL : 0;   // ablation bits as moe_gemm_ws_kernel's
-  using C = SabCfg<MT, SUB>;
+  using C = SabCfg<MT, SUB, RB>;
+  // RB > 1: n_blocks counts items' row-block groups; the weights' block index is nb * RB + h.
+  // (Host: no split K, stream K, L2 warming or metadata prefetch with RB > 1.)
   constexpr int NCHUNK = KTOT / (128 * SUB);   // pipeline stages per item
   static_assert(NCHUNK % STAGES == 0 && MT * 8 <= 32, "stages divide chunks; <= 32 token rows");
   extern __shared__ __align__(128) uint8_t smem[];
@@ -1083,25 +1089,28 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
         const int e0 = ch0 & 255, nb0 = it0 % n_blocks;
         const int r00 = exp_start[e0] + (ch0 >> 8) * MT * 8;
         const int live0 = min(MT * 8, exp_start[e0 + 1] - r00);
-        const uint32_t tx0 = live0 * 256 * SUB + C::W_STAGE + C::S_STAGE;
-        const uint8_t* w0 = wq + (((size_t)e0 * n_blocks + nb0) * NCHUNK + kb0) * C::W_STAGE;
-        const uint8_t* s0p = ws + (((size_t)e0 * n_blocks + nb0) * NCHUNK + kb0) * C::S_STAGE;
+        const uint32_t tx0 = live0 * 256 * SUB + RB * (C::W_STAGE + C::S_STAGE);
         pre = min(STAGES, nch);
         if (lane == 0) {
           for (int st = 0; st < pre; ++st) {
             const uint32_t sb = base + st * C::STAGE, full = bar_full + 8 * st;
             hdr[st] = (int)blockIdx.x;
             mbar_expect_tx(full, tx0);
-            bulk_g2s(sb + C::A_STAGE, w0 + (size_t)st * C::W_STAGE, C::W_STAGE, full);
-            bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s0p + (size_t)st * C::S_STAGE, C::S_STAGE, full);
+#pragma unroll
+            for (int h = 0; h < RB; ++h) {
+              const size_t blk = ((size_t)e0 * n_blocks + nb0) * RB + h;
+              bulk_g2s(sb + C::A_STAGE + h * C::W_STAGE, wq + (blk * NCHUNK + kb0 + st) * C::W_STAGE, C::W_STAGE, full);
+              bulk_g2s(sb + C::A_STAGE + RB * C::W_STAGE + h * C::S_STAGE, ws + (blk * NCHUNK + kb0 + st) * C::S_STAGE,
+                       C::S_STAGE, full);
+            }
           }
         }
         __syncwarp();
       } else if (lane == 0 && !sk && (int)blockIdx.x < total) {
         const int it0 = (int)blockIdx.x / kparts, kb0 = ((int)blockIdx.x % kparts) * nch;
         const int e0 = active[it0 / n_blocks] & 255, nb0 = it0 % n_blocks;
-        const uint8_t* w0 = wq + (((size_t)e0 * n_blocks + nb0) * NCHUNK + kb0) * C::W_STAGE;
-        const uint8_t* s0p = ws + (((size_t)e0 * n_blocks + nb0) * NCHUNK + kb0) * C::S_STAGE;
+        const uint8_t* w0 = wq + ((((size_t)e0 * n_blocks + nb0) * RB) * NCHUNK + kb0) * C::W_STAGE;
+        const uint8_t* s0p = ws + ((((size_t)e0 * n_blocks + nb0) * RB) * NCHUNK + kb0) * C::S_STAGE;
         prefetch_l2(w0, (uint32_t)min(STAGES, nch) * C::W_STAGE);
         prefetch_l2(s0p, (uint32_t)min(STAGES, nch) * C::S_STAGE);
       }
@@ -1204,9 +1213,9 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       if (have_nx) src = nx_src;
       else if (lane < live) src = MODE == 1 ? row_route[row0 + lane] / 8 : row0 + lane;
       const uint8_t* a_row = reinterpret_cast<const uint8_t*>(a_src + (size_t)src * KTOT);
-      const uint8_t* w_blk = wq + ((size_t)e * n_blocks + nb) * NCHUNK * C::W_STAGE;
-      const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * NCHUNK * C::S_STAGE;
-      const uint32_t tx = (abl & 4) ? 0u : ((abl & 2) ? 0u : live * 256 * SUB) + C::W_STAGE + C::S_STAGE;
+      const uint8_t* w_blk = wq + ((size_t)e * n_blocks + nb) * RB * NCHUNK * C::W_STAGE;   // block nb * RB
+      const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * RB * NCHUNK * C::S_STAGE;
+      const uint32_t tx = (abl & 4) ? 0u : ((abl & 2) ? 0u : live * 256 * SUB) + RB * (C::W_STAGE + C::S_STAGE);
       // profiling record: one per item (stream K: per item segment)
       const int prec = sk ? item * kparts + (int)blockIdx.x - ((it * NU + 1) * geff - 1) / U : item;
       long long pw = 0;
@@ -1221,8 +1230,12 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
           hdr[st] = item;
           mbar_expect_tx(full, tx);
           if (!(abl & 4)) {
-            bulk_g2s(sb + C::A_STAGE, w_blk + (size_t)kc * C::W_STAGE, C::W_STAGE, full);
-            bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s_blk + (size_t)kc * C::S_STAGE, C::S_STAGE, full);
+#pragma unroll
+            for (int h = 0; h < RB; ++h) {   // block nb * RB + h: NCHUNK chunks further on
+              bulk_g2s(sb + C::A_STAGE + h * C::W_STAGE, w_blk + ((size_t)h * NCHUNK + kc) * C::W_STAGE, C::W_STAGE, full);
+              bulk_g2s(sb + C::A_STAGE + RB * C::W_STAGE + h * C::S_STAGE,
+                       s_blk + ((size_t)h * NCHUNK + kc) * C::S_STAGE, C::S_STAGE, full);
+            }
           }
         }
         __syncwarp();
@@ -1241,7 +1254,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
 #pragma unroll
   for (int w = 0; w < 4; ++w) ldb[w] = base + (lane % 8) * C::A_ROW + (4 * w + lane / 8) * 16;
   const uint32_t w_src = base + C::A_STAGE + ((warp * 2) * 32 + lane) * 16;
-  const uint32_t s_src = base + C::A_STAGE + C::W_STAGE + (warp * 2) * 64 + r * 8;
+  const uint32_t s_src = base + C::A_STAGE + RB * C::W_STAGE + (warp * 2) * 64 + r * 8;
   uint32_t f = 0;
   for (;;) {
     mbar_wait(bar_full, (f / STAGES) & 1);
@@ -1269,14 +1282,17 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       ct0 = clock64();
       if (lane == 0) prof[prec * PSTR + 1] = gtimer();
     }
-    // acc[x][t]: token group t, k16 steps of parity x (two chains per group).
-    float acc[2][MT][4];
+    // accs[h][x][t]: row block h, token group t, k16 steps of parity x (two chains per group).
+    float accs[RB][2][MT][4];
 #pragma unroll
-    for (int x = 0; x < 2; ++x)
+    for (int h = 0; h < RB; ++h)
 #pragma unroll
-      for (int t = 0; t < MT; ++t)
+      for (int x = 0; x < 2; ++x)
 #pragma unroll
-        for (int i = 0; i < 4; ++i) acc[x][t][i] = 0.f;
+        for (int t = 0; t < MT; ++t)
+#pragma unroll
+          for (int i = 0; i < 4; ++i) accs[h][x][t][i] = 0.f;
+    auto& acc = accs[0];   // (split-K epilogue: RB == 1 only)
 
     auto chunks = [&](auto tt) {
       constexpr int T = decltype(tt)::value;
@@ -1292,27 +1308,33 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
           }
 #pragma unroll
           for (int sub = 0; sub < SUB; ++sub) {   // the stage's 128-k chunks
-          uint4 wv[2];
-          uint2 sv[2];
+          uint4 wvs[RB][2];
+          uint2 svs[RB][2];
+#pragma unroll
+          for (int h = 0; h < RB; ++h)
 #pragma unroll
           for (int j = 0; j < 2; ++j) {
             asm volatile("ld.shared.v4.u32 {%0,%1,%2,%3}, [%4];\n"
-                         : "=r"(wv[j].x), "=r"(wv[j].y), "=r"(wv[j].z), "=r"(wv[j].w)
-                         : "r"(w_src + st * C::STAGE + sub * 8192 + j * 512));
-            asm volatile("ld.shared.v2.u32 {%0,%1}, [%2];\n" : "=r"(sv[j].x), "=r"(sv[j].y)
-                         : "r"(s_src + st * C::STAGE + sub * 1024 + j * 64));
+                         : "=r"(wvs[h][j].x), "=r"(wvs[h][j].y), "=r"(wvs[h][j].z), "=r"(wvs[h][j].w)
+                         : "r"(w_src + st * C::STAGE + h * C::W_STAGE + sub * 8192 + j * 512));
+            asm volatile("ld.shared.v2.u32 {%0,%1}, [%2];\n" : "=r"(svs[h][j].x), "=r"(svs[h][j].y)
+                         : "r"(s_src + st * C::STAGE + h * C::S_STAGE + sub * 1024 + j * 64));
           }
 #pragma unroll
           for (int w = 0; w < 4; ++w) {
-            uint32_t v[2][4];
-#pragma unroll
-            for (int j = 0; j < 2; ++j) unpack8(w == 0 ? wv[j].x : w == 1 ? wv[j].y : w == 2 ? wv[j].z : wv[j].w, v[j]);
             uint32_t b[T][4];
 #pragma unroll
             for (int t = 0; t < T; ++t)
               asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
                            : "=r"(b[t][0]), "=r"(b[t][1]), "=r"(b[t][2]), "=r"(b[t][3])
                            : "r"(ldb[w] + st * C::STAGE + sub * 256 + t * 8 * C::A_ROW));
+#pragma unroll
+            for (int h = 0; h < RB; ++h) {   // row blocks: each reuses the activation fragments b
+            const uint4* wv = wvs[h];
+            const uint2* sv = svs[h];
+            uint32_t v[2][4];
+#pragma unroll
+            for (int j = 0; j < 2; ++j) unpack8(w == 0 ? wv[j].x : w == 1 ? wv[j].y : w == 2 ? wv[j].z : wv[j].w, v[j]);
 #pragma unroll
             for (int half = 0; half < 2; ++half) {
               const int step = 2 * w + half;
@@ -1335,11 +1357,12 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
 #pragma unroll
               for (int t = 0; t < T; ++t) {
                 if (abl & 8) {
-                  acc[half][t][0] += __int_as_float((a[0] ^ a[3] ^ b[t][2 * half]) & 0x3f800000u);
+                  accs[h][half][t][0] += __int_as_float((a[0] ^ a[3] ^ b[t][2 * half]) & 0x3f800000u);
                 } else {
-                  mma16816(acc[half][t], a, b[t][2 * half], b[t][2 * half + 1]);
+                  mma16816(accs[h][half][t], a, b[t][2 * half], b[t][2 * half + 1]);
                 }
               }
+            }
             }
           }
           }
@@ -1416,12 +1439,15 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
       }
     } else
 #pragma unroll
+    for (int h = 0; h < RB; ++h)
+#pragma unroll
     for (int t = 0; t < MT; ++t) {
       if (t >= groups) continue;
+      const int nbh = nb * RB + h;   // the weights' 128-row block
       float y[2][2];   // [row block 0 / 1 (MODE 2), or gate*up (MODE 1, block 0)][token 2c / 2c+1]
 #pragma unroll
       for (int i = 0; i < 2; ++i) {
-        const float lo = (acc[0][t][i] + acc[1][t][i]) * gsc, hi = (acc[0][t][2 + i] + acc[1][t][2 + i]) * gsc;
+        const float lo = (accs[h][0][t][i] + accs[h][1][t][i]) * gsc, hi = (accs[h][0][t][2 + i] + accs[h][1][t][2 + i]) * gsc;
         if (MODE == 1) {
           y[0][i] = lo / (1.f + __expf(-lo)) * hi;
         } else {
@@ -1436,7 +1462,7 @@ __global__ void __launch_bounds__(288, MT == 1 ? 4 : 3) moe_gemm_sab_kernel(
         const float mine_keep = odd ? y[blk][1] : y[blk][0];
         const float give = odd ? y[blk][0] : y[blk][1];
         const float got = __shfl_xor_sync(0xffffffffu, give, 4);
-        const int n = MODE == 1 ? 8 * (nb * 8 + warp) + (r & ~1) : 8 * (nb * 16 + 2 * warp + blk) + (r & ~1);
+        const int n = MODE == 1 ? 8 * (nbh * 8 + warp) + (r & ~1) : 8 * (nbh * 16 + 2 * warp + blk) + (r & ~1);
         if (tok < row0 + rows_e) {
           __nv_bfloat162 pr = odd ? __floats2bfloat162_rn(got, mine_keep) : __floats2bfloat162_rn(mine_keep, got);
           *reinterpret_cast<__nv_bfloat162*>(out + (size_t)tok * KTOT + n) = pr;
@@ -1961,13 +1987,13 @@ void moe_gemm_ws(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, 
   TORCH_CHECK(false, "moe_gemm_ws: unsupported mode / m tiles / stages");
 }
 
-template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0, int SUB = 1>
+template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0, int SUB = 1, int RB = 1>
 void launch_sab(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
                 torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
                 int n_blocks, int grid, long long* prof, int* sched, int kparts, float* part, int part_rows, int sk,
                 const uint8_t* pf_w, const uint8_t* pf_s, int* counters) {
-  size_t smem = (size_t)STAGES * (SabCfg<MT, SUB>::STAGE + 32);
-  auto k = moe_gemm_sab_kernel<MODE, MT, STAGES, PROF, ABL, SUB>;
+  size_t smem = (size_t)STAGES * (SabCfg<MT, SUB, RB>::STAGE + 32);
+  auto k = moe_gemm_sab_kernel<MODE, MT, STAGES, PROF, ABL, SUB, RB>;
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
   int per_sm = 0, sms = 0, dev = 0;
   cudaGetDevice(&dev);
@@ -2015,7 +2041,7 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
     SPCASE(1, 1, 8, 0) SPCASE(2, 1, 8, 0)
 #define SPCASE2(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == 200 + S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
 #define SPCASES2(A_) SPCASE2(1, 1, 4, A_) SPCASE2(2, 1, 4, A_)
-    SPCASES2(0) SPCASES2(1) SPCASES2(4) SPCASES2(12) SPCASES2(20) SPCASES2(28)
+    SPCASES2(0) SPCASES2(1) SPCASES2(2) SPCASES2(3) SPCASES2(4) SPCASES2(12) SPCASES2(20) SPCASES2(28)
 #endif
     TORCH_CHECK(false, "moe_gemm_sab: no profiling build for this configuration (needs -DOKC_PROF)");
   }
@@ -2027,6 +2053,9 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
   // 400 + S: four 128-k chunks per stage (32 KB weight copies)
 #define SCASE4(M_, T_, S_) if (mode == M_ && mt == T_ && stages == 400 + S_) { launch_sab<M_, T_, S_, false, 0, 4>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
   SCASE4(1, 1, 2) SCASE4(2, 1, 2) SCASE4(1, 2, 2) SCASE4(2, 2, 2)
+  // 1000 + 100 * SUB + S: two 128-row blocks per item (RB 2: 32 rows per consumer warp)
+#define SCASER(M_, T_, U_, S_) if (mode == M_ && mt == T_ && stages == 1000 + 100 * U_ + S_) { launch_sab<M_, T_, S_, false, 0, U_, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
+  SCASER(1, 1, 1, 4) SCASER(2, 1, 1, 4) SCASER(1, 2, 1, 4) SCASER(2, 2, 1, 4) SCASER(1, 1, 2, 2) SCASER(2, 1, 2, 2)
   TORCH_CHECK(false, "moe_gemm_sab: unsupported mode / token groups / stages");
 }
 
@@ -2392,7 +2421,7 @@ def ws_layout(bank):
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
-                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False):
+                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -2460,6 +2489,9 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     split = sab and kparts > 1
     split2 = sab and kparts2 > 1
     pf64 = 64 if mpf else 0   # v6 producer: next item's metadata fetched over the current item's last stages
+    # rb 2 (stages 1000 + 100 * SUB + S): two 128-row blocks per v6 item, 32 rows per consumer warp
+    assert rb == 1 or (sab and stages >= 1000 and kparts == 1 and (kparts2 or 1) == 1 and not sk and not l2pf
+                       and not mpf and not dualv8 and not dualsab), "rb 2: plain v6 path only"
     ch1, ch2 = (128, 2 | 128) if chain else (0, 0)   # chain: GEMM1 waits at its start; GEMM2 as flag 2
     pdl_kw = dict(launch_pdl=True) if chain else {}
     fuse1 = fuse and split and not sk   # GEMM1's split parts reduced by their last CTA (no reduction kernel)
@@ -2483,7 +2515,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
                                  active2, n_active2, exp_start, inter, 64, 132 * ctas2, prof[0], sched[4:6], abl, 1,
                                  no_part, 32 | pf64, no_u8, no_u8, no_i32)
             mod.moe_gemm_sab(1, mt, stages, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
-                             n_active[0:1], exp_start, inter, 64, grid, prof[0], sched[0:2], abl, kparts, part1,
+                             n_active[0:1], exp_start, inter, 64 // rb, grid, prof[0], sched[0:2], abl, kparts, part1,
                              int(sk) | (4 if l2pf else 0) | (8 if fuse1 else 0) | (16 if (dualv8 or dualsab) else 0) | pf64
                              | ch1,
                              bank["w2q_sab"] if l2pf else no_u8,
@@ -2513,7 +2545,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
                                  active2, n_active2, exp_start, y, 32, 132 * ctas2, prof[1], sched[6:8], abl, 1, no_part,
                                  32 | pf64, no_u8, no_u8, no_i32)
             mod.moe_gemm_sab(2, mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
-                             n_active[0:1], exp_start, y, 32, grid, prof[1], sched[2:4], abl, kparts2, part2,
+                             n_active[0:1], exp_start, y, 32 // rb, grid, prof[1], sched[2:4], abl, kparts2, part2,
                              int(sk) | (2 if pdl else 0) | (16 if (dualv8 or dualsab) else 0) | pf64 | ch2, no_u8, no_u8,
                              no_i32)
             return
@@ -2560,6 +2592,9 @@ CUDA_CONFIGS = {
     "s1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True),
     "s2wc": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, chain=True),
     "s2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True),
+    # rb 2: two 128-row blocks per item, 32 rows per consumer warp (activation fragments shared)
+    "s1r2c": dict(mt=1, stages=1104, ctas_per_sm=2, sab=True, chain=True, rb=2),
+    "s1r2wc": dict(mt=1, stages=1202, ctas_per_sm=2, sab=True, chain=True, rb=2),
     "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens
     "t4": dict(mt=4, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA, 32 tokens (2 CTAs/SM)
     "v8": dict(mt=8, stages=504, ctas_per_sm=2, wg=True),        # v7, 64-row chunks, wgmma width per chunk

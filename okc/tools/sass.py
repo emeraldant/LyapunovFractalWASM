@@ -202,10 +202,11 @@ def moe_sab(args):
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "moe_cuda"))
     import kernel as K
     prof = "true" if "prof" in args else "false"
+    rb = 2 if "rb" in args else 1
     insts = [(1, 1, 4), (2, 1, 4), (1, 2, 4), (2, 2, 4)]
-    names = [f"moe_gemm_sab_kernel<{m}, {t}, {s}, {prof}>" for m, t, s in insts]
+    names = [f"moe_gemm_sab_kernel<{m}, {t}, {s}, {prof}, 0, 1, {rb}>" for m, t, s in insts]
     src = NVRTC_PRELUDE + K.MOE_DEVICE_SRC.replace("#include <stdint.h>", "") + "\n" + "\n".join(
-        f"template __global__ void moe_gemm_sab_kernel<{m}, {t}, {s}, {prof}>("
+        f"template __global__ void moe_gemm_sab_kernel<{m}, {t}, {s}, {prof}, 0, 1, {rb}>("
         "const __nv_bfloat16*, const int32_t*, const uint8_t*, const uint8_t*, "
         "const float*, const int32_t*, const int32_t*, const int32_t*, "
         "__nv_bfloat16*, int, long long*, int*, int, float*, int, int, const uint8_t*, const uint8_t*, int*);" for m, t, s in insts)

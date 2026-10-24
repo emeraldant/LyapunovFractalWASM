@@ -308,6 +308,9 @@ CUDA_CONFIGS = {
     "s1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True),
     "s2wc": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, chain=True),
     "s2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True),
+    # rb 2: two 128-row blocks per item, 32 rows per consumer warp (activation fragments shared)
+    "s1r2c": dict(mt=1, stages=1104, ctas_per_sm=2, sab=True, chain=True, rb=2),
+    "s1r2wc": dict(mt=1, stages=1202, ctas_per_sm=2, sab=True, chain=True, rb=2),
     "t2": dict(mt=2, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA token tiles, 16 tokens
     "t4": dict(mt=4, stages=304, ctas_per_sm=4, wg=True),        # v7 wgmma + TMA, 32 tokens (2 CTAs/SM)
     "v8": dict(mt=8, stages=504, ctas_per_sm=2, wg=True),        # v7, 64-row chunks, wgmma width per chunk

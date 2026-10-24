@@ -183,7 +183,7 @@ __device__ __forceinline__ void wg_step(float* d, const uint32_t* a, uint64_t da
                  : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "l"(db));
 }
 
-template <int KIND, int N, bool SS>
+template <int KIND, int N, bool SS, int OPS = 0>
 __global__ void spec_probe(float* sink, int iters, int alu_reps) {
   __shared__ __align__(128) uint8_t sA[64 * 64 * 2], sB[64 * 64 * 2];
   for (int i = threadIdx.x; i < 64 * 64 / 2; i += blockDim.x) {
@@ -211,16 +211,33 @@ __global__ void spec_probe(float* sink, int iters, int alu_reps) {
     asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
   }
   if (!mma_role && KIND != 1) {
+    // OPS 0: 64 LOP3 + 32 HMUL2 (the decode's mix); 1: 96 LOP3; 2: 96 HMUL2 (bf16x2);
+    // 3: 96 IMAD; 4: 96 FFMA (fp32); per warp per rep.
+    float fx[8];
+    for (int i = 0; i < 8; ++i) fx[i] = (float)x[i];
     for (int it = 0; it < iters * alu_reps; ++it) {
+      if (OPS == 0) {
 #pragma unroll
-      for (int r = 0; r < 8; ++r)
+        for (int r = 0; r < 8; ++r)
 #pragma unroll
-        for (int i = 0; i < 8; ++i) asm volatile("lop3.b32 %0, %0, 0x81C081C0, %0, 0x6a;" : "+r"(x[i]));
+          for (int i = 0; i < 8; ++i) asm volatile("lop3.b32 %0, %0, 0x81C081C0, %0, 0x6a;" : "+r"(x[i]));
 #pragma unroll
-      for (int r = 0; r < 4; ++r)
+        for (int r = 0; r < 4; ++r)
 #pragma unroll
-        for (int i = 0; i < 8; ++i) asm volatile("mul.rn.bf16x2 %0, %0, %1;" : "+r"(x[i]) : "r"(m));
+          for (int i = 0; i < 8; ++i) asm volatile("mul.rn.bf16x2 %0, %0, %1;" : "+r"(x[i]) : "r"(m));
+      } else {
+#pragma unroll
+        for (int r = 0; r < 12; ++r)
+#pragma unroll
+          for (int i = 0; i < 8; ++i) {
+            if (OPS == 1) asm volatile("lop3.b32 %0, %0, 0x81C081C0, %0, 0x6a;" : "+r"(x[i]));
+            if (OPS == 2) asm volatile("mul.rn.bf16x2 %0, %0, %1;" : "+r"(x[i]) : "r"(m));
+            if (OPS == 3) asm volatile("mad.lo.u32 %0, %0, 0x4108, %1;" : "+r"(x[i]) : "r"(m));
+            if (OPS == 4) asm volatile("fma.rn.f32 %0, %0, 0f3F800001, 0f00000001;" : "+f"(fx[i]));
+          }
+      }
     }
+    for (int i = 0; i < 8; ++i) x[i] ^= __float_as_uint(fx[i]);
   }
   uint32_t s = 0;
   for (int i = 0; i < 8; ++i) s ^= x[i];
@@ -229,14 +246,17 @@ __global__ void spec_probe(float* sink, int iters, int alu_reps) {
   if (s == 12345u || f == 12345.f) sink[0] = f;
 }
 
-double run_spec(int kind, int n, int ss, int blocks, int threads, int iters, int alu_reps, torch::Tensor sink) {
+double run_spec(int kind, int n, int ss, int blocks, int threads, int iters, int alu_reps, torch::Tensor sink, int ops) {
   cudaEvent_t e0, e1;
   cudaEventCreate(&e0); cudaEventCreate(&e1);
   auto go = [&]() {
     float* p = sink.data_ptr<float>();
-#define SPECC(K_, N_, S_) if (kind == K_ && n == N_ && ss == S_) spec_probe<K_, N_, S_><<<blocks, threads>>>(p, iters, alu_reps);
+#define SPECC(K_, N_, S_) if (kind == K_ && n == N_ && ss == S_ && ops == 0) spec_probe<K_, N_, S_><<<blocks, threads>>>(p, iters, alu_reps);
     SPECC(0, 16, 0) SPECC(1, 16, 0) SPECC(2, 16, 0) SPECC(0, 16, 1) SPECC(1, 16, 1)
     SPECC(0, 64, 0) SPECC(1, 64, 0) SPECC(0, 64, 1) SPECC(1, 64, 1)
+#define SPECO(K_, N_, S_, O_) if (kind == K_ && n == N_ && ss == S_ && ops == O_) spec_probe<K_, N_, S_, O_><<<blocks, threads>>>(p, iters, alu_reps);
+#define SPECOS(O_) SPECO(0, 16, 0, O_) SPECO(2, 16, 0, O_) SPECO(0, 64, 0, O_) SPECO(0, 64, 1, O_)
+    SPECOS(1) SPECOS(2) SPECOS(3) SPECOS(4)
   };
   go();
   cudaEventRecord(e0);
@@ -390,7 +410,7 @@ double run(int which, int n, int blocks, int threads, int iters, torch::Tensor s
 
 _RATE_CPP = ("double run(int which, int n, int blocks, int threads, int iters, torch::Tensor sink);\n"
              "double run_overlap(int mode, int blocks, int threads, int iters, torch::Tensor sink);\n"
-             "double run_spec(int kind, int n, int ss, int blocks, int threads, int iters, int alu_reps, torch::Tensor sink);\n"
+             "double run_spec(int kind, int n, int ss, int blocks, int threads, int iters, int alu_reps, torch::Tensor sink, int ops);\n"
              "double run_decode(int var, int mma, int blocks, int threads, int iters, torch::Tensor sink);")
 
 
@@ -479,9 +499,37 @@ def run_spec_probe():
             for kind in ((0, 1, 2) if (n, ss) == (16, 0) or True else (0, 1)):
                 if kind == 2 and n != 16:
                     continue
-                ms = mod.run_spec(kind, n, ss, sms * ctas, 128 * wgs, iters, reps, sink)
+                ms = mod.run_spec(kind, n, ss, sms * ctas, 128 * wgs, iters, reps, sink, 0)
                 r[kind] = ms * 1e-3 * clk / iters
             if 2 not in r:
-                r[2] = mod.run_spec(2, 16, 0, sms * ctas, 128 * wgs, iters, reps, sink) * 1e-3 * clk / iters
+                r[2] = mod.run_spec(2, 16, 0, sms * ctas, 128 * wgs, iters, reps, sink, 0) * 1e-3 * clk / iters
             print(f"spec {'SS' if ss else 'RS'} N{n} alu x{reps}, {wgs * ctas} WG/SM: clocks/iter both {r[0]:.0f},"
                   f" wgmma only {r[1]:.0f}, alu only {r[2]:.0f} (max {max(r[1], r[2]):.0f}, sum {r[1] + r[2]:.0f})", flush=True)
+
+
+def run_spec_ops_probe():
+    """Which instruction types overlap another warpgroup's wgmma? Per iteration: 4 wgmma m64nNk16
+    per mma warpgroup; per ALU warp 96 ops of one kind (or the decode's 64 LOP3 + 32 HMUL2).
+    Reported in SM clocks per iteration: both, wgmma only, ALU only."""
+    import time
+    from torch.utils.cpp_extension import load_inline
+    t = time.time()
+    mod = load_inline(name="okc_rate_probe_ops", cpp_sources=_RATE_CPP, cuda_sources=_RATE_SRC,
+                      functions=["run", "run_overlap", "run_decode", "run_spec"],
+                      extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"], verbose=False)
+    print(f"spec ops probe: compiled in {time.time() - t:.0f} s", flush=True)
+    sink = torch.zeros(4, device="cuda")
+    clk, sms, iters = 1.98e9, 132, 2000
+    names = {0: "decode mix (64 LOP3 + 32 HMUL2)", 1: "LOP3 x96", 2: "HMUL2 bf16x2 x96", 3: "IMAD x96", 4: "FFMA x96"}
+    mma_only = {}
+    for n, ss in ((16, 0), (64, 0), (64, 1)):
+        mma_only[(n, ss)] = mod.run_spec(1, n, ss, sms * 2, 256, iters, 1, sink, 0) * 1e-3 * clk / iters
+    for ops in (0, 1, 2, 3, 4):
+        alu = mod.run_spec(2, 16, 0, sms * 2, 256, iters, 1, sink, ops) * 1e-3 * clk / iters
+        for n, ss in ((16, 0), (64, 0), (64, 1)):
+            both = mod.run_spec(0, n, ss, sms * 2, 256, iters, 1, sink, ops) * 1e-3 * clk / iters
+            w = mma_only[(n, ss)]
+            hidden = (w + alu - both) / min(w, alu) if min(w, alu) > 0 else 0
+            print(f"spec ops {names[ops]:<32} vs {'SS' if ss else 'RS'} N{n}: both {both:.0f}, wgmma only {w:.0f},"
+                  f" alu only {alu:.0f} (max {max(w, alu):.0f}, sum {w + alu:.0f}; hidden {100 * hidden:.0f}% of the smaller)",
+                  flush=True)

@@ -1619,6 +1619,276 @@ __global__ void __launch_bounds__(288, N >= 64 ? 2 : N >= 32 ? (W0 ? 3 : 2) : W0
     }
   }
 }
+// ---------------------------------------------------------------------------------------
+// v9 "tiny": the whole expert MLP for tiny batches (<= 8 rows per expert) in ONE persistent grid
+// (one CTA per SM). Every byte of both GEMMs' weights leaves HBM in one burst from the start:
+// each CTA TMA-loads its first GEMM2 unit (a 128-row W2 block x one K half: 147 KB) into shared
+// memory and L2-prefetches any further ones, while its producer streams its GEMM1 units (a
+// 128-row W13 block x one K half) through a small ring. The last-arriving GEMM1 half of a block
+// writes silu(gate) * up (inter); a GEMM2 unit waits only for its expert's 64 GEMM1 blocks
+// (counter), loads that expert's inter rows and multiplies the weights already in shared
+// memory. GEMM2 halves go out as fp32 parts for the post-norm (_post_norm_parts_kernel, KP 2).
+// Counters reset themselves (graph replay). Same partial-sum order and roundings as the
+// split-K v6 path (s1dw2fp), so the result matches it.
+#define TINY_RING 4
+#define TINY_WCH 8192
+#define TINY_SCH 1024
+#define TINY_AROW 272     // one 128-k chunk of a token row (256 B) + 16 B
+#define TINY_A2ROW 4112   // one GEMM2 K half of a token row (2048 k = 4096 B) + 16 B
+struct TinyCfg {
+  static constexpr int RSTAGE = TINY_WCH + TINY_SCH + 8 * TINY_AROW;   // ring stage: W, S, act rows
+  static constexpr int W2W = 16 * TINY_WCH, W2S = 16 * TINY_SCH;        // resident GEMM2 unit
+  static constexpr int OFF_W2 = TINY_RING * RSTAGE;
+  static constexpr int OFF_A2 = OFF_W2 + W2W + W2S;
+  static constexpr int OFF_BAR = OFF_A2 + 8 * TINY_A2ROW;
+  static constexpr int OFF_MISC = OFF_BAR + 8 * (2 * TINY_RING + 1);
+  static constexpr int SMEM = OFF_MISC + 4 * 40 + 64;
+};
+#define TINY_CNT1 0          // [32 experts x 64 blocks] GEMM1 half arrivals
+#define TINY_DONE1 2048      // [32] GEMM1 blocks completed per expert
+#define TINY_DONE2 2080      // [32] GEMM2 units completed per expert
+#define TINY_CNT_N 2112
+
+// One warp, one 128-k chunk: acc[parity][4] += W(16 rows of this warp) x act(8 token rows).
+__device__ __forceinline__ void tiny_chunk(float acc[2][4], uint32_t wsrc, uint32_t ssrc, uint32_t abase, uint32_t arow,
+                                           int lane) {
+  uint4 wv[2];
+  uint2 sv[2];
+#pragma unroll
+  for (int j = 0; j < 2; ++j) {
+    asm volatile("ld.shared.v4.u32 {%0,%1,%2,%3}, [%4];\n" : "=r"(wv[j].x), "=r"(wv[j].y), "=r"(wv[j].z), "=r"(wv[j].w)
+                 : "r"(wsrc + j * 512));
+    asm volatile("ld.shared.v2.u32 {%0,%1}, [%2];\n" : "=r"(sv[j].x), "=r"(sv[j].y) : "r"(ssrc + j * 64));
+  }
+#pragma unroll
+  for (int w = 0; w < 4; ++w) {
+    uint32_t v[2][4];
+#pragma unroll
+    for (int j = 0; j < 2; ++j) unpack8(w == 0 ? wv[j].x : w == 1 ? wv[j].y : w == 2 ? wv[j].z : wv[j].w, v[j]);
+    uint32_t b[4];
+    asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+                 : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3])
+                 : "r"(abase + (lane % 8) * arow + (4 * w + lane / 8) * 16));
+#pragma unroll
+    for (int half = 0; half < 2; ++half) {
+      const int step = 2 * w + half;
+      uint32_t a[4];
+#pragma unroll
+      for (int j = 0; j < 2; ++j) {
+        const uint32_t sw = w < 2 ? sv[j].x : sv[j].y;
+        const uint32_t sp = half == 0 ? scale_even(sw) : scale_odd(sw);
+        if ((step % 4) < 2) {
+          a[j] = mul2h<0>(v[j][2 * half], sp);
+          a[2 + j] = mul2h<0>(v[j][2 * half + 1], sp);
+        } else {
+          a[j] = mul2h<1>(v[j][2 * half], sp);
+          a[2 + j] = mul2h<1>(v[j][2 * half + 1], sp);
+        }
+      }
+      mma16816(acc[half], a, b[2 * half], b[2 * half + 1]);
+    }
+  }
+}
+
+__device__ __forceinline__ int ld_acquire(const int* p) {
+  int v;
+  asm volatile("ld.acquire.gpu.global.b32 %0, [%1];\n" : "=r"(v) : "l"(p) : "memory");
+  return v;
+}
+
+// flags & 128: a programmatic dependent of the route (waits for it before reading its output,
+// signals its own dependent, the post-norm, at the start).
+__global__ void __launch_bounds__(288, 1) moe_tiny_kernel(
+    const __nv_bfloat16* __restrict__ x, const int32_t* __restrict__ row_route, const int32_t* __restrict__ exp_start,
+    const uint8_t* __restrict__ w13q, const uint8_t* __restrict__ w13s, const float* __restrict__ gs13,
+    const uint8_t* __restrict__ w2q, const uint8_t* __restrict__ w2s, const float* __restrict__ gs2,
+    __nv_bfloat16* __restrict__ inter, float* __restrict__ part1, float* __restrict__ part2, int P, int* __restrict__ cnt,
+    int flags) {
+  using C = TinyCfg;
+  extern __shared__ __align__(128) uint8_t smem[];
+  const uint32_t base = (uint32_t)__cvta_generic_to_shared(smem);
+  const uint32_t bar_full = base + C::OFF_BAR, bar_empty = bar_full + 8 * TINY_RING, bar_w2 = bar_empty + 8 * TINY_RING;
+  int* misc = reinterpret_cast<int*>(smem + C::OFF_MISC);   // [0] touched experts, [1..32] their ids, [33] flag
+  const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
+  if (tid == 0) {
+    for (int s = 0; s < TINY_RING; ++s) {
+      mbar_init(bar_full + 8 * s, 1);
+      mbar_init(bar_empty + 8 * s, STAGE_ARRIVALS);
+    }
+    mbar_init(bar_w2, 1);
+    asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
+  }
+  if (flags & 128) {
+    asm volatile("griddepcontrol.wait;\n" ::: "memory");
+    if (tid == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
+  }
+  if (tid == 0) {
+    int n = 0;
+    for (int e = 0; e < 32; ++e)
+      if (exp_start[e + 1] > exp_start[e]) misc[1 + n++] = e;
+    misc[0] = n;
+  }
+  __syncthreads();
+  const int ne = misc[0];
+  const int G = gridDim.x;
+  const int U1 = ne * 128, U2 = ne * 64;   // GEMM1 half units, GEMM2 units
+
+  if (warp == 8) {
+    // Producer.
+    if (lane == 0 && (int)blockIdx.x < U2) {   // the first GEMM2 unit: into shared memory now
+      const int v = blockIdx.x, h = v / (ne * 32), e = misc[1 + (v % (ne * 32)) / 32], b = v % 32;
+      const size_t c0 = ((size_t)e * 32 + b) * 32 + h * 16;
+      mbar_expect_tx(bar_w2, C::W2W + C::W2S);
+      bulk_g2s(base + C::OFF_W2, w2q + c0 * TINY_WCH, C::W2W, bar_w2);
+      bulk_g2s(base + C::OFF_W2 + C::W2W, w2s + c0 * TINY_SCH, C::W2S, bar_w2);
+      for (int v2 = v + G; v2 < U2; v2 += G) {   // further units: to L2, streamed through the ring later
+        const int h2 = v2 / (ne * 32), e2 = misc[1 + (v2 % (ne * 32)) / 32], b2 = v2 % 32;
+        const size_t c2 = ((size_t)e2 * 32 + b2) * 32 + h2 * 16;
+        prefetch_l2(w2q + c2 * TINY_WCH, C::W2W);
+        prefetch_l2(w2s + c2 * TINY_SCH, C::W2S);
+      }
+    }
+    uint32_t f = 0;
+    for (int u = blockIdx.x; u < U1; u += G) {   // GEMM1 half units
+      const int h = u / (ne * 64), e = misc[1 + (u % (ne * 64)) / 64], b = u % 64;
+      const int row0 = exp_start[e], live = min(8, exp_start[e + 1] - row0);
+      int src = 0;
+      if (lane < live) src = row_route[row0 + lane] / 8;
+      const uint8_t* a_row = reinterpret_cast<const uint8_t*>(x + (size_t)src * KTOT);
+      const size_t cb = ((size_t)e * 64 + b) * 32 + h * 16;
+      for (int c = 0; c < 16; ++c, ++f) {
+        const uint32_t st = f % TINY_RING;
+        if (f >= TINY_RING) mbar_wait(bar_empty + 8 * st, ((f / TINY_RING) - 1) & 1);
+        const uint32_t sb = base + st * C::RSTAGE, full = bar_full + 8 * st;
+        if (lane == 0) {
+          mbar_expect_tx(full, TINY_WCH + TINY_SCH + live * 256);
+          bulk_g2s(sb, w13q + (cb + c) * TINY_WCH, TINY_WCH, full);
+          bulk_g2s(sb + TINY_WCH, w13s + (cb + c) * TINY_SCH, TINY_SCH, full);
+        }
+        __syncwarp();
+        if (lane < live) bulk_g2s(sb + TINY_WCH + TINY_SCH + lane * TINY_AROW, a_row + (h * 16 + c) * 256, 256, full);
+      }
+    }
+    for (int v = blockIdx.x + G; v < U2; v += G) {   // GEMM2 units beyond the first: weights via the ring
+      const int h = v / (ne * 32), e = misc[1 + (v % (ne * 32)) / 32], b = v % 32;
+      const size_t cb = ((size_t)e * 32 + b) * 32 + h * 16;
+      for (int c = 0; c < 16; ++c, ++f) {
+        const uint32_t st = f % TINY_RING;
+        if (f >= TINY_RING) mbar_wait(bar_empty + 8 * st, ((f / TINY_RING) - 1) & 1);
+        const uint32_t sb = base + st * C::RSTAGE, full = bar_full + 8 * st;
+        if (lane == 0) {
+          mbar_expect_tx(full, TINY_WCH + TINY_SCH);
+          bulk_g2s(sb, w2q + (cb + c) * TINY_WCH, TINY_WCH, full);
+          bulk_g2s(sb + TINY_WCH, w2s + (cb + c) * TINY_SCH, TINY_SCH, full);
+        }
+        __syncwarp();
+      }
+    }
+    return;
+  }
+
+  // Consumers (warps 0-7: 16 output rows each of a 128-row block).
+  const int r = lane / 4, c = (lane % 4) * 2;
+  uint32_t f = 0;
+  for (int u = blockIdx.x; u < U1; u += G) {
+    const int h = u / (ne * 64), e = misc[1 + (u % (ne * 64)) / 64], b = u % 64;
+    const int row0 = exp_start[e], rows_e = min(8, exp_start[e + 1] - row0);
+    float acc[2][4] = {};
+    for (int k = 0; k < 16; ++k, ++f) {
+      const uint32_t st = f % TINY_RING;
+      mbar_wait(bar_full + 8 * st, (f / TINY_RING) & 1);
+      const uint32_t sb = base + st * C::RSTAGE;
+      tiny_chunk(acc, sb + ((warp * 2) * 32 + lane) * 16, sb + TINY_WCH + (warp * 2) * 64 + r * 8,
+                 sb + TINY_WCH + TINY_SCH, TINY_AROW, lane);
+      stage_release(bar_empty + 8 * st, lane);
+    }
+    const float gsc = gs13[e] * 256.0f;
+    const int n = 8 * (b * 8 + warp) + r;
+#pragma unroll
+    for (int i = 0; i < 2; ++i) {
+      const int tok = row0 + c + i;
+      if (tok >= row0 + rows_e) continue;
+      float* prow = part1 + ((size_t)h * P + tok) * (2 * KTOT);
+      prow[n] = (acc[0][i] + acc[1][i]) * gsc;
+      prow[KTOT + n] = (acc[0][2 + i] + acc[1][2 + i]) * gsc;
+    }
+    __threadfence();
+    asm volatile("bar.sync 1, 256;\n" ::: "memory");
+    if (tid == 0) {
+      const int old = atomicAdd(cnt + TINY_CNT1 + e * 64 + b, 1);
+      misc[33] = old == 1;
+      if (old == 1) cnt[TINY_CNT1 + e * 64 + b] = 0;
+    }
+    asm volatile("bar.sync 1, 256;\n" ::: "memory");
+    if (misc[33]) {   // both K halves are in: silu(gate) * up for this block's 64 outputs
+      __threadfence();
+#pragma unroll
+      for (int i = 0; i < 2; ++i) {
+        const int tok = row0 + c + i;
+        if (tok >= row0 + rows_e) continue;
+        const float* p0 = part1 + (size_t)tok * (2 * KTOT);
+        const float* p1 = part1 + ((size_t)P + tok) * (2 * KTOT);
+        const float g = __ldcg(p0 + n) + __ldcg(p1 + n), uu = __ldcg(p0 + KTOT + n) + __ldcg(p1 + KTOT + n);
+        inter[(size_t)tok * KTOT + n] = __float2bfloat16_rn(g / (1.f + __expf(-g)) * uu);
+      }
+      __threadfence();
+      asm volatile("bar.sync 1, 256;\n" ::: "memory");
+      if (tid == 0) atomicAdd(cnt + TINY_DONE1 + e, 1);
+    }
+    asm volatile("bar.sync 1, 256;\n" ::: "memory");   // misc[33] is rewritten next unit
+  }
+
+  for (int v = blockIdx.x, k = 0; v < U2; v += G, ++k) {
+    const int h = v / (ne * 32), e = misc[1 + (v % (ne * 32)) / 32], b = v % 32;
+    const int row0 = exp_start[e], rows_e = min(8, exp_start[e + 1] - row0);
+    if (tid == 0)
+      while (ld_acquire(cnt + TINY_DONE1 + e) < 64) {
+      }
+    asm volatile("bar.sync 1, 256;\n" ::: "memory");
+    // This expert's inter rows, K half h, into the activation region (row stride TINY_A2ROW).
+    for (int o = tid; o < rows_e * 256; o += 256) {   // 16 B per thread step: 256 per row
+      const int row = o / 256, q = o % 256;
+      const uint4 val = __ldcg(reinterpret_cast<const uint4*>(inter + (size_t)(row0 + row) * KTOT + h * 2048) + q);
+      *reinterpret_cast<uint4*>(smem + C::OFF_A2 + row * TINY_A2ROW + q * 16) = val;
+    }
+    asm volatile("bar.sync 1, 256;\n" ::: "memory");
+    float acc[2][4] = {};
+    if (k == 0) {
+      mbar_wait(bar_w2, 0);
+      const uint32_t wb = base + C::OFF_W2, sbb = base + C::OFF_W2 + C::W2W;
+      for (int q = 0; q < 16; ++q)
+        tiny_chunk(acc, wb + q * TINY_WCH + ((warp * 2) * 32 + lane) * 16, sbb + q * TINY_SCH + (warp * 2) * 64 + r * 8,
+                   base + C::OFF_A2 + q * 256, TINY_A2ROW, lane);
+    } else {
+      for (int q = 0; q < 16; ++q, ++f) {
+        const uint32_t st = f % TINY_RING;
+        mbar_wait(bar_full + 8 * st, (f / TINY_RING) & 1);
+        const uint32_t sb = base + st * C::RSTAGE;
+        tiny_chunk(acc, sb + ((warp * 2) * 32 + lane) * 16, sb + TINY_WCH + (warp * 2) * 64 + r * 8,
+                   base + C::OFF_A2 + q * 256, TINY_A2ROW, lane);
+        stage_release(bar_empty + 8 * st, lane);
+      }
+    }
+    const float gsc = gs2[e] * 256.0f;
+#pragma unroll
+    for (int i = 0; i < 2; ++i) {
+      const int tok = row0 + c + i;
+      if (tok >= row0 + rows_e) continue;
+      float* prow = part2 + ((size_t)h * P + tok) * KTOT;
+      prow[8 * (b * 16 + 2 * warp) + r] = (acc[0][i] + acc[1][i]) * gsc;
+      prow[8 * (b * 16 + 2 * warp + 1) + r] = (acc[0][2 + i] + acc[1][2 + i]) * gsc;
+    }
+    asm volatile("bar.sync 1, 256;\n" ::: "memory");   // the activation region is rewritten next unit
+    if (tid == 0) {
+      const int old = atomicAdd(cnt + TINY_DONE2 + e, 1);
+      if (old == 63) {   // every GEMM2 unit of e has passed its wait: reset for the next replay
+        cnt[TINY_DONE1 + e] = 0;
+        cnt[TINY_DONE2 + e] = 0;
+      }
+    }
+  }
+}
+
 """
 
 MOE_HOST_SRC = r"""
@@ -1880,11 +2150,39 @@ void moe_gemm(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, tor
   CASE(1, 1, 8) CASE(2, 1, 8) CASE(1, 2, 8) CASE(2, 2, 8) CASE(1, 4, 8) CASE(2, 4, 8)
   TORCH_CHECK(false, "moe_gemm: unsupported mode / m tiles / stages");
 }
+void moe_tiny(torch::Tensor x, torch::Tensor row_route, torch::Tensor exp_start, torch::Tensor w13q, torch::Tensor w13s,
+              torch::Tensor gs13, torch::Tensor w2q, torch::Tensor w2s, torch::Tensor gs2, torch::Tensor inter,
+              torch::Tensor part1, torch::Tensor part2, torch::Tensor cnt, int64_t flags) {
+  const int smem = TinyCfg::SMEM;
+  cudaFuncSetAttribute(moe_tiny_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
+  int dev = 0, sms = 0;
+  cudaGetDevice(&dev);
+  cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
+  cudaLaunchConfig_t cfg = {};
+  cfg.gridDim = dim3(sms);   // one CTA per SM, all resident (the dependency waits need it)
+  cfg.blockDim = dim3(288);
+  cfg.dynamicSmemBytes = smem;
+  cfg.stream = at::cuda::getCurrentCUDAStream();
+  cudaLaunchAttribute attr[1];
+  attr[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+  attr[0].val.programmaticStreamSerializationAllowed = 1;
+  cfg.attrs = attr;
+  cfg.numAttrs = (flags & 128) ? 1 : 0;
+  cudaLaunchKernelEx(&cfg, moe_tiny_kernel,
+      reinterpret_cast<const __nv_bfloat16*>(x.data_ptr()), (const int32_t*)row_route.data_ptr<int32_t>(),
+      (const int32_t*)exp_start.data_ptr<int32_t>(), (const uint8_t*)w13q.data_ptr<uint8_t>(),
+      (const uint8_t*)w13s.data_ptr<uint8_t>(), (const float*)gs13.data_ptr<float>(),
+      (const uint8_t*)w2q.data_ptr<uint8_t>(), (const uint8_t*)w2s.data_ptr<uint8_t>(), (const float*)gs2.data_ptr<float>(),
+      reinterpret_cast<__nv_bfloat16*>(inter.data_ptr()), part1.data_ptr<float>(), part2.data_ptr<float>(),
+      (int)part1.size(1), cnt.data_ptr<int32_t>(), (int)flags);
+}
+
 """
 
 MOE_CUDA_SRC = MOE_HOST_SRC.replace("#include <ATen/cuda/CUDAContext.h>\n", "#include <ATen/cuda/CUDAContext.h>\n" + MOE_DEVICE_SRC, 1)
 
 MOE_CUDA_CPP = """
+void moe_tiny(torch::Tensor x, torch::Tensor row_route, torch::Tensor exp_start, torch::Tensor w13q, torch::Tensor w13s, torch::Tensor gs13, torch::Tensor w2q, torch::Tensor w2s, torch::Tensor gs2, torch::Tensor inter, torch::Tensor part1, torch::Tensor part2, torch::Tensor cnt, int64_t flags);
 void moe_gemm_wg(int64_t mode, int64_t n_tok, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                  torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
@@ -1917,7 +2215,7 @@ def moe_cuda_module(prof=False, variant=""):
         _MOE_MODULES[key] = load_inline(
             name="okc_moe_gemm" + ("_prof" if prof else "") + (f"_{variant}" if variant else ""),
             cpp_sources=MOE_CUDA_CPP, cuda_sources=MOE_CUDA_SRC,
-            functions=["moe_gemm", "moe_gemm_ws", "moe_gemm_sab", "moe_gemm_wg"],
+            functions=["moe_gemm", "moe_gemm_ws", "moe_gemm_sab", "moe_gemm_wg", "moe_tiny"],
             extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"] + flags, verbose=False)
     return _MOE_MODULES[key]
 
@@ -2170,7 +2468,7 @@ def ws_layout(bank):
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
-                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0):
+                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0, tiny=False):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -2187,6 +2485,8 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     before and each signals its dependents at its start (flag 128): launches, CTA setup and
     GEMM2's first weight stages overlap the previous kernel; each waits only before reading the
     previous kernel's output."""
+    if tiny:   # bs <= 8: one persistent grid for both GEMMs (moe_tiny_kernel)
+        return moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=chain, topk=topk)
     assert not chain or (sab and not (wg or dualv8 or dualsab or sk)), "chain: v6 single-launch configs"
     mod = moe_cuda_module(prof is not None, variant)
     x = x.contiguous()
@@ -2310,6 +2610,46 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
                                      num_warps=8, **pdl_kw)
 
     return (route, gemm1, gemm2, post), out
+
+
+def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=True, topk=8, **_):
+    """Tiny batches (<= 8 rows per local expert, i.e. bs <= 8): route, then ONE persistent grid for
+    both expert GEMMs (moe_tiny_kernel: GEMM2's first unit per CTA resident in shared memory from
+    the start), then the parts post-norm (KP 2). Same numerics as the split-K v6 path."""
+    m, hidden = x.shape
+    assert m <= 8, "moe_tiny: <= 8 tokens"
+    mod = moe_cuda_module()
+    if ids.dtype != torch.int32 or not ids.is_contiguous():
+        ids = ids.to(torch.int32).contiguous()
+    topk_weights = topk_weights.to(torch.float32).contiguous()
+    p = m * topk
+    count = bank["count"]
+    device = x.device
+    row_route = torch.empty((p,), dtype=torch.int32, device=device)
+    pos_of_route = torch.empty((p,), dtype=torch.int32, device=device)
+    exp_start = torch.empty((count + 1,), dtype=torch.int32, device=device)
+    active = torch.empty((2 * count + 2 * p + 1,), dtype=torch.int32, device=device)
+    n_active = torch.empty((2,), dtype=torch.int32, device=device)
+    inter = torch.empty((p, 4096), dtype=torch.bfloat16, device=device)
+    part1 = torch.empty((2, p, 8192), dtype=torch.float32, device=device)
+    part2 = torch.empty((2, p, 4096), dtype=torch.float32, device=device)
+    out = torch.empty((m, hidden), dtype=x.dtype, device=device)
+    cnt = bank.setdefault("tiny_cnt", torch.zeros((2112,), dtype=torch.int32, device=device))
+
+    def route():
+        _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, 8,
+                                        NE=256, E=count, CHUNK=max(256, triton.next_power_of_2(p)), SPLIT=0, ROWS2=64,
+                                        PDL=chain, num_warps=4)
+
+    def tiny():
+        mod.moe_tiny(x, row_route, exp_start, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], bank["w2q_sab"],
+                     bank["w2s_sab"], bank["w2_gs"], inter, part1, part2, cnt, 128 if chain else 0)
+
+    def post():
+        _post_norm_parts_kernel[(m,)](part2, norm_w, topk_weights, pos_of_route, out, eps, p, KP=2, TOPK=topk, H=4096,
+                                      PDL=chain, num_warps=8, **(dict(launch_pdl=True) if chain else {}))
+
+    return [route, tiny, post], out
 
 
 def moe_cuda_forward(x, ids, topk_weights, local_start, bank, norm_w, eps, **kw):

@@ -12,7 +12,7 @@ import triton.language as tl
 
 # @bundle muse_moe_w4a16/reference.py D_HIDDEN D_EXPERT N_EXPERTS ROUTED_PER_TOKEN LOCAL POPULARITY generate_input
 # @bundle muse_moe_w4a16/nvfp4.py outlier_channels
-# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULES moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _gather_rows_kernel _splitk_silu_kernel _post_norm_parts_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_cuda_stages moe_cuda_forward
+# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULES moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _gather_rows_kernel _splitk_silu_kernel _post_norm_parts_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_tiny_stages moe_cuda_stages moe_cuda_forward
 # @bundle sim/harness.py SimBench rel_l2 row_worst SimReport
 
 # Every shape the judge can plausibly draw near, not just the scored ones: a kernel that wins

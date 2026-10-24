@@ -714,6 +714,26 @@ __global__ void __launch_bounds__(32 * (8 * KS + 1), KS > 1 ? 1 : MT == 1 ? 4 : 
 // SUB = 128-k chunks per pipeline stage: 2 makes each weight copy 16 KB (one cp.async.bulk),
 // which the memory system serves better when the consumers pace it (bandwidth probe
 // 692595f8: 3.58 vs 3.11 TB/s at v6's bs 8 pace; two back-to-back 8 KB copies: no gain).
+// Atomic post (pa.mode): GEMM1 (mode & 1) zeroes y32 [P, 4096], out32 [M, 4096] and the bf16 output at
+// its start; GEMM2 (mode & 2) adds its (split-K) partials into y32 with red.add (no partial slots, no
+// reduction pass: not bitwise repeatable, well inside the 1.5% budget), and the last-arriving item
+// of an expert chunk RMS-norms its rows and adds topk_w * norm into out32; each token's last route
+// converts out32 to the bf16 output. Replaces _post_norm_*_kernel (one launch and its latency).
+struct PostArgs {
+  float* y32;
+  float* out32;
+  __nv_bfloat16* outb;
+  const __nv_bfloat16* norm_w;
+  const float* topk_w;
+  const int32_t* pos;
+  int* tok_cnt;
+  int* chunk_cnt;
+  float eps;
+  int M;
+  int P;
+  int mode;
+};
+
 // RB = 128-row blocks per item: 2 gives each consumer warp 32 output rows (two m16 tiles) that
 // share every activation fragment, halving the ldmatrix traffic per weight byte (the loop's
 // shared-memory bandwidth bound, graph ablations 2db7fe47). A stage holds the RB blocks' weights
@@ -734,7 +754,8 @@ __global__ void __launch_bounds__(288, RB > 1 ? 2 : (MT == 1 ? 4 : 3)) moe_gemm_
     const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
     const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out, int n_blocks,
     long long* __restrict__ prof, int* __restrict__ sched, int kparts, float* __restrict__ part, int part_rows,
-    int flags, const uint8_t* __restrict__ pf_w, const uint8_t* __restrict__ pf_s, int* __restrict__ counters) {
+    int flags, const uint8_t* __restrict__ pf_w, const uint8_t* __restrict__ pf_s, int* __restrict__ counters,
+    PostArgs pa) {
   // flags: 1 = stream K (below); 2 = launched as a programmatic dependent (PDL) of the previous
   // kernel, whose output (our activations) may not be ready: the producer warms L2 with its
   // first item's first stages of weights, then waits for that grid (griddepcontrol.wait).
@@ -792,6 +813,12 @@ __global__ void __launch_bounds__(288, RB > 1 ? 2 : (MT == 1 ? 4 : 3)) moe_gemm_
   if (flags & 128) {
     if (!(flags & 2)) asm volatile("griddepcontrol.wait;\n" ::: "memory");
     if (tid == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
+  }
+  if (pa.mode & 1) {   // atomic post, GEMM1: zero the accumulators and the output for this call
+    const size_t gt = (size_t)blockIdx.x * blockDim.x + tid, gn = (size_t)gridDim.x * blockDim.x;
+    for (size_t i = gt; i < (size_t)pa.P * KTOT / 4; i += gn) reinterpret_cast<float4*>(pa.y32)[i] = make_float4(0.f, 0.f, 0.f, 0.f);
+    for (size_t i = gt; i < (size_t)pa.M * KTOT / 4; i += gn) reinterpret_cast<float4*>(pa.out32)[i] = make_float4(0.f, 0.f, 0.f, 0.f);
+    for (size_t i = gt; i < (size_t)pa.M * KTOT / 8; i += gn) reinterpret_cast<uint4*>(pa.outb)[i] = make_uint4(0u, 0u, 0u, 0u);
   }
   const int total = *n_active_ptr * n_blocks * kparts;
   const int nch = NCHUNK / kparts;   // chunks per item
@@ -1173,7 +1200,74 @@ __global__ void __launch_bounds__(288, RB > 1 ? 2 : (MT == 1 ? 4 : 3)) moe_gemm_
     // Epilogue. Lane holds C[n = r][tokens 2c, 2c+1] (c0, c1) and C[n = r + 8][...] (c2, c3)
     // per token group; one shuffle with lane ^ 4 (column r ^ 1) pairs adjacent columns so
     // each lane stores one bf16x2: even r -> token 2c at (r, r+1), odd r -> token 2c+1 at (r-1, r).
-    if (kparts > 1) {
+    if (MODE == 2 && (pa.mode & 2)) {
+      // Atomic post: partials straight into y32, then the chunk's last item normalizes its rows.
+#pragma unroll
+      for (int t = 0; t < MT; ++t) {
+        if (t >= groups) continue;
+#pragma unroll
+        for (int i = 0; i < 2; ++i) {
+          const int tok = row0 + t * 8 + c + i;
+          if (tok >= row0 + min(MT * 8, rows_e)) continue;
+          float* yr = pa.y32 + (size_t)tok * KTOT;
+#pragma unroll
+          for (int h = 0; h < RB; ++h) {
+            const int nbh = nb * RB + h;
+            atomicAdd(yr + 8 * (nbh * 16 + 2 * warp) + r, (accs[h][0][t][i] + accs[h][1][t][i]) * gsc);
+            atomicAdd(yr + 8 * (nbh * 16 + 2 * warp + 1) + r, (accs[h][0][t][2 + i] + accs[h][1][t][2 + i]) * gsc);
+          }
+        }
+      }
+      __threadfence();
+      asm volatile("bar.sync 1, 256;\n" ::: "memory");
+      if (warp == 0 && lane == 0) {
+        const int ci = it / n_blocks;
+        const int old = atomicAdd(pa.chunk_cnt + ci, 1);
+        hdr[STAGES] = old == n_blocks * kparts - 1;
+        if (old == n_blocks * kparts - 1) pa.chunk_cnt[ci] = 0;
+      }
+      asm volatile("bar.sync 1, 256;\n" ::: "memory");
+      if (hdr[STAGES]) {   // this chunk's rows are complete: RMSNorm, weight, add into the tokens
+        __threadfence();
+        const int nrows = min(MT * 8, rows_e);
+        for (int rr = warp; rr < nrows; rr += 8) {
+          const int row = row0 + rr;
+          const int route = row_route[row], tk = route / 8;
+          const float* yr = pa.y32 + (size_t)row * KTOT;
+          float ss = 0.f;
+          for (int i = lane; i < KTOT; i += 32) {
+            const float v = __bfloat162float(__float2bfloat16_rn(__ldcg(yr + i))) * __bfloat162float(pa.norm_w[i]);
+            ss += v * v;
+          }
+#pragma unroll
+          for (int o = 16; o > 0; o >>= 1) ss += __shfl_xor_sync(0xffffffffu, ss, o);
+          const float sc = rsqrtf(ss / KTOT + pa.eps) * pa.topk_w[route];
+          float* orow = pa.out32 + (size_t)tk * KTOT;
+          for (int i = lane; i < KTOT; i += 32) {
+            const float v = __bfloat162float(__float2bfloat16_rn(__ldcg(yr + i))) * __bfloat162float(pa.norm_w[i]);
+            atomicAdd(orow + i, v * sc);
+          }
+          __threadfence();
+          int last = 0;
+          if (lane == 0) {
+            int need = 0;
+#pragma unroll
+            for (int j = 0; j < 8; ++j) need += pa.pos[tk * 8 + j] >= 0;
+            const int old = atomicAdd(pa.tok_cnt + tk, 1);
+            last = old == need - 1;
+            if (last) pa.tok_cnt[tk] = 0;
+          }
+          last = __shfl_sync(0xffffffffu, last, 0);
+          if (last) {   // every local route of this token is in: the bf16 output row
+            __threadfence();
+            for (int i = lane * 2; i < KTOT; i += 64)
+              *reinterpret_cast<__nv_bfloat162*>(pa.outb + (size_t)tk * KTOT + i) =
+                  __floats2bfloat162_rn(__ldcg(orow + i), __ldcg(orow + i + 1));
+          }
+        }
+      }
+      asm volatile("bar.sync 1, 256;\n" ::: "memory");   // hdr[STAGES] is rewritten next item
+    } else if (kparts > 1) {
       // Partial sums (scaled, fp32): C[n = r / r + 8][tokens 2c, 2c + 1] per token group.
 #pragma unroll
       for (int t = 0; t < MT; ++t) {
@@ -2069,7 +2163,7 @@ template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0, int SUB = 1, int
 void launch_sab(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs,
                 torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
                 int n_blocks, int grid, long long* prof, int* sched, int kparts, float* part, int part_rows, int sk,
-                const uint8_t* pf_w, const uint8_t* pf_s, int* counters) {
+                const uint8_t* pf_w, const uint8_t* pf_s, int* counters, PostArgs pa) {
   size_t smem = (size_t)STAGES * (SabCfg<MT, SUB, RB>::STAGE + 32);
   auto k = moe_gemm_sab_kernel<MODE, MT, STAGES, PROF, ABL, SUB, RB>;
   cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
@@ -2093,15 +2187,33 @@ void launch_sab(torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, 
       (const uint8_t*)wq.data_ptr<uint8_t>(), (const uint8_t*)ws.data_ptr<uint8_t>(), (const float*)gs.data_ptr<float>(),
       (const int32_t*)active.data_ptr<int32_t>(), (const int32_t*)n_active.data_ptr<int32_t>(),
       (const int32_t*)exp_start.data_ptr<int32_t>(),
-      reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks, prof, sched, kparts, part, part_rows, sk, pf_w, pf_s, counters);
+      reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n_blocks, prof, sched, kparts, part, part_rows, sk, pf_w, pf_s, counters,
+      pa);
 }
 
 void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                   torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                   torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
                   torch::Tensor sched, int64_t abl, int64_t kparts, torch::Tensor part, int64_t sk, torch::Tensor pf_w,
-                  torch::Tensor pf_s, torch::Tensor counters) {
+                  torch::Tensor pf_s, torch::Tensor counters, torch::Tensor post) {
   int* sp = sched.data_ptr<int32_t>();
+  PostArgs pa = {};   // post: CPU int64 [12] (atomic post) or empty
+  if (post.numel() >= 12) {
+    const int64_t* q = post.data_ptr<int64_t>();
+    pa.y32 = reinterpret_cast<float*>(q[0]);
+    pa.out32 = reinterpret_cast<float*>(q[1]);
+    pa.outb = reinterpret_cast<__nv_bfloat16*>(q[2]);
+    pa.norm_w = reinterpret_cast<const __nv_bfloat16*>(q[3]);
+    pa.topk_w = reinterpret_cast<const float*>(q[4]);
+    pa.pos = reinterpret_cast<const int32_t*>(q[5]);
+    pa.tok_cnt = reinterpret_cast<int*>(q[6]);
+    pa.chunk_cnt = reinterpret_cast<int*>(q[7]);
+    const int32_t eb = (int32_t)q[8];
+    pa.eps = *reinterpret_cast<const float*>(&eb);
+    pa.M = (int)q[9];
+    pa.P = (int)q[10];
+    pa.mode = (int)q[11];
+  }
   int* cnt = counters.numel() ? counters.data_ptr<int32_t>() : nullptr;
   TORCH_CHECK(!(sk & 8) || cnt, "moe_gemm_sab: the fused split epilogue needs counters");
   const uint8_t* pfw = pf_w.numel() ? pf_w.data_ptr<uint8_t>() : nullptr;
@@ -2113,33 +2225,33 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
   long long* pp = prof.numel() ? reinterpret_cast<long long*>(prof.data_ptr<int64_t>()) : nullptr;
   if (pp) {
 #ifdef OKC_PROF
-#define SPCASE(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
+#define SPCASE(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
 #define SPCASES(A_) SPCASE(1, 2, 4, A_) SPCASE(2, 2, 4, A_) SPCASE(1, 1, 4, A_) SPCASE(2, 1, 4, A_)
     SPCASES(0) SPCASES(1) SPCASES(2) SPCASES(3) SPCASES(4) SPCASES(12) SPCASES(20) SPCASES(28)
     SPCASE(1, 1, 8, 0) SPCASE(2, 1, 8, 0)
-#define SPCASE2(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == 200 + S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
+#define SPCASE2(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == 200 + S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
 #define SPCASES2(A_) SPCASE2(1, 1, 4, A_) SPCASE2(2, 1, 4, A_)
     SPCASES2(0) SPCASES2(1) SPCASES2(2) SPCASES2(3) SPCASES2(4) SPCASES2(12) SPCASES2(20) SPCASES2(28)
-#define SPCASE4(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == 400 + S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_, 4>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
+#define SPCASE4(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == 400 + S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_, 4>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
 #define SPCASES4(A_) SPCASE4(1, 2, 2, A_) SPCASE4(2, 2, 2, A_)
     SPCASES4(0) SPCASES4(1) SPCASES4(3) SPCASES4(4) SPCASES4(12) SPCASES4(28)
 #endif
     TORCH_CHECK(false, "moe_gemm_sab: no profiling build for this configuration (needs -DOKC_PROF)");
   }
-#define SCASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch_sab<M_, T_, S_, false>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
+#define SCASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch_sab<M_, T_, S_, false>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
   SCASE(1, 1, 4) SCASE(2, 1, 4) SCASE(1, 2, 4) SCASE(2, 2, 4) SCASE(1, 1, 8) SCASE(2, 1, 8) SCASE(1, 2, 8) SCASE(2, 2, 8)
   // 200 + S: two 128-k chunks per stage (16 KB weight copies)
-#define SCASE2(M_, T_, S_) if (mode == M_ && mt == T_ && stages == 200 + S_) { launch_sab<M_, T_, S_, false, 0, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
+#define SCASE2(M_, T_, S_) if (mode == M_ && mt == T_ && stages == 200 + S_) { launch_sab<M_, T_, S_, false, 0, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
   SCASE2(1, 1, 2) SCASE2(2, 1, 2) SCASE2(1, 2, 2) SCASE2(2, 2, 2) SCASE2(1, 1, 4) SCASE2(2, 1, 4)
   // 400 + S: four 128-k chunks per stage (32 KB weight copies)
-#define SCASE4(M_, T_, S_) if (mode == M_ && mt == T_ && stages == 400 + S_) { launch_sab<M_, T_, S_, false, 0, 4>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
+#define SCASE4(M_, T_, S_) if (mode == M_ && mt == T_ && stages == 400 + S_) { launch_sab<M_, T_, S_, false, 0, 4>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
   SCASE4(1, 1, 2) SCASE4(2, 1, 2) SCASE4(1, 2, 2) SCASE4(2, 2, 2)
   // 1000 + 100 * SUB + S: two 128-row blocks per item (RB 2: 32 rows per consumer warp)
-#define SCASER(M_, T_, U_, S_) if (mode == M_ && mt == T_ && stages == 1000 + 100 * U_ + S_) { launch_sab<M_, T_, S_, false, 0, U_, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
+#define SCASER(M_, T_, U_, S_) if (mode == M_ && mt == T_ && stages == 1000 + 100 * U_ + S_) { launch_sab<M_, T_, S_, false, 0, U_, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
   SCASER(1, 1, 1, 4) SCASER(2, 1, 1, 4) SCASER(1, 2, 1, 4) SCASER(2, 2, 1, 4) SCASER(1, 1, 2, 2) SCASER(2, 1, 2, 2)
   SCASER(1, 2, 2, 2) SCASER(2, 2, 2, 2)
   // 2000 + 100 * SUB + S: four 128-row blocks per item (RB 4: 64 rows per consumer warp)
-#define SCASER4(M_, T_, U_, S_) if (mode == M_ && mt == T_ && stages == 2000 + 100 * U_ + S_) { launch_sab<M_, T_, S_, false, 0, U_, 4>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt); return; }
+#define SCASER4(M_, T_, U_, S_) if (mode == M_ && mt == T_ && stages == 2000 + 100 * U_ + S_) { launch_sab<M_, T_, S_, false, 0, U_, 4>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
   SCASER4(1, 2, 1, 2) SCASER4(2, 2, 1, 2) SCASER4(1, 1, 1, 2) SCASER4(2, 1, 1, 2)
   TORCH_CHECK(false, "moe_gemm_sab: unsupported mode / token groups / stages");
 }
@@ -2269,7 +2381,7 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
                   torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                   torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, torch::Tensor prof,
                   torch::Tensor sched, int64_t abl, int64_t kparts, torch::Tensor part, int64_t sk, torch::Tensor pf_w,
-                  torch::Tensor pf_s, torch::Tensor counters);
+                  torch::Tensor pf_s, torch::Tensor counters, torch::Tensor post);
 void moe_gemm_ws(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
                  torch::Tensor exp_start, torch::Tensor out, int64_t n_blocks, int64_t grid, int64_t ks,
@@ -2546,7 +2658,7 @@ def ws_layout(bank):
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
-                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0, tiny=False, _tiny_stamps=False):
+                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0, tiny=False, _tiny_stamps=False, apost=False):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -2624,7 +2736,22 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     pdl_kw = dict(launch_pdl=True) if chain else {}
     fuse1 = fuse and split and not sk   # GEMM1's split parts reduced by their last CTA (no reduction kernel)
     part1 = torch.empty((kparts, p, 8192), dtype=torch.float32, device=device) if split else no_part
-    part2 = torch.empty((kparts2, p, 4096), dtype=torch.float32, device=device) if split2 else no_part
+    part2 = torch.empty((kparts2, p, 4096), dtype=torch.float32, device=device) if split2 and not apost else no_part
+    # apost: GEMM2's partials go to y32 by red.add and its last items do the post-norm (PostArgs)
+    no_post = torch.empty((0,), dtype=torch.int64)
+    post1 = post2 = no_post
+    if apost:
+        assert sab and not (dualv8 or dualsab or sk), "apost: v6 single-launch path"
+        import struct
+        y32 = torch.empty((p, 4096), dtype=torch.float32, device=device)
+        out32 = torch.empty((m, hidden), dtype=torch.float32, device=device)
+        tok_cnt = bank.setdefault("apost_tok", torch.zeros((1 << 12,), dtype=torch.int32, device=device))
+        chunk_cnt = bank.setdefault("apost_chunk", torch.zeros((1 << 16,), dtype=torch.int32, device=device))
+        eps_bits = struct.unpack("<i", struct.pack("<f", float(eps)))[0]
+        base = [y32.data_ptr(), out32.data_ptr(), out.data_ptr(), norm_w.data_ptr(), topk_weights.data_ptr(),
+                pos_of_route.data_ptr(), tok_cnt.data_ptr(), chunk_cnt.data_ptr(), eps_bits, m, p]
+        post1 = torch.tensor(base + [1], dtype=torch.int64)
+        post2 = torch.tensor(base + [2], dtype=torch.int64)
 
     def gemm1():
         if wg:    # v7: mt = 8-token groups per item (N = 8 mt)
@@ -2641,13 +2768,13 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
             if dualsab:
                 mod.moe_gemm_sab(1, mt2, stages_big, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"],
                                  active2, n_active2, exp_start, inter, 64, 132 * ctas2, prof[0], sched[4:6], abl, 1,
-                                 no_part, 32 | pf64, no_u8, no_u8, no_i32)
+                                 no_part, 32 | pf64, no_u8, no_u8, no_i32, no_post)
             mod.moe_gemm_sab(1, mt, stages, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
                              n_active[0:1], exp_start, inter, 64 // rb, grid, prof[0], sched[0:2], abl, kparts, part1,
                              int(sk) | (4 if l2pf else 0) | (8 if fuse1 else 0) | (16 if (dualv8 or dualsab) else 0) | pf64
                              | ch1,
                              bank["w2q_sab"] if l2pf else no_u8,
-                             bank["w2s_sab"] if l2pf else no_u8, bank["cnt"] if fuse1 else no_i32)
+                             bank["w2s_sab"] if l2pf else no_u8, bank["cnt"] if fuse1 else no_i32, post1)
             if split and not fuse1:
                 _splitk_silu_kernel[(p,)](part1, exp_start, inter, p, E=count, KP=kparts, H=4096, PDL=chain,
                                           num_warps=8, **pdl_kw)
@@ -2671,16 +2798,18 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
             if dualsab:
                 mod.moe_gemm_sab(2, mt2, stages_big, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"],
                                  active2, n_active2, exp_start, y, 32, 132 * ctas2, prof[1], sched[6:8], abl, 1, no_part,
-                                 32 | pf64, no_u8, no_u8, no_i32)
+                                 32 | pf64, no_u8, no_u8, no_i32, no_post)
             mod.moe_gemm_sab(2, mt, stages, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active,
                              n_active[0:1], exp_start, y, 32 // rb, grid, prof[1], sched[2:4], abl, kparts2, part2,
                              int(sk) | (2 if pdl else 0) | (16 if (dualv8 or dualsab) else 0) | pf64 | ch2, no_u8, no_u8,
-                             no_i32)
+                             no_i32, post2)
             return
         g2(2, mt, stages, inter, row_route, bank["w2q" + sfx], bank["w2s" + sfx], bank["w2_gs"], active, n_active,
              exp_start, y, 512 // 8, grid)
 
     def post():
+        if apost:   # done by GEMM2's last items
+            return
         if split2:
             _post_norm_parts_kernel[(m,)](part2, norm_w, topk_weights, pos_of_route, out, eps, p, KP=kparts2, TOPK=topk,
                                           H=hidden, PDL=chain, num_warps=8, **pdl_kw)

@@ -5580,6 +5580,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     # apost: GEMM2's partials go to y32 by red.add and its last items do the post-norm (PostArgs)
     no_post = torch.empty((0,), dtype=torch.int64)
     post1 = post2 = no_post
+    keep = []   # tensors the kernels reach only through raw pointers (post1 / post2): kept alive by the closures
     if apost:
         assert sab and not (dualv8 or dualsab or sk), "apost: v6 single-launch path"
         import struct
@@ -5592,8 +5593,10 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
                 pos_of_route.data_ptr(), tok_cnt.data_ptr(), chunk_cnt.data_ptr(), eps_bits, m, p]
         post1 = torch.tensor(base + [1], dtype=torch.int64)
         post2 = torch.tensor(base + [2], dtype=torch.int64)
+        keep += [y32, out32, tok_cnt, chunk_cnt]
 
     def gemm1():
+        _ = keep
         if wg:    # v7: mt = 8-token groups per item (N = 8 mt)
             if dual:
                 mod.moe_gemm_wg(1, 64, 504, xs, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active2,
@@ -5624,6 +5627,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
              exp_start, inter, 512 // 8, grid)
 
     def gemm2():
+        _ = keep
         if wg:
             if dual:
                 mod.moe_gemm_wg(2, 64, 504, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active2,

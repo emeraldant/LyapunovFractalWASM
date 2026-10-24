@@ -1,0 +1,308 @@
+{
+ "id": "f855f1d737e640d8",
+ "mode": "check",
+ "team": "emeraldant",
+ "board": "muse_attention_decode",
+ "result": {
+  "gpu": "H200",
+  "error": null,
+  "flags": [],
+  "checks": {
+   "ok": true,
+   "flagged": [],
+   "rejected": []
+  },
+  "passed": false,
+  "status": "ok",
+  "machine": {
+   "node": "n-jilerexm7jzqtha3u5ugsjopko",
+   "gpu_after": {
+    "name": "NVIDIA H200",
+    "clocks.sm": 1980.0,
+    "clocks.mem": 3201.0,
+    "power.draw": 121.92,
+    "power.limit": 700.0,
+    "clocks.max.sm": 1980.0,
+    "driver_version": "580.159.03",
+    "temperature.gpu": 38.0
+   },
+   "gpu_before": {
+    "name": "NVIDIA H200",
+    "clocks.sm": 1980.0,
+    "clocks.mem": 3201.0,
+    "power.draw": 125.0,
+    "power.limit": 700.0,
+    "clocks.max.sm": 1980.0,
+    "driver_version": "580.159.03",
+    "temperature.gpu": 36.0
+   }
+  },
+  "records": [
+   {
+    "case": {
+     "ctx": 10,
+     "seed": 3883436383719469542,
+     "batch": 1,
+     "heads": "tp8",
+     "layer": "sliding"
+    },
+    "event": "test",
+    "index": 0,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 2047,
+     "seed": 3883554003098998792,
+     "batch": 3,
+     "heads": "tp8",
+     "layer": "sliding"
+    },
+    "event": "test",
+    "index": 1,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 5000,
+     "page": 1,
+     "seed": 3883671622478528043,
+     "batch": 5,
+     "heads": "tp8",
+     "layer": "sliding",
+     "q_len": 8,
+     "spread": "mixed"
+    },
+    "event": "test",
+    "index": 2,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 3000,
+     "seed": 3883789241858057295,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "full"
+    },
+    "event": "test",
+    "index": 3,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 8192,
+     "seed": 3883906861237586548,
+     "batch": 8,
+     "heads": "dp",
+     "layer": "full",
+     "spread": "mixed"
+    },
+    "event": "test",
+    "index": 4,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 100000,
+     "page": 1,
+     "seed": 3884024480617115802,
+     "batch": 2,
+     "heads": "tp8",
+     "layer": "full",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 5,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 6000,
+     "dist": "edges",
+     "page": 1,
+     "seed": 3884142099996645057,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "sliding"
+    },
+    "event": "test",
+    "index": 6,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 6000,
+     "dist": "edges",
+     "seed": 3884259719376174313,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "full",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 7,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 1048576,
+     "seed": 3884377338755703570,
+     "batch": 1,
+     "heads": "tp8",
+     "layer": "full",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 8,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 4000,
+     "page": 1,
+     "seed": 3885083055032879133,
+     "batch": 3,
+     "heads": "tp8",
+     "layer": "sliding",
+     "q_len": 8,
+     "kv_scale": 0.015625
+    },
+    "event": "test",
+    "index": 9,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 9000,
+     "seed": 3885200674412408397,
+     "batch": 2,
+     "heads": "tp8",
+     "layer": "full",
+     "kv_scale": 0.015625
+    },
+    "event": "test",
+    "index": 10,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 80000,
+     "dist": "soft",
+     "seed": 3884494958135232828,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "full",
+     "spread": "mixed"
+    },
+    "event": "test",
+    "index": 11,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 6000,
+     "dist": "soft",
+     "page": 1,
+     "seed": 3884612577514762087,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "sliding",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 12,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 20000,
+     "dist": "soft",
+     "seed": 3884730196894291347,
+     "batch": 2,
+     "heads": "dp",
+     "layer": "full",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 13,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 80000,
+     "dist": "coherent",
+     "page": 1,
+     "seed": 3884847816273820608,
+     "batch": 4,
+     "heads": "tp8",
+     "layer": "full",
+     "spread": "mixed"
+    },
+    "event": "test",
+    "index": 14,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   },
+   {
+    "case": {
+     "ctx": 20000,
+     "dist": "coherent",
+     "seed": 3884965435653349870,
+     "batch": 2,
+     "heads": "dp",
+     "layer": "full",
+     "q_len": 8
+    },
+    "event": "test",
+    "index": 15,
+    "status": "fail",
+    "message": "AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nSticky error detected\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2\n\n"
+   }
+  ],
+  "speedup": null,
+  "score_us": null,
+  "evaluator": {
+   "files": {
+    "harness/eval.py": "0051a1bfac67a9f1fad06086b306653c6643b2bb253e15a794aa672312f070a9",
+    "harness/runner.py": "c905e5c80264c6d27620b6fc7d55b162dccdb8ed7282f8a513a4d2e6f2f226f2",
+    "harness/worker.py": "950437610f57ddffbc1176b65d9c2ae909c47bf67b1e3fe0716a81946986f568",
+    "challenge/nvfp4.py": "cfdf37c7bc14b10f7353aba7d4632f4767401b92b4b073941a8030d9a961aaaf",
+    "challenge/checks.py": "9a046c3c38db28b325dcd1557baecdf6bc9ef941d2175f9a900ba4c230bb8055",
+    "harness/static_checks.py": "c5588b69e9e86229459a525c61b30096f6f13ff2add6cadf98f272c4ac8ca0c2",
+    "configs/muse-spark-open.yaml": "98f07230e4e64fe91b7c76d9a3ce04948053c043d494d5f1fae56cfe2de033af",
+    "problems/muse_attention_decode/task.yml": "645f889fbbd52d1d731bf5eb53356aa7ef6eea8fab3073f0a2a3dd582fe6e4bb",
+    "problems/muse_attention_decode/baseline.py": "37f51207283f85a65eb393b1dfb1344759d7df0bdec5450e34d24e7139f56ecc",
+    "problems/muse_attention_decode/reference.py": "386f7f67a1d788501e8fb9005d340423d098a0946e23810ba10878228c11a37b"
+   },
+   "image": "localhost:30500/kc/judge@sha256:9a7f287b80d772c6f636bbcb57422c619fe326e2aabc53803b85007bca93f68e",
+   "code_sha256": "1d519ebf2014fef91b41ffea9bcd7e9c5066784ef5a2a5e2cf06a8cec554d188"
+  },
+  "returncode": 112,
+  "speedup_ci": null
+ },
+ "status": "done",
+ "call_id": "kc-f855f1d737e640d8",
+ "cluster": "sfo3",
+ "dedicated": false,
+ "created_at": 1792885044.4120243,
+ "started_at": 1792885063.2253945,
+ "finished_at": 1792885180.7905657,
+ "payload_ref": "muse_attention_decode/c9a2143957dc88fab7ed6cfbfdaa06b1a2174d254b18948de21ee92b029d9b0b.py",
+ "content_hash": "c9a2143957dc88fab7ed6cfbfdaa06b1a2174d254b18948de21ee92b029d9b0b",
+ "duplicate_of": null
+}

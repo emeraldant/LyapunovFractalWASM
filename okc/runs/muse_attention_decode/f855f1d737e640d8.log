@@ -1,0 +1,272 @@
+ssion.py", line 6169, in run_moe_profile_synth
+    ts = [bench.compare(fn, fns[0], pairs=6)[0] for fn in fns]
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/muse_attention_decode-arqrkz5u/run/submission.py", line 5705, in compare
+    ga, gb = self._capture(candidate), self._capture(baseline)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/muse_attention_decode-arqrkz5u/run/submission.py", line 5684, in _capture
+    self.stream.synchronize()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/streams.py", line 108, in synchronize
+    super().synchronize()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuStreamSynchronize
+
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 484, in child_main
+    out = kernel()(state.get("data"))
+          ^^^^^^^^
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 408, in kernel
+    sub = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/tmp/muse_attention_decode-arqrkz5u/run/submission.py", line 6235, in <module>
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+
+Traceback (most recent call last):
+  File "/tmp/muse_attention_decode-arqrkz5u/run/worker.py", line 450, in child_main
+    torch.cuda.empty_cache()
+  File "/opt/sglang/lib/python3.12/site-packages/torch/cuda/memory.py", line 229, in empty_cache
+    torch._C._cuda_emptyCache()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+Search for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+The CUDA driver logged these messages, which may provide useful details:
+Sticky error detected
+Returning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuMemFree_v2
+
+

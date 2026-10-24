@@ -510,3 +510,11 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
 - Gate check e8a1ed39 (rb 2 candidates): not adopted anywhere. bs 32 s1r2wc 163.6 vs 151.6 on
   routing 1 (+8%), 127.2 vs 133.2 on routing 2 (-4.5%): the single sim seed (8950030) favoured it.
   Score 1.879 (= chained build). Lesson: probes must time >= 2 routings per size, as the gate does.
+
+## Oct 24: big swings
+
+- H1 refuted (run after 71f58265, two routings per size): L2 prefetch distance (l2d, the producer
+  prefetching chunk kc + D as it issues kc) is worse everywhere and monotonically with D: bs 8
+  GEMM1 56.7 -> 61.9 / 65.7 / 72.6 (D 2 / 4 / 8), bs 32 83.8 -> 89.1 / 91.2 / 98.0, bs 16 (routing
+  2) 100.1 -> 107.6 / 115.4 / 120.4; bs 128 D 8 equal only because s2q items have 8 stages (never
+  fires). The math / memory overlap gap is not a shortage of bytes in flight.

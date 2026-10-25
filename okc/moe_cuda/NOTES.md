@@ -596,3 +596,7 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   (37.7 MB) best 18.0 us vs plain LDG 11.2 and our TMA ring ~17.6; GEMM2 (18.9 MB) 12.2 vs 6.0 / ~12;
   bs 8 GEMM1 (189 MB) 66.8 vs 48.8 / ~59; GEMM2 (94 MB) 38.3 vs 25.2 / ~37. No better than the ring:
   the streaming engine is not what holds small batch back; decode + MMA under the stream is.
+- DRAM locality refuted (check 2a183b6a): per-warp contiguous regions stream as fast as grid-stride
+  (bs 8 G1 189 MB: 49.0-49.9 vs 48.8 us; 38 MB 11.0 vs 10.9); an interleaved [k block][tile] weight
+  layout leaves the LDG+MMA kernel unchanged (65.6 vs 66.9). The loss is math under the stream
+  (~0.5 x the decode time adds on top of memory), not the access pattern.

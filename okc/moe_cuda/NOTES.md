@@ -591,3 +591,8 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   (arXiv 2609.04244): weight-major persistent megakernel, 8 compute + 4 prefetch warps, TMA several
   items ahead across expert boundaries, readiness flags between up and down, atomicAdd down partials,
   epilogues on the prefetch warps, routing/top-k fused; 1.17-1.54x over vLLM grouped GEMM at B 1-8.
+- LDG-direct small-batch path refuted (prefill-host check e760ef1d, ldg_probe: LDG.128 straight into
+  mma.sync A fragments, D-deep register ring per warp, real decode + MMA, judge timing): bs 1 GEMM1
+  (37.7 MB) best 18.0 us vs plain LDG 11.2 and our TMA ring ~17.6; GEMM2 (18.9 MB) 12.2 vs 6.0 / ~12;
+  bs 8 GEMM1 (189 MB) 66.8 vs 48.8 / ~59; GEMM2 (94 MB) 38.3 vs 25.2 / ~37. No better than the ring:
+  the streaming engine is not what holds small batch back; decode + MMA under the stream is.

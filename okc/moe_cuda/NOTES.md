@@ -627,3 +627,9 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
 - Final scored run 8f564da9 (chained build + proxy fence + fused option in the gate): 1.869 (decode 1 / 16 /
   32, verify 1 / 16 / 32: 1.825 / 1.768 / 1.461 / 1.851 / 2.136 / 2.285), within noise of c5681b25 (1.879),
   which stays our board row. Work on MoE stopped here.
+- Public search (Oct 25): no top-10 MoE approach is public. lee101/openkernels (participant notes: persistent
+  tile queue, 11-op dequant, mma.sync, TMA) reports 1.418 (bs 1 48 us, bs 256 455 us); lilaclilac09 is a
+  starter kit; PostTrainLLM #206 has MoE below SGLang at 32 tokens; vLLM Humming (Oct 21) claims ~2x Marlin
+  for MXFP4 W4A16 MoE at medium-large batch on H200 (we are 2.1-2.3x there), small batch via cp.async +
+  mma.sync, symmetric formats decoded as zero-exponent floats (our denormal trick). Guild: stronger trade
+  offer to lurrobert/scout (we send the attention design first), pending.

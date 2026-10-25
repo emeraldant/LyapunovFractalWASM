@@ -1,0 +1,70 @@
+  prof bs256 v8         full gemm1 (25 exp): 1664 items on 132 SMs, span 180.5 us, 2.61 TB/s; slot use 91%; 90% done at 173.3 us (tail 7.2); starts 74.0/149.5/153.3 us (p50/p90/max); SM clock 1.686 GHz; item 25.9 us med, 31.0 p90; producer waits 21%; items/SM 13 max 12.6 mean
+  prof bs256 v8         full gemm2 (25 exp): 832 items on 132 SMs, span 98.6 us, 2.39 TB/s; slot use 82%; 90% done at 89.9 us (tail 8.7); starts 28.4/60.2/75.3 us (p50/p90/max); SM clock 1.688 GHz; item 24.8 us med, 30.0 p90; producer waits 22%; items/SM 7 max 6.3 mean
+  prof bs256 v8      no math gemm1 (25 exp): 1664 items on 132 SMs, span 134.7 us, 3.50 TB/s; slot use 87%; 90% done at 123.4 us (tail 11.3); starts 60.9/102.9/120.3 us (p50/p90/max); SM clock 1.947 GHz; item 18.2 us med, 22.3 p90; producer waits 47%; items/SM 14 max 12.6 mean
+  prof bs256 v8      no math gemm2 (25 exp): 832 items on 132 SMs, span 76.3 us, 3.09 TB/s; slot use 77%; 90% done at 64.0 us (tail 12.3); starts 24.3/43.8/62.0 us (p50/p90/max); SM clock 1.948 GHz; item 17.9 us med, 22.0 p90; producer waits 50%; items/SM 8 max 6.3 mean
+  prof bs256 v8    math only gemm1 (25 exp): 1664 items on 132 SMs, span 145.9 us, 3.23 TB/s; slot use 89%; 90% done at 130.6 us (tail 15.4); starts 57.1/112.6/124.4 us (p50/p90/max); SM clock 1.794 GHz; item 16.4 us med, 31.7 p90; producer waits 48%; items/SM 13 max 12.6 mean
+  prof bs256 v8    math only gemm2 (25 exp): 832 items on 132 SMs, span 77.1 us, 3.06 TB/s; slot use 80%; 90% done at 66.6 us (tail 10.5); starts 22.3/50.7/54.5 us (p50/p90/max); SM clock 1.779 GHz; item 16.4 us med, 29.4 p90; producer waits 43%; items/SM 7 max 6.3 mean
+  prof bs256 v8    loop only gemm1 (25 exp): 1664 items on 132 SMs, span 70.9 us, 6.65 TB/s; slot use 83%; 90% done at 62.0 us (tail 9.0); starts 31.0/51.7/60.9 us (p50/p90/max); SM clock 1.792 GHz; item 9.2 us med, 10.0 p90; producer waits 41%; items/SM 14 max 12.6 mean
+  prof bs256 v8    loop only gemm2 (25 exp): 832 items on 132 SMs, span 36.4 us, 6.49 TB/s; slot use 69%; 90% done at 28.4 us (tail 7.9); starts 10.8/19.7/27.9 us (p50/p90/max); SM clock 1.787 GHz; item 7.9 us med, 8.2 p90; producer waits 52%; items/SM 8 max 6.3 mean
+  prof bs256 v8   timed fine gemm1 (25 exp): 1664 items on 132 SMs, span 191.0 us, 2.47 TB/s; slot use 90%; 90% done at 175.4 us (tail 15.6); starts 75.3/151.3/168.2 us (p50/p90/max); SM clock 1.730 GHz; item 26.1 us med, 34.0 p90; warp time: data wait 18%, tensor wait 7%, rest 75% (decode 35%, fence+issue 19%); producer waits 21%; items/SM 13 max 12.6 mean
+  prof bs256 v8   timed fine gemm2 (25 exp): 832 items on 132 SMs, span 103.9 us, 2.27 TB/s; slot use 83%; 90% done at 98.8 us (tail 5.1); starts 34.0/70.1/77.1 us (p50/p90/max); SM clock 1.691 GHz; item 24.8 us med, 34.0 p90; warp time: data wait 17%, tensor wait 7%, rest 76% (decode 36%, fence+issue 19%); producer waits 22%; items/SM 7 max 6.3 mean
+  prof bs128 v8         full gemm1 (21 exp): 1344 items on 132 SMs, span 146.2 us, 2.71 TB/s; slot use 88%; 90% done at 139.0 us (tail 7.2); starts 55.8/115.2/121.6 us (p50/p90/max); SM clock 1.715 GHz; item 24.6 us med, 29.7 p90; producer waits 22%; items/SM 11 max 10.2 mean
+  prof bs128 v8         full gemm2 (21 exp): 672 items on 132 SMs, span 82.7 us, 2.40 TB/s; slot use 75%; 90% done at 73.2 us (tail 9.5); starts 25.1/48.9/56.8 us (p50/p90/max); SM clock 1.720 GHz; item 23.3 us med, 28.1 p90; producer waits 23%; items/SM 6 max 5.1 mean
+  prof bs128 v8      no math gemm1 (21 exp): 1344 items on 132 SMs, span 113.7 us, 3.49 TB/s; slot use 86%; 90% done at 104.4 us (tail 9.2); starts 44.8/84.0/97.8 us (p50/p90/max); SM clock 1.956 GHz; item 18.7 us med, 22.8 p90; producer waits 50%; items/SM 12 max 10.2 mean
+  prof bs128 v8      no math gemm2 (21 exp): 672 items on 132 SMs, span 60.9 us, 3.25 TB/s; slot use 79%; 90% done at 60.4 us (tail 0.5); starts 25.1/46.1/46.8 us (p50/p90/max); SM clock 1.962 GHz; item 20.5 us med, 21.8 p90; producer waits 51%; items/SM 6 max 5.1 mean
+  prof bs128 v8    math only gemm1 (21 exp): 1344 items on 132 SMs, span 116.0 us, 3.42 TB/s; slot use 87%; 90% done at 106.8 us (tail 9.2); starts 45.3/82.2/92.9 us (p50/p90/max); SM clock 1.797 GHz; item 15.9 us med, 28.7 p90; producer waits 47%; items/SM 11 max 10.2 mean
+  prof bs128 v8    math only gemm2 (21 exp): 672 items on 132 SMs, span 63.5 us, 3.12 TB/s; slot use 77%; 90% done at 54.8 us (tail 8.7); starts 17.4/33.5/48.4 us (p50/p90/max); SM clock 1.769 GHz; item 15.9 us med, 26.6 p90; producer waits 44%; items/SM 6 max 5.1 mean
+  prof bs128 v8    loop only gemm1 (21 exp): 1344 items on 132 SMs, span 60.7 us, 6.53 TB/s; slot use 77%; 90% done at 51.5 us (tail 9.2); starts 21.0/41.2/50.4 us (p50/p90/max); SM clock 1.787 GHz; item 9.2 us med, 9.7 p90; producer waits 42%; items/SM 12 max 10.2 mean
+  prof bs128 v8    loop only gemm2 (21 exp): 672 items on 132 SMs, span 30.7 us, 6.45 TB/s; slot use 65%; 90% done at 28.7 us (tail 2.0); starts 11.0/20.0/20.5 us (p50/p90/max); SM clock 1.784 GHz; item 7.7 us med, 7.9 p90; producer waits 55%; items/SM 6 max 5.1 mean
+  prof bs128 v8   timed fine gemm1 (21 exp): 1344 items on 132 SMs, span 157.4 us, 2.52 TB/s; slot use 86%; 90% done at 146.7 us (tail 10.8); starts 63.2/124.9/128.8 us (p50/p90/max); SM clock 1.730 GHz; item 24.3 us med, 32.0 p90; warp time: data wait 19%, tensor wait 7%, rest 75% (decode 35%, fence+issue 19%); producer waits 21%; items/SM 11 max 10.2 mean
+  prof bs128 v8   timed fine gemm2 (21 exp): 672 items on 132 SMs, span 90.4 us, 2.19 TB/s; slot use 75%; 90% done at 76.3 us (tail 14.1); starts 26.6/50.2/66.6 us (p50/p90/max); SM clock 1.720 GHz; item 23.3 us med, 32.0 p90; warp time: data wait 17%, tensor wait 7%, rest 77% (decode 36%, fence+issue 19%); producer waits 24%; items/SM 6 max 5.1 mean
+routing bs256 seed 8800000: tokens per local expert [256, 68, 37, 35, 30, 28, 24, 17, 17, 13, 12, 11, 11, 10, 9, 8, 8, 7, 6, 5, 2, 1, 1, 1, 1]
+check v8 bs256: rel diff vs v6 5.4e-04, row worst 1.2e-03, repeat equal
+routing bs128 seed 8800001: tokens per local expert [60, 32, 15, 9, 9, 7, 6, 5, 5, 5, 5, 5, 3, 3, 3, 2, 2, 2, 1, 1, 1, 1]
+check v8 bs128: rel diff vs v6 5.6e-04, row worst 1.2e-03, repeat equal
+  cta bs256 s2q abl 0 gemm1: 264 CTAs; entry 0.0/0.0/0.3; producer first issue 4.4/86.0/168.7; consumer first data 8.4/88.8/175.1; last item end 186.9; exit 170.5/182.5/187.6 us (min/p50/max)
+  prof bs256 s2q         full gemm1 (25 exp): 2368 items on 132 SMs, span 182.5 us, 2.59 TB/s; slot use 87%; 90% done at 173.8 us (tail 8.7); starts 81.7/153.3/164.4 us (p50/p90/max); SM clock 1.719 GHz; item 15.4 us med, 25.9 p90; producer waits 45%; items/SM 18 max 17.9 mean
+  cta bs256 s2q abl 0 gemm2: 264 CTAs; entry 0.0/0.3/0.5; producer first issue 3.1/38.4/82.2; consumer first data 7.7/41.5/87.6; last item end 102.9; exit 83.5/92.2/103.2 us (min/p50/max)
+  prof bs256 s2q         full gemm2 (25 exp): 1184 items on 132 SMs, span 99.8 us, 2.36 TB/s; slot use 79%; 90% done at 90.6 us (tail 9.2); starts 35.3/74.5/79.1 us (p50/p90/max); SM clock 1.684 GHz; item 15.1 us med, 26.9 p90; producer waits 45%; items/SM 10 max 9.0 mean
+  cta bs256 s2q abl 1 gemm1: 264 CTAs; entry 0.0/0.3/0.3; producer first issue 2.3/67.6/130.6; consumer first data 7.7/71.7/136.2; last item end 142.6; exit 131.8/139.8/142.8 us (min/p50/max)
+  prof bs256 s2q      no math gemm1 (25 exp): 2368 items on 132 SMs, span 140.3 us, 3.36 TB/s; slot use 76%; 90% done at 133.4 us (tail 6.9); starts 65.3/113.9/128.3 us (p50/p90/max); SM clock 1.967 GHz; item 11.5 us med, 15.6 p90; producer waits 67%; items/SM 22 max 17.9 mean
+  cta bs256 s2q abl 1 gemm2: 264 CTAs; entry 0.0/0.3/0.5; producer first issue 2.0/34.3/63.7; consumer first data 5.9/38.1/67.8; last item end 73.2; exit 62.5/68.1/73.7 us (min/p50/max)
+  prof bs256 s2q      no math gemm2 (25 exp): 1184 items on 132 SMs, span 71.2 us, 3.32 TB/s; slot use 70%; 90% done at 66.6 us (tail 4.6); starts 32.3/53.5/61.7 us (p50/p90/max); SM clock 1.958 GHz; item 11.0 us med, 14.3 p90; producer waits 67%; items/SM 10 max 9.0 mean
+  cta bs256 s2q abl 4 gemm1: 264 CTAs; entry 0.0/0.0/0.3; producer first issue 2.8/68.4/143.6; consumer first data 3.8/72.7/151.6; last item end 161.5; exit 146.7/154.9/161.8 us (min/p50/max)
+  prof bs256 s2q    math only gemm1 (25 exp): 2368 items on 132 SMs, span 158.7 us, 2.97 TB/s; slot use 91%; 90% done at 147.5 us (tail 11.3); starts 65.5/127.7/140.8 us (p50/p90/max); SM clock 1.797 GHz; item 14.1 us med, 23.3 p90; producer waits 89%; items/SM 19 max 17.9 mean
+  cta bs256 s2q abl 4 gemm2: 264 CTAs; entry 0.0/0.0/0.0; producer first issue 1.5/25.3/64.3; consumer first data 2.6/29.7/68.1; last item end 77.8; exit 66.8/76.3/78.3 us (min/p50/max)
+  prof bs256 s2q    math only gemm2 (25 exp): 1184 items on 132 SMs, span 76.3 us, 3.09 TB/s; slot use 92%; 90% done at 74.8 us (tail 1.5); starts 23.6/59.1/62.7 us (p50/p90/max); SM clock 1.779 GHz; item 12.8 us med, 24.3 p90; producer waits 88%; items/SM 9 max 9.0 mean
+  cta bs256 s2q abl 12 gemm1: 264 CTAs; entry 0.0/0.3/0.5; producer first issue 2.8/46.3/99.6; consumer first data 4.1/49.4/105.5; last item end 111.1; exit 101.1/105.5/111.1 us (min/p50/max)
+  prof bs256 s2q  decode only gemm1 (25 exp): 2368 items on 132 SMs, span 108.3 us, 4.36 TB/s; slot use 87%; 90% done at 99.6 us (tail 8.7); starts 43.5/86.8/96.8 us (p50/p90/max); SM clock 1.982 GHz; item 10.5 us med, 15.4 p90; producer waits 89%; items/SM 19 max 17.9 mean
+  cta bs256 s2q abl 12 gemm2: 264 CTAs; entry 0.0/0.3/0.3; producer first issue 1.8/20.7/46.3; consumer first data 2.8/22.5/49.2; last item end 56.8; exit 47.6/52.7/57.1 us (min/p50/max)
+  prof bs256 s2q  decode only gemm2 (25 exp): 1184 items on 132 SMs, span 55.0 us, 4.29 TB/s; slot use 85%; 90% done at 50.9 us (tail 4.1); starts 18.9/38.4/44.5 us (p50/p90/max); SM clock 1.958 GHz; item 10.8 us med, 13.6 p90; producer waits 88%; items/SM 10 max 9.0 mean
+  cta bs256 s2q abl 28 gemm1: 264 CTAs; entry 0.0/0.0/0.3; producer first issue 1.5/42.8/87.6; consumer first data 2.6/44.8/91.1; last item end 94.7; exit 89.3/93.2/95.0 us (min/p50/max)
+  prof bs256 s2q    loop only gemm1 (25 exp): 2368 items on 132 SMs, span 93.2 us, 5.06 TB/s; slot use 88%; 90% done at 89.3 us (tail 3.8); starts 41.2/77.3/86.0 us (p50/p90/max); SM clock 1.992 GHz; item 10.2 us med, 12.3 p90; producer waits 89%; items/SM 19 max 17.9 mean
+  cta bs256 s2q abl 28 gemm2: 264 CTAs; entry 0.0/0.3/0.3; producer first issue 1.0/18.9/41.0; consumer first data 2.0/21.0/44.0; last item end 50.9; exit 42.8/45.6/51.2 us (min/p50/max)
+  prof bs256 s2q    loop only gemm2 (25 exp): 1184 items on 132 SMs, span 49.9 us, 4.73 TB/s; slot use 81%; 90% done at 45.8 us (tail 4.1); starts 17.9/35.8/39.9 us (p50/p90/max); SM clock 1.975 GHz; item 10.0 us med, 12.5 p90; producer waits 89%; items/SM 10 max 9.0 mean
+routing bs256 seed 8800000: tokens per local expert [256, 68, 37, 35, 30, 28, 24, 17, 17, 13, 12, 11, 11, 10, 9, 8, 8, 7, 6, 5, 2, 1, 1, 1, 1]
+check s2q bs256: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 02:11:06 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

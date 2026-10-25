@@ -614,3 +614,13 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   multipliers): the current 8-op unpack (5 LOP3 + 2 SHF + 1 IMAD) stays. Main loop per 8 weights
   (SASS, s1dw): 6 LOP3, 2 SHF, 1 LEA, 1 IMAD, 4 HMUL2, 1 HMMA, 0.5 LDS, 0.5 LDSM: ALU-pipe bound
   (18.4 clk per warp-octet vs 16.7 issue).
+- v8 / s2q ablations at bs 256 / 128 (attention-host check 0e41e7bf, synthetic weights, 25 / 21 experts,
+  profiling build, cold L2), GEMM1 / GEMM2 span us:
+  v8 bs 256: full 180.5 / 98.6, no math 134.7 / 76.3 (3.5 / 3.1 TB/s), math only 145.9 / 77.1,
+  loop only (unpack kept, no scale/MMA/memory) 70.9 / 36.4; timed: data wait 18%, tensor wait 7%,
+  decode 35%, fence + issue 19%; producers blocked on free slots 21%. SM clock 1.95 GHz memory-only,
+  1.79 math-only, 1.69-1.73 full (power cap: math costs clock). v8 bs 128: 146.2 / 82.7 full,
+  113.7 / 60.9 no math, 116.0 / 63.5 math only. s2q bs 256: 182.5 / 99.8 full, 140.3 / 71.2 no math,
+  158.7 / 76.3 math only, decode only 108.3 / 55.0, loop only 93.2 / 49.9.
+  -> large batch loses ~25-35 us per GEMM1 to math / memory overlap (full vs max), plus ~13% clock
+  when math runs. v8's ring is shallow in weight bytes (activation tiles 16 KB of each 25 KB stage).

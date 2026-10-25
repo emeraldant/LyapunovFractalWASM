@@ -308,6 +308,10 @@ CUDA_CONFIGS = {
     "s1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True),
     "s2wc": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, chain=True),
     "s2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True),
+    # fused: GEMM1 and GEMM2 in one persistent launch (GEMM2 items wait per token chunk; bitwise = v6)
+    "f1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True, fused=True),
+    "f2wc": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, chain=True, fused=True),
+    "f2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True, fused=True),
     # rb 2: two 128-row blocks per item, 32 rows per consumer warp (activation fragments shared)
     "s1r2c": dict(mt=1, stages=1104, ctas_per_sm=2, sab=True, chain=True, rb=2),
     "s1r2wc": dict(mt=1, stages=1202, ctas_per_sm=2, sab=True, chain=True, rb=2),

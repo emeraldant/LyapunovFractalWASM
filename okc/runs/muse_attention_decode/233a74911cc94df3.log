@@ -1,0 +1,70 @@
+routing bs1 seed 8950040: tokens per local expert [1, 1, 1]
+check s1dw2fpc bs1: rel diff vs v6 8.8e-04, row worst 8.8e-04, repeat equal; 49.1 us (v6 s2 68.0, x1.389)
+check f1dwc bs1: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 50.6 us (v6 s2 67.8, x1.346)
+check f1c bs1: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 52.4 us (v6 s2 67.8, x1.297)
+routing bs8 seed 8950050: tokens per local expert [4, 3, 2, 2, 1, 1]
+check s1dwc bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 69.7 us (v6 s2 83.4, x1.190)
+check f1dwc bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 72.8 us (v6 s2 84.0, x1.155)
+check f1c bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 91.9 us (v6 s2 83.7, x0.913)
+check f1w2c bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 85.1 us (v6 s2 83.3, x0.978)
+routing bs16 seed 8950060: tokens per local expert [16, 3, 2, 1, 1, 1]
+check s1dwc bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 72.4 us (v6 s2 92.9, x1.280)
+check f1dwc bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 76.5 us (v6 s2 91.8, x1.184)
+check f1c bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 88.4 us (v6 s2 91.8, x1.063)
+check f1w2c bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 80.9 us (v6 s2 92.3, x1.152)
+routing bs32 seed 8950070: tokens per local expert [9, 8, 5, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1]
+check s1dwc bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 141.8 us (v6 s2 162.2, x1.145)
+check f1dwc bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 141.3 us (v6 s2 162.4, x1.144)
+check f1w2c bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 147.5 us (v6 s2 162.9, x1.103)
+check f2wc bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 134.4 us (v6 s2 162.3, x1.210)
+routing bs128 seed 8950080: tokens per local expert [128, 33, 16, 15, 10, 8, 7, 5, 5, 5, 4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 1, 1]
+check s2qc bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 254.6 us (v6 s2 322.2, x1.267)
+check f2qc bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 248.9 us (v6 s2 321.9, x1.294)
+check f2wc bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 252.2 us (v6 s2 323.2, x1.281)
+routing bs1 seed 8970040: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 7.1e-04, row worst 7.1e-04, repeat equal; 38.8 us (v6 s2 54.5, x1.395)
+check f1dwc bs1: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 41.8 us (v6 s2 54.4, x1.298)
+check f1c bs1: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 51.4 us (v6 s2 54.4, x1.053)
+routing bs8 seed 8970050: tokens per local expert [2, 2, 2, 2, 1, 1, 1, 1, 1]
+check s1dwc bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 89.7 us (v6 s2 110.8, x1.237)
+check f1dwc bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 85.6 us (v6 s2 110.5, x1.291)
+check f1c bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 101.5 us (v6 s2 110.6, x1.089)
+check f1w2c bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 97.1 us (v6 s2 111.3, x1.153)
+routing bs16 seed 8970060: tokens per local expert [16, 4, 3, 2, 1, 1, 1, 1]
+check s1dwc bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 85.8 us (v6 s2 107.2, x1.247)
+check f1dwc bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 80.1 us (v6 s2 107.0, x1.338)
+check f1c bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 99.1 us (v6 s2 107.4, x1.079)
+check f1w2c bs16: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 88.7 us (v6 s2 106.7, x1.203)
+routing bs32 seed 8970070: tokens per local expert [21, 16, 5, 3, 3, 2, 2, 2, 1, 1, 1, 1, 1, 1]
+check s1dwc bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 137.1 us (v6 s2 159.0, x1.160)
+check f1dwc bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 136.7 us (v6 s2 159.9, x1.169)
+check f1w2c bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 145.1 us (v6 s2 159.4, x1.100)
+check f2wc bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 134.5 us (v6 s2 159.3, x1.186)
+routing bs128 seed 8970080: tokens per local expert [107, 19, 16, 11, 10, 9, 7, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1]
+check s2qc bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 258.3 us (v6 s2 318.6, x1.233)
+check f2qc bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 258.9 us (v6 s2 318.2, x1.229)
+check f2wc bs128: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 259.3 us (v6 s2 318.6, x1.232)
+USDT:2026-10-25 01:48:42 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:42 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:48:42 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:42 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:48:42 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:42 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:48:43 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop

@@ -600,3 +600,17 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   (bs 8 G1 189 MB: 49.0-49.9 vs 48.8 us; 38 MB 11.0 vs 10.9); an interleaved [k block][tile] weight
   layout leaves the LDG+MMA kernel unchanged (65.6 vs 66.9). The loss is math under the stream
   (~0.5 x the decode time adds on top of memory), not the access pattern.
+- Fused GEMM1 + GEMM2 (MODE 3, MonoMoE-style one-launch queue; attention-host check 233a7491, two
+  routings, us): bitwise equal to v6. bs 1 s1dw2fpc 49.1 / 38.8 vs f1dwc 50.6 / 41.8; bs 8 s1dwc
+  69.7 / 89.7 vs f1dwc 72.8 / 85.6; bs 16 72.4 / 85.8 vs 76.5 / 80.1; bs 32 141.8 / 137.1 vs f1dwc
+  141.3 / 136.7, f2wc 134.4 / 134.5; bs 128 s2qc 254.6 / 258.3 vs f2qc 248.9 / 258.9. Neutral within
+  noise: the GEMM boundary (second ramp / wave tail) is not where small batch loses. Kept as an
+  option (fused=True), not adopted.
+- Gate check 53d0fedc (fused configs f1dwc / f2wc / f2qc as candidates): adopted only at bs 128
+  (f2qc 242.1 vs s2q 250.3 / 245.7 vs 249.0, ~2%); score in noise (decode 1 / 16 / 32, verify 1 / 16 /
+  32: 1.824 / 1.756 / 1.462 / 1.836 / 2.145 / 2.259). Not submitted.
+- Decode layout search (scratchpad lay*.py): no lossless bit layout moves the unpack's funnel shifts
+  to IMAD (left-shift + mask for one / two outputs, multiply trick for the rest, <= 3-term
+  multipliers): the current 8-op unpack (5 LOP3 + 2 SHF + 1 IMAD) stays. Main loop per 8 weights
+  (SASS, s1dw): 6 LOP3, 2 SHF, 1 LEA, 1 IMAD, 4 HMUL2, 1 HMMA, 0.5 LDS, 0.5 LDSM: ALU-pipe bound
+  (18.4 clk per warp-octet vs 16.7 issue).

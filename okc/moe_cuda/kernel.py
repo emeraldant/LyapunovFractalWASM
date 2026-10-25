@@ -2417,6 +2417,9 @@ void moe_gemm_wg(int64_t mode, int64_t n_tok, int64_t stages, torch::Tensor a_sr
     GPCASET(1, 16, 4, 96) GPCASET(2, 16, 4, 96) GPCASET(1, 32, 4, 96) GPCASET(2, 32, 4, 96)
 #define GPCASETW(M_, N_, S_, A_) if (mode == M_ && n_tok == N_ && stages == 400 + S_ && abl == A_) { launch_wg<M_, N_, S_, true, A_, true, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, (int)pfd); return; }
     GPCASETW(2, 32, 4, 0) GPCASETW(2, 32, 4, 96)
+#define GPCASEV(M_, S_, A_) if (mode == M_ && n_tok == 64 && stages == 500 + S_ && abl == A_) { launch_wg<M_, 64, S_, true, A_, true, false, true, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, (int)pfd); return; }
+#define GPCASEVS(A_) GPCASEV(1, 4, A_) GPCASEV(2, 4, A_)
+    GPCASEVS(0) GPCASEVS(1) GPCASEVS(4) GPCASEVS(28) GPCASEVS(96)   // v8 (VARN) ablations
 #endif
     TORCH_CHECK(false, "moe_gemm_wg: no profiling build for this configuration (needs -DOKC_PROF)");
   }

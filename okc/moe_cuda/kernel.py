@@ -299,6 +299,11 @@ __device__ __forceinline__ void mbar_arrive(uint32_t bar) {
 #define STAGE_ARRIVALS 256
 #endif
 __device__ __forceinline__ void stage_release(uint32_t bar, int lane) {
+  // Generic-proxy reads (LDS / ldmatrix) of the stage, then its refill by cp.async.bulk (async
+  // proxy): the PTX memory model needs this fence before the arrive, or ptxas may hoist the arrive
+  // above the last reads and the refill can overwrite live data (Guild #42: 1-19% of launches at
+  // 2 / 3 / 5 stages).
+  asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
 #ifdef OKC_ARRIVE1
   __syncwarp();
   asm volatile("{\n .reg .pred p;\n setp.eq.u32 p, %1, 0;\n @p mbarrier.arrive.shared::cta.b64 _, [%0];\n}\n"
@@ -748,7 +753,7 @@ struct SabCfg {
 };
 
 template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0, int SUB = 1, int RB = 1>
-__global__ void __launch_bounds__(288, RB > 1 ? 2 : (MT == 1 ? 4 : 3)) moe_gemm_sab_kernel(
+__global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 : 3)) moe_gemm_sab_kernel(
     const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
     const uint8_t* __restrict__ wq, const uint8_t* __restrict__ ws, const float* __restrict__ gs,
     const int32_t* __restrict__ active, const int32_t* __restrict__ n_active_ptr,
@@ -1192,7 +1197,8 @@ __global__ void __launch_bounds__(288, RB > 1 ? 2 : (MT == 1 ? 4 : 3)) moe_gemm_
       }
     };
     if (MT > 1 && __any_sync(0xffffffffu, groups > 1)) {
-      chunks(IntC<MT>{});
+      if (MT >= 4 && groups <= 2) chunks(IntC<(MT >= 4 ? 2 : MT)>{});   // MT 4 item with <= 16 tokens
+      else chunks(IntC<MT>{});
     } else {
       chunks(IntC<1>{});
     }
@@ -2265,9 +2271,10 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
   // 200 + S: two 128-k chunks per stage (16 KB weight copies)
 #define SCASE2(M_, T_, S_) if (mode == M_ && mt == T_ && stages == 200 + S_) { launch_sab<M_, T_, S_, false, 0, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
   SCASE2(1, 1, 2) SCASE2(2, 1, 2) SCASE2(1, 2, 2) SCASE2(2, 2, 2) SCASE2(1, 1, 4) SCASE2(2, 1, 4)
+  SCASE2(1, 4, 2) SCASE2(2, 4, 2) SCASE2(1, 4, 4) SCASE2(2, 4, 4)   // 32 tokens per item: decode once for 4 groups
   // 400 + S: four 128-k chunks per stage (32 KB weight copies)
 #define SCASE4(M_, T_, S_) if (mode == M_ && mt == T_ && stages == 400 + S_) { launch_sab<M_, T_, S_, false, 0, 4>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
-  SCASE4(1, 1, 2) SCASE4(2, 1, 2) SCASE4(1, 2, 2) SCASE4(2, 2, 2)
+  SCASE4(1, 1, 2) SCASE4(2, 1, 2) SCASE4(1, 2, 2) SCASE4(2, 2, 2) SCASE4(1, 4, 2) SCASE4(2, 4, 2)
   // 1000 + 100 * SUB + S: two 128-row blocks per item (RB 2: 32 rows per consumer warp)
 #define SCASER(M_, T_, U_, S_) if (mode == M_ && mt == T_ && stages == 1000 + 100 * U_ + S_) { launch_sab<M_, T_, S_, false, 0, U_, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
   SCASER(1, 1, 1, 4) SCASER(2, 1, 1, 4) SCASER(1, 2, 1, 4) SCASER(2, 2, 1, 4) SCASER(1, 1, 2, 2) SCASER(2, 1, 2, 2)

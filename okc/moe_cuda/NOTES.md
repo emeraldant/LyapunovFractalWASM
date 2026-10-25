@@ -624,3 +624,6 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   158.7 / 76.3 math only, decode only 108.3 / 55.0, loop only 93.2 / 49.9.
   -> large batch loses ~25-35 us per GEMM1 to math / memory overlap (full vs max), plus ~13% clock
   when math runs. v8's ring is shallow in weight bytes (activation tiles 16 KB of each 25 KB stage).
+- Final scored run 8f564da9 (chained build + proxy fence + fused option in the gate): 1.869 (decode 1 / 16 /
+  32, verify 1 / 16 / 32: 1.825 / 1.768 / 1.461 / 1.851 / 2.136 / 2.285), within noise of c5681b25 (1.879),
+  which stays our board row. Work on MoE stopped here.

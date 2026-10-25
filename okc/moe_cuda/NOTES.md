@@ -580,3 +580,14 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   version: bs 1 39.8 / 39.0 / 49.8 vs 39.8 / 39.9 / 49.2 (equal), bs 8 +6-16%, bs 16 +12-36%. The
   norm on GEMM2's critical path costs more than the separate post kernel (parallel over tokens,
   launch overlapped by the chain). Refuted.
+- stage_release now fences the async proxy (fence.proxy.async.shared::cta) before releasing a ring
+  slot (Guild #42): a correctness fix, cost ~0 on the judge.
+- MT 4 (four 8-row token tiles per CTA, 1 CTA/SM): slower at every size (bs 128 s4qc 262.9 vs s2qc
+  238.6 us). Refuted.
+- Leaderboard (2026-10-25): #1 2.523, #2-#10 2.387 -> 2.335, 14 teams in 2.31-2.39; us 1.879 (124th).
+  The tight cluster suggests a shared approach rather than one team's trick.
+- Prior art read: chord/humming (H200 decode swap-AB mma.sync, warp-N 64, 3 CTAs/SM, cp.async ring
+  4-6, semi-static token tiles, block-M from the routing; ~3.2-3.6 TB/s, level with ours). MonoMoE
+  (arXiv 2609.04244): weight-major persistent megakernel, 8 compute + 4 prefetch warps, TMA several
+  items ahead across expert boundaries, readiness flags between up and down, atomicAdd down partials,
+  epilogues on the prefetch warps, routing/top-k fused; 1.17-1.54x over vLLM grouped GEMM at B 1-8.

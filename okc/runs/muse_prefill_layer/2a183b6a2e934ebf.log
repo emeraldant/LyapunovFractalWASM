@@ -1,0 +1,21 @@
+ldg probe: compiled in 40 s
+ldg2 bs1 G1 2x8192 37.7 MB (us): plain 10.9; region s2 D2 11.2; region s2 D4 11.1; region s4 D2 11.0; region s4 D4 11.3; mma D2 s4 2x512 17.7; mma D2 s2 2x512 26.8; mma D4 s2 1x512 18.1; mma D2 s8 2x512 19.0; mma-IL D2 s4 2x512 17.4; mma-IL D2 s2 2x512 27.0; mma-IL D4 s2 1x512 18.8; mma-IL D2 s8 2x512 18.7
+ldg2 bs1 G2 2x4096 18.9 MB (us): plain 5.8; region s2 D2 6.9; region s2 D4 6.6; region s4 D2 6.4; region s4 D4 6.5; mma D2 s4 2x512 16.0; mma D2 s2 2x512 16.4; mma D4 s2 1x512 15.8; mma D2 s8 2x512 11.8; mma-IL D2 s4 2x512 16.0; mma-IL D2 s2 2x512 17.0; mma-IL D4 s2 1x512 16.2; mma-IL D2 s8 2x512 11.8
+ldg2 bs8 G1 10x8192 188.7 MB (us): plain 48.8; region s2 D2 49.2; region s2 D4 49.9; region s4 D2 49.0; region s4 D4 52.5; mma D2 s4 2x512 65.6; mma D2 s2 2x512 73.2; mma D4 s2 1x512 68.4; mma D2 s8 2x512 69.1; mma-IL D2 s4 2x512 66.9; mma-IL D2 s2 2x512 73.5; mma-IL D4 s2 1x512 72.0; mma-IL D2 s8 2x512 69.5
+ldg2 bs8 G2 10x4096 94.4 MB (us): plain 25.0; region s2 D2 26.7; region s2 D4 26.0; region s4 D2 25.2; region s4 D4 27.5; mma D2 s4 2x512 40.6; mma D2 s2 2x512 39.0; mma D4 s2 1x512 41.8; mma D2 s8 2x512 38.0; mma-IL D2 s4 2x512 41.1; mma-IL D2 s2 2x512 39.2; mma-IL D4 s2 1x512 43.3; mma-IL D2 s8 2x512 38.1
+USDT:2026-10-25 01:28:41 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:28:41 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:28:41 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:28:41 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:28:42 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:28:42 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:28:42 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:28:43 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:28:43 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:28:44 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:28:45 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:28:45 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:28:46 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:28:47 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-25 01:28:48 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-25 01:28:49 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

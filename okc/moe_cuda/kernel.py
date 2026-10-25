@@ -737,6 +737,12 @@ struct PostArgs {
   int M;
   int P;
   int mode;
+  // Fused (MODE 3): GEMM2's operands; items [total1, total1 + n_active * nb2) are GEMM2 items.
+  const uint8_t* wq2;
+  const uint8_t* ws2;
+  const float* gs2;
+  __nv_bfloat16* out2;
+  int nb2;
 };
 
 // RB = 128-row blocks per item: 2 gives each consumer warp 32 output rows (two m16 tiles) that
@@ -752,6 +758,18 @@ struct SabCfg {
   static constexpr int STAGE = A_STAGE + RB * (W_STAGE + S_STAGE);
 };
 
+__device__ __forceinline__ int ld_acq_gpu(const int* p) {
+  int v;
+  asm volatile("ld.acquire.gpu.global.s32 %0, [%1];\n" : "=r"(v) : "l"(p) : "memory");
+  return v;
+}
+
+// MODE 3 (fused, MonoMoE-style): one persistent launch runs GEMM1's items, then GEMM2's (operands in
+// pa.wq2 / ws2 / gs2 / out2, pa.nb2 row blocks), on one work queue. A GEMM2 item's producer issues its
+// first stages' weight copies at once and waits only before its activation rows: counters[chunk]
+// counts the chunk's finished GEMM1 items (n_blocks of them); counters[4096 + chunk] counts its
+// finished GEMM2 items, and the last one resets both. So GEMM2's weights stream under GEMM1's tail and
+// there is no second launch, ramp or wave tail. (kparts 1, no stream K / RB / prefetch options.)
 template <int MODE, int MT, int STAGES, bool PROF, int ABL = 0, int SUB = 1, int RB = 1>
 __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 : 3)) moe_gemm_sab_kernel(
     const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route,
@@ -825,7 +843,9 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
     for (size_t i = gt; i < (size_t)pa.M * KTOT / 4; i += gn) reinterpret_cast<float4*>(pa.out32)[i] = make_float4(0.f, 0.f, 0.f, 0.f);
     for (size_t i = gt; i < (size_t)pa.M * KTOT / 8; i += gn) reinterpret_cast<uint4*>(pa.outb)[i] = make_uint4(0u, 0u, 0u, 0u);
   }
-  const int total = *n_active_ptr * n_blocks * kparts;
+  const int total = *n_active_ptr * n_blocks * kparts;   // (fused: GEMM1's items)
+  constexpr bool FZ = MODE == 3;
+  const int total_all = FZ ? total + *n_active_ptr * pa.nb2 : total;
   const int nch = NCHUNK / kparts;   // chunks per item
   // Stream K (sk, kparts = partial slots >= 2): the items' K ranges, in units of STAGES chunks,
   // laid end to end and cut into geff equal CTA ranges [s0, s1), so every CTA (and, at a full
@@ -935,7 +955,7 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
         nx_step = 0;
         item = nx_item;
         have_nx = true;
-        done = item >= total;
+        done = item >= total_all;
         kb = (item % kparts) * nch;
         ke = kb + nch;
       } else if (sk) {
@@ -951,7 +971,7 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
           if (lane == 0) item = (int)gridDim.x + atomicAdd(sched, 1);
           item = __shfl_sync(0xffffffffu, item, 0);
         }
-        done = item >= total;
+        done = item >= total_all;
         kb = (item % kparts) * nch;
         ke = kb + nch;
       }
@@ -970,25 +990,61 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
         if (flags & 16) asm volatile("griddepcontrol.wait;\n" ::: "memory");
         return;
       }
-      const int it = sk ? item : item / kparts;
-      const int nb = it % n_blocks;
-      const int ch = have_nx ? nx_ch : active[it / n_blocks];
+      const bool g2 = FZ && item >= total;   // fused: a GEMM2 item
+      const int nbk = g2 ? pa.nb2 : n_blocks;
+      const int it = g2 ? item - total : sk ? item : item / kparts;
+      const int nb = it % nbk;
+      const int ch = have_nx ? nx_ch : active[it / nbk];
       const int e = ch & 255, mc = ch >> 8;
       const int es0 = have_nx ? nx_es0 : exp_start[e], es1 = have_nx ? nx_es1 : exp_start[e + 1];
       const int row0 = es0 + mc * MT * 8;
       const int live = min(MT * 8, es1 - row0);
       int src = 0;
       if (have_nx) src = nx_src;
-      else if (lane < live) src = MODE == 1 ? row_route[row0 + lane] / 8 : row0 + lane;
-      const uint8_t* a_row = reinterpret_cast<const uint8_t*>(a_src + (size_t)src * KTOT);
-      const uint8_t* w_blk = wq + ((size_t)e * n_blocks + nb) * RB * NCHUNK * C::W_STAGE;   // block nb * RB
-      const uint8_t* s_blk = ws + ((size_t)e * n_blocks + nb) * RB * NCHUNK * C::S_STAGE;
+      else if (lane < live) src = (MODE == 1 || (FZ && !g2)) ? row_route[row0 + lane] / 8 : row0 + lane;
+      const uint8_t* a_row = reinterpret_cast<const uint8_t*>((g2 ? out : a_src) + (size_t)src * KTOT);
+      const uint8_t* w_blk = (g2 ? pa.wq2 : wq) + ((size_t)e * nbk + nb) * RB * NCHUNK * C::W_STAGE;   // block nb * RB
+      const uint8_t* s_blk = (g2 ? pa.ws2 : ws) + ((size_t)e * nbk + nb) * RB * NCHUNK * C::S_STAGE;
       const uint32_t tx = (abl & 4) ? 0u : ((abl & 2) ? 0u : live * 256 * SUB) + RB * (C::W_STAGE + C::S_STAGE);
       // profiling record: one per item (stream K: per item segment)
       const int prec = sk ? item * kparts + (int)blockIdx.x - ((it * NU + 1) * geff - 1) / U : item;
       long long pw = 0;
       if (PROF && lane == 0) prof[prec * PSTR + 6] = gtimer();
-      for (int kc = kb; kc < ke; ++kc, ++f) {
+      int kpre = kb;   // fused GEMM2 item: stages [kb, kpre) went out (weights) before the readiness wait
+      if (FZ && g2) {
+        const int* rdy = counters + it / nbk;
+        int ok = 0;
+        if (lane == 0) ok = ld_acq_gpu(rdy) >= n_blocks;
+        ok = __shfl_sync(0xffffffffu, ok, 0);
+        if (!ok) {
+          const uint32_t f0 = f;
+          const int np = min(STAGES, ke - kb);
+          for (int j = 0; j < np; ++j, ++f) {
+            const uint32_t st = f % STAGES;
+            if (f >= STAGES) mbar_wait(bar_empty + 8 * st, ((f / STAGES) - 1) & 1);
+            const uint32_t sb = base + st * C::STAGE, full = bar_full + 8 * st;
+            if (lane == 0) {
+              hdr[st] = item;
+              mbar_expect_tx(full, tx);
+              bulk_g2s(sb + C::A_STAGE, w_blk + (size_t)(kb + j) * C::W_STAGE, C::W_STAGE, full);
+              bulk_g2s(sb + C::A_STAGE + C::W_STAGE, s_blk + (size_t)(kb + j) * C::S_STAGE, C::S_STAGE, full);
+            }
+            __syncwarp();
+          }
+          if (lane == 0)
+            while (ld_acq_gpu(rdy) < n_blocks) __nanosleep(64);
+          __syncwarp();
+          asm volatile("fence.proxy.async.global;\n" ::: "memory");
+          for (int j = 0; j < np; ++j) {
+            const uint32_t st = (f0 + j) % STAGES;
+            if (lane < live) bulk_g2s(base + st * C::STAGE + lane * C::A_ROW, a_row + (kb + j) * 256 * SUB, 256 * SUB, bar_full + 8 * st);
+          }
+          kpre = kb + np;
+        } else {
+          asm volatile("fence.proxy.async.global;\n" ::: "memory");
+        }
+      }
+      for (int kc = kpre; kc < ke; ++kc, ++f) {
         const uint32_t st = f % STAGES;
         long long c0 = PROF ? clock64() : 0;
         if (f >= STAGES) mbar_wait(bar_empty + 8 * st, ((f / STAGES) - 1) & 1);
@@ -1034,7 +1090,11 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
     mbar_wait(bar_full, (f / STAGES) & 1);
     const int item = hdr[0];
     if (item < 0) break;
-    int kp = item % kparts, it = item / kparts, nchi = nch, nseg = 0;
+    const bool g2 = FZ && item >= total;   // fused: a GEMM2 item
+    const bool m1 = MODE == 1 || (FZ && !g2);
+    const int nbk = g2 ? pa.nb2 : n_blocks;
+    __nv_bfloat16* const outp = g2 ? pa.out2 : out;
+    int kp = item % kparts, it = g2 ? item - total : item / kparts, nchi = nch, nseg = 0;
     if (sk) {
       it = item;
       const int i0 = it * NU;
@@ -1044,13 +1104,13 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
       nseg = ((i0 + NU) * geff - 1) / U - vfirst + 1;
     }
     const int prec = sk ? it * kparts + kp : item;   // profiling record
-    const int nb = it % n_blocks;
-    const int ch = active[it / n_blocks];
+    const int nb = it % nbk;
+    const int ch = active[it / nbk];
     const int e = ch & 255, mc = ch >> 8;
     const int row0 = exp_start[e] + mc * MT * 8;
     const int rows_e = exp_start[e + 1] - row0;
     const int groups = min(MT, (rows_e + 7) / 8);
-    const float gsc = gs[e] * 256.0f;
+    const float gsc = (g2 ? pa.gs2 : gs)[e] * 256.0f;
     long long ct0 = 0;
     if (PROF && warp == 0) {
       ct0 = clock64();
@@ -1364,7 +1424,7 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
 #pragma unroll
       for (int i = 0; i < 2; ++i) {
         const float lo = (accs[h][0][t][i] + accs[h][1][t][i]) * gsc, hi = (accs[h][0][t][2 + i] + accs[h][1][t][2 + i]) * gsc;
-        if (MODE == 1) {
+        if (m1) {
           y[0][i] = lo / (1.f + __expf(-lo)) * hi;
         } else {
           y[0][i] = lo;
@@ -1374,14 +1434,27 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
       const bool odd = r & 1;
       const int tok = row0 + t * 8 + c + (odd ? 1 : 0);
 #pragma unroll
-      for (int blk = 0; blk < (MODE == 1 ? 1 : 2); ++blk) {
+      for (int blk = 0; blk < (m1 ? 1 : 2); ++blk) {
         const float mine_keep = odd ? y[blk][1] : y[blk][0];
         const float give = odd ? y[blk][0] : y[blk][1];
         const float got = __shfl_xor_sync(0xffffffffu, give, 4);
-        const int n = MODE == 1 ? 8 * (nbh * 8 + warp) + (r & ~1) : 8 * (nbh * 16 + 2 * warp + blk) + (r & ~1);
+        const int n = m1 ? 8 * (nbh * 8 + warp) + (r & ~1) : 8 * (nbh * 16 + 2 * warp + blk) + (r & ~1);
         if (tok < row0 + rows_e) {
           __nv_bfloat162 pr = odd ? __floats2bfloat162_rn(got, mine_keep) : __floats2bfloat162_rn(mine_keep, got);
-          *reinterpret_cast<__nv_bfloat162*>(out + (size_t)tok * KTOT + n) = pr;
+          *reinterpret_cast<__nv_bfloat162*>(outp + (size_t)tok * KTOT + n) = pr;
+        }
+      }
+    }
+    if (FZ) {   // publish: the chunk's GEMM1 item count (GEMM2 waits on it); GEMM2's last item resets
+      __threadfence();
+      asm volatile("bar.sync 1, 256;\n" ::: "memory");
+      if (warp == 0 && lane == 0) {
+        const int ci = it / nbk;
+        if (!g2) {
+          atomicAdd(counters + ci, 1);
+        } else if (atomicAdd(counters + 4096 + ci, 1) == nbk - 1) {
+          atomicExch(counters + ci, 0);
+          atomicExch(counters + 4096 + ci, 0);
         }
       }
     }
@@ -2242,8 +2315,18 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
     pa.P = (int)q[10];
     pa.mode = (int)q[11];
   }
+  if (post.numel() >= 17) {   // fused (mode 3): GEMM2's weights, scales, global scales, output, row blocks
+    const int64_t* q = post.data_ptr<int64_t>();
+    pa.wq2 = reinterpret_cast<const uint8_t*>(q[12]);
+    pa.ws2 = reinterpret_cast<const uint8_t*>(q[13]);
+    pa.gs2 = reinterpret_cast<const float*>(q[14]);
+    pa.out2 = reinterpret_cast<__nv_bfloat16*>(q[15]);
+    pa.nb2 = (int)q[16];
+  }
   int* cnt = counters.numel() ? counters.data_ptr<int32_t>() : nullptr;
   TORCH_CHECK(!(sk & 8) || cnt, "moe_gemm_sab: the fused split epilogue needs counters");
+  TORCH_CHECK(mode != 3 || (cnt && pa.nb2 > 0 && kparts == 1 && !(sk & (1 | 2 | 4 | 8 | 16 | 32 | 64 | 0xF00)) && pa.mode == 0),
+              "moe_gemm_sab: fused mode needs counters, GEMM2 operands, kparts 1, plain flags");
   const uint8_t* pfw = pf_w.numel() ? pf_w.data_ptr<uint8_t>() : nullptr;
   const uint8_t* pfs = pf_s.numel() ? reinterpret_cast<const uint8_t*>(pf_s.data_ptr()) : nullptr;
   float* pt = part.numel() ? part.data_ptr<float>() : nullptr;
@@ -2268,13 +2351,16 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
   }
 #define SCASE(M_, T_, S_) if (mode == M_ && mt == T_ && stages == S_) { launch_sab<M_, T_, S_, false>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
   SCASE(1, 1, 4) SCASE(2, 1, 4) SCASE(1, 2, 4) SCASE(2, 2, 4) SCASE(1, 1, 8) SCASE(2, 1, 8) SCASE(1, 2, 8) SCASE(2, 2, 8)
+  SCASE(3, 1, 4) SCASE(3, 1, 8)   // fused GEMM1 + GEMM2
   // 200 + S: two 128-k chunks per stage (16 KB weight copies)
 #define SCASE2(M_, T_, S_) if (mode == M_ && mt == T_ && stages == 200 + S_) { launch_sab<M_, T_, S_, false, 0, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
   SCASE2(1, 1, 2) SCASE2(2, 1, 2) SCASE2(1, 2, 2) SCASE2(2, 2, 2) SCASE2(1, 1, 4) SCASE2(2, 1, 4)
   SCASE2(1, 4, 2) SCASE2(2, 4, 2) SCASE2(1, 4, 4) SCASE2(2, 4, 4)   // 32 tokens per item: decode once for 4 groups
+  SCASE2(3, 1, 4) SCASE2(3, 1, 2) SCASE2(3, 2, 2)   // fused
   // 400 + S: four 128-k chunks per stage (32 KB weight copies)
 #define SCASE4(M_, T_, S_) if (mode == M_ && mt == T_ && stages == 400 + S_) { launch_sab<M_, T_, S_, false, 0, 4>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
   SCASE4(1, 1, 2) SCASE4(2, 1, 2) SCASE4(1, 2, 2) SCASE4(2, 2, 2) SCASE4(1, 4, 2) SCASE4(2, 4, 2)
+  SCASE4(3, 2, 2)   // fused
   // 1000 + 100 * SUB + S: two 128-row blocks per item (RB 2: 32 rows per consumer warp)
 #define SCASER(M_, T_, U_, S_) if (mode == M_ && mt == T_ && stages == 1000 + 100 * U_ + S_) { launch_sab<M_, T_, S_, false, 0, U_, 2>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
   SCASER(1, 1, 1, 4) SCASER(2, 1, 1, 4) SCASER(1, 2, 1, 4) SCASER(2, 2, 1, 4) SCASER(1, 1, 2, 2) SCASER(2, 1, 2, 2)
@@ -2687,7 +2773,8 @@ def ws_layout(bank):
 
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
-                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0, tiny=False, _tiny_stamps=False, apost=False):
+                    fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0, tiny=False, _tiny_stamps=False, apost=False,
+                    fused=False):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -2703,7 +2790,9 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     chain (v6 only): every launch after the route is a programmatic dependent (PDL) of the one
     before and each signals its dependents at its start (flag 128): launches, CTA setup and
     GEMM2's first weight stages overlap the previous kernel; each waits only before reading the
-    previous kernel's output."""
+    previous kernel's output.
+    fused (v6 only): GEMM1 and GEMM2 in one persistent launch (kernel MODE 3): GEMM2's items follow
+    GEMM1's on the same work queue and wait per token chunk for its GEMM1 items (counters)."""
     if tiny:   # bs <= 8: one persistent grid for both GEMMs (moe_tiny_kernel)
         return moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=chain, topk=topk,
                                tiny_ring=tiny if tiny is not True else 4, stamps=_tiny_stamps)
@@ -2783,6 +2872,13 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
         post1 = torch.tensor(base + [1], dtype=torch.int64)
         post2 = torch.tensor(base + [2], dtype=torch.int64)
         keep += [y32, out32, tok_cnt, chunk_cnt]
+    if fused:
+        assert sab and kparts == 1 and kparts2 == 1 and rb == 1 and not (apost or sk or l2pf or mpf or l2d or dualv8 or dualsab or pdl), \
+            "fused: plain v6 path"
+        fz_cnt = bank.setdefault("fz_cnt", torch.zeros((8192,), dtype=torch.int32, device=device))
+        post1 = torch.tensor([0] * 12 + [bank["w2q_sab"].data_ptr(), bank["w2s_sab"].data_ptr(), bank["w2_gs"].data_ptr(),
+                                         y.data_ptr(), 32], dtype=torch.int64)
+        keep += [y, fz_cnt]
 
     def gemm1():
         _ = keep
@@ -2792,6 +2888,11 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
                                 n_active2, exp_start, inter, 64, 132 * 2, prof[0], sched[4:6], abl, pfd)
             mod.moe_gemm_wg(1, 8 * mt, stages, xs, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
                             n_active[0:1], exp_start, inter, 64, grid, prof[0], sched[0:2], abl, pfd)
+            return
+        if sab and fused:   # GEMM1 then GEMM2 items in one launch
+            mod.moe_gemm_sab(3, mt, stages, x, row_route, bank["w13q_ws"], bank["w13s_ws"], bank["w13_gs"], active,
+                             n_active[0:1], exp_start, inter, 64, grid, prof[0], sched[0:2], abl, 1, no_part, ch1,
+                             no_u8, no_u8, fz_cnt, post1)
             return
         if sab:   # 64 n blocks (GEMM1: 8 gate/up pairs per CTA), 32 for GEMM2 (16 n8 groups per CTA)
             if dualv8:
@@ -2817,6 +2918,8 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
 
     def gemm2():
         _ = keep
+        if fused:   # done by gemm1's launch
+            return
         if wg:
             if dual:
                 mod.moe_gemm_wg(2, 64, 504, inter, row_route, bank["w2q_sab"], bank["w2s_sab"], bank["w2_gs"], active2,

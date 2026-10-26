@@ -640,3 +640,13 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   on Hopper is wgmma only; there the per-16-k scale on the accumulator costs N/2 FFMA per thread per
   block, eating the decode saving. Also: no single shift / rotation / multiply maps FP4 nibbles to e4m3
   byte positions (lay8.py), so the FP8 unpack needs two rotations per 16 weights.
+- Step tests (Oct 26; attention-host check 5b80e812, prefill-host check 578cd037):
+  - v8 with an 8-stage ring at 1 CTA/SM (v8d): much worse (bs 256 GEMM1 214-216 vs v8 164 us; bs 128
+    216-217 vs 162). Ring depth is not v8's limiter; occupancy is. Refuted.
+  - SUB4 stages at MT1 (s1q, 2 stages x 4 chunks) vs s1dw (4 x 2): loop-only plumbing -7% (21.9 vs 23.5
+    us bs 8 GEMM1) but full unchanged (59.7 vs 60.8; bs 32 90.3 vs 88.9); forward times equal. Refuted.
+  - bs 1 CUDA-core GEMV (ldg_gemv: lane = row, unpack8 + x2^126 HMUL2 + HFMA2 per 16-value block into
+    bf16x2, fp32 FMA by the block scale; no HMMA): GEMM1 (37.7 MB) 13.0 us vs mma 18.0 vs plain stream
+    11.1; GEMM2 (18.9 MB) 7.5 vs 11.7 vs 6.1. Best K split 16, 2 CTAs x 512. bf16 sums over a 16-value
+    block cost ~0.35-0.46% rel L2 per GEMM (CPU emulation). -> built: moe_gemv_kernel + repack_gemv /
+    gemv_layout + moe_gemv_stages (configs g16 / g8), gate check pending.

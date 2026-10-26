@@ -1,0 +1,19 @@
+ldg probe: compiled in 34 s
+ldg3 bs1 G1 2x8192 37.7 MB (us): plain 11.1; mma D2 s4 2x512 18.0; mma D2 s8 2x512 18.6; gemv D1 s16 2x512 13.0; gemv D1 s8 2x512 13.1; gemv D1 s16 4x256 13.2; gemv D1 s4 1x512 13.6; gemv D1 s8 4x256 13.6
+ldg3 bs1 G2 2x4096 18.9 MB (us): plain 6.1; mma D2 s4 2x512 16.3; mma D2 s8 2x512 11.7; gemv D1 s16 2x512 7.5; gemv D1 s16 4x256 8.0; gemv D1 s8 1x512 8.2; gemv D1 s16 1x512 8.6; gemv D2 s16 4x256 8.6
+USDT:2026-10-26 13:26:35 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:26:35 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:26:36 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:26:36 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:26:36 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:26:37 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:26:37 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:26:37 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:26:38 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:26:38 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:26:39 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:26:40 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:26:41 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:26:42 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:26:43 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:26:44 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

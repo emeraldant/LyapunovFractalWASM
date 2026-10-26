@@ -2416,6 +2416,123 @@ __global__ void __launch_bounds__(288, RES ? 1 : 2) moe_tiny_kernel(
   if (stamp && tid == 0) stamp[3] = gtimer();
 }
 
+
+// ---------------------------------------------------------------------------------------
+// bs 1 GEMV (no tensor cores): with one token, 7/8 of an m16n8k16 multiplies padding and the HMMA's
+// cost adds to the decode's (they do not overlap here), so both GEMMs run on CUDA cores. A warp
+// owns a 32-row group (GEMM1: 16 gate rows + the same 16 up rows) and one of S K slices; each lane
+// one row: per 128-k block its 64 B of codes (4 coalesced 16-B loads, layout [expert][group][block]
+// [q][lane]) and 8 scale bytes, unpack8 -> bf16 (x 2^126 restores e2m1 exactly), HFMA2 with the
+// activation pairs (shared memory, broadcast) into a bf16x2 sum per 16-value scale block, then one
+// fp32 FMA with the block scale. Slices: fp32 parts; GEMM1's last-arriving slice of a group sums
+// them in slice order (deterministic) and writes silu(gate) * up; GEMM2's go to the parts post-norm.
+// One token: <= 8 active experts, their activation rows staged in shared memory (8 x 8 KB).
+__device__ __forceinline__ uint4 gv_ldg(const uint4* p) {
+  uint4 v;
+  asm volatile("ld.global.nc.L1::no_allocate.v4.u32 {%0,%1,%2,%3}, [%4];\n" : "=r"(v.x), "=r"(v.y), "=r"(v.z), "=r"(v.w) : "l"(p));
+  return v;
+}
+template <int MODE>
+__global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
+    const __nv_bfloat16* __restrict__ a_src, const int32_t* __restrict__ row_route, const uint4* __restrict__ wq,
+    const uint2* __restrict__ ws, const float* __restrict__ gs, const int32_t* __restrict__ active,
+    const int32_t* __restrict__ n_active_ptr, const int32_t* __restrict__ exp_start, __nv_bfloat16* __restrict__ out,
+    float* __restrict__ part, int part_rows, int S, int* __restrict__ counters, int flags) {
+  constexpr int G = MODE == 1 ? 256 : 128;   // 32-row groups per expert
+  extern __shared__ __align__(128) uint8_t smem[];   // 8 activation rows x 8 KB
+  uint8_t* xs = smem;
+  if (flags & 128) {
+    asm volatile("griddepcontrol.wait;\n" ::: "memory");
+    if (threadIdx.x == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
+  }
+  const int n_act = min(*n_active_ptr, 8);
+  for (int i = threadIdx.x; i < n_act * 512; i += blockDim.x) {
+    const int a = i / 512, o = i % 512;
+    const int row0 = exp_start[active[a] & 255];
+    const int src = MODE == 1 ? row_route[row0] / 8 : row0;
+    reinterpret_cast<uint4*>(xs + a * 8192)[o] = __ldcg(reinterpret_cast<const uint4*>(a_src + (size_t)src * KTOT) + o);
+  }
+  __syncthreads();
+  const int lane = threadIdx.x % 32;
+  const int nw = blockDim.x / 32;
+  const int gw = blockIdx.x * nw + threadIdx.x / 32, tw = gridDim.x * nw;
+  const int kb = 32 / S;
+  const int units = n_act * G * S;
+  const uint32_t K2 = 0x7E807E80u;   // bf16x2 (2^126, 2^126)
+  for (int u = gw; u < units; u += tw) {
+    const int sl = u % S, g = (u / S) % G, ia = u / (S * G);
+    const int e = active[ia] & 255;
+    const int j0 = sl * kb;
+    const size_t blk = ((size_t)e * G + g) * 32 + j0;
+    const uint4* wp = wq + blk * 128 + lane;
+    const uint2* sp = ws + blk * 32 + lane;
+    const uint8_t* xa = xs + ia * 8192 + j0 * 256;
+    uint4 nw4[4];
+    uint2 ns2;
+#pragma unroll
+    for (int q = 0; q < 4; ++q) nw4[q] = gv_ldg(wp + q * 32);
+    ns2 = __ldg(sp);
+    float acc = 0.f;
+    for (int j = 0; j < kb; ++j) {
+      const uint4 q4[4] = {nw4[0], nw4[1], nw4[2], nw4[3]};
+      const uint2 s2 = ns2;
+      if (j + 1 < kb) {
+#pragma unroll
+        for (int q = 0; q < 4; ++q) nw4[q] = gv_ldg(wp + (j + 1) * 128 + q * 32);
+        ns2 = __ldg(sp + (j + 1) * 32);
+      }
+      const uint8_t* xk = xa + j * 256;
+#pragma unroll
+      for (int b = 0; b < 8; ++b) {   // 16-value scale block b: words 2b, 2b + 1
+        __nv_bfloat162 s2acc = __floats2bfloat162_rn(0.f, 0.f);
+#pragma unroll
+        for (int h = 0; h < 2; ++h) {
+          const int wi = 2 * b + h;
+          const uint4 qq = q4[wi / 4];
+          const uint32_t word = (wi % 4) == 0 ? qq.x : (wi % 4) == 1 ? qq.y : (wi % 4) == 2 ? qq.z : qq.w;
+          uint32_t v[4];
+          unpack8(word, v);
+          const uint4 xv = *reinterpret_cast<const uint4*>(xk + wi * 16);
+          const uint32_t xw[4] = {xv.x, xv.y, xv.z, xv.w};
+#pragma unroll
+          for (int i = 0; i < 4; ++i) {
+            const uint32_t a = mul2(v[i], K2);
+            s2acc = __hfma2(*reinterpret_cast<const __nv_bfloat162*>(&a), *reinterpret_cast<const __nv_bfloat162*>(&xw[i]), s2acc);
+          }
+        }
+        const uint32_t sb = ((b < 4 ? s2.x : s2.y) >> (8 * (b % 4))) & 0x7Fu;   // E4M3, normal, positive
+        acc = fmaf(__uint_as_float((sb << 20) + (120u << 23)), __low2float(s2acc) + __high2float(s2acc), acc);
+      }
+    }
+    acc *= gs[e];
+    if (MODE == 1) {
+      float* pr = part + ((size_t)sl * 8 + ia) * 8192;   // [slice][active][group row]
+      pr[g * 32 + lane] = acc;
+      __threadfence();
+      __syncwarp();
+      int last = 0;
+      if (lane == 0) {
+        const int old = atomicAdd(counters + ia * G + g, 1);
+        last = old == S - 1;
+        if (last) counters[ia * G + g] = 0;
+      }
+      last = __shfl_sync(0xffffffffu, last, 0);
+      if (last) {
+        __threadfence();
+        float v = 0.f;
+        for (int k = 0; k < S; ++k) v += __ldcg(part + ((size_t)k * 8 + ia) * 8192 + g * 32 + lane);
+        const float up = __shfl_down_sync(0xffffffffu, v, 16);
+        if (lane < 16) {
+          const int row0 = exp_start[e];
+          out[(size_t)row0 * KTOT + g * 16 + lane] = __float2bfloat16_rn(v / (1.f + __expf(-v)) * up);
+        }
+      }
+    } else {
+      const int row0 = exp_start[e];
+      part[((size_t)sl * part_rows + row0) * KTOT + g * 32 + lane] = acc;
+    }
+  }
+}
 """
 
 
@@ -2610,7 +2727,7 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
 #define SPCASES2(A_) SPCASE2(1, 1, 4, A_) SPCASE2(2, 1, 4, A_)
     SPCASES2(0) SPCASES2(1) SPCASES2(2) SPCASES2(3) SPCASES2(4) SPCASES2(12) SPCASES2(20) SPCASES2(28)
 #define SPCASE4(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == 400 + S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_, 4>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
-#define SPCASES4(A_) SPCASE4(1, 2, 2, A_) SPCASE4(2, 2, 2, A_)
+#define SPCASES4(A_) SPCASE4(1, 2, 2, A_) SPCASE4(2, 2, 2, A_) SPCASE4(1, 1, 2, A_) SPCASE4(2, 1, 2, A_)
     SPCASES4(0) SPCASES4(1) SPCASES4(3) SPCASES4(4) SPCASES4(12) SPCASES4(28)
 #endif
     TORCH_CHECK(false, "moe_gemm_sab: no profiling build for this configuration (needs -DOKC_PROF)");
@@ -2683,6 +2800,9 @@ void moe_gemm_wg(int64_t mode, int64_t n_tok, int64_t stages, torch::Tensor a_sr
     GPCASET(1, 16, 4, 96) GPCASET(2, 16, 4, 96) GPCASET(1, 32, 4, 96) GPCASET(2, 32, 4, 96)
 #define GPCASETW(M_, N_, S_, A_) if (mode == M_ && n_tok == N_ && stages == 400 + S_ && abl == A_) { launch_wg<M_, N_, S_, true, A_, true, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, (int)pfd); return; }
     GPCASETW(2, 32, 4, 0) GPCASETW(2, 32, 4, 96)
+#define GPCASEV(M_, S_, A_) if (mode == M_ && n_tok == 64 && stages == 500 + S_ && abl == A_) { launch_wg<M_, 64, S_, true, A_, true, false, true, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, (int)pfd); return; }
+#define GPCASEVS(A_) GPCASEV(1, 4, A_) GPCASEV(2, 4, A_)
+    GPCASEVS(0) GPCASEVS(1) GPCASEVS(4) GPCASEVS(28) GPCASEVS(96)   // v8 (VARN) ablations
 #endif
     TORCH_CHECK(false, "moe_gemm_wg: no profiling build for this configuration (needs -DOKC_PROF)");
   }
@@ -2701,7 +2821,7 @@ void moe_gemm_wg(int64_t mode, int64_t n_tok, int64_t stages, torch::Tensor a_sr
   GCASET(1, 64, 4) GCASET(2, 64, 4)
   // 500 + S: TMA, 64-row chunks, wgmma width per chunk (16 / 32 / 64 live rows)
 #define GCASEV(M_, S_) if (mode == M_ && n_tok == 64 && stages == 500 + S_) { launch_wg<M_, 64, S_, false, 0, true, false, true, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, (int)pfd); return; }
-  GCASEV(1, 4) GCASEV(2, 4)
+  GCASEV(1, 4) GCASEV(2, 4) GCASEV(1, 8) GCASEV(2, 8)   // 508: 8 stages (1 CTA/SM): a deeper weight ring
   // stages + 400: TMA with the single-buffer W0 form at 32 tokens (GEMM2: 3 CTAs/SM, 71 registers;
   // GEMM1 would serialize its wgmmas at 72: ptxas C7512, so it is not instantiated).
 #define GCASETW(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == 400 + S_) { launch_wg<M_, N_, S_, false, 0, true, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, (int)pfd); return; }
@@ -2748,6 +2868,30 @@ void moe_tiny(torch::Tensor x, torch::Tensor row_route, torch::Tensor exp_start,
       (int)part1.size(1), cnt.data_ptr<int32_t>(), (int)flags);
 }
 
+
+void moe_gemv(int64_t mode, torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws,
+              torch::Tensor gs, torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out,
+              torch::Tensor part, int64_t S, torch::Tensor counters, int64_t grid, int64_t flags) {
+  TORCH_CHECK(32 % S == 0, "moe_gemv: slices divide 32 blocks");
+  cudaLaunchConfig_t cfg = {};
+  cfg.gridDim = dim3((unsigned)grid);
+  cfg.blockDim = dim3(512);
+  cfg.dynamicSmemBytes = 8 * 8192;
+  cfg.stream = at::cuda::getCurrentCUDAStream();
+  cudaLaunchAttribute attr[1];
+  attr[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
+  attr[0].val.programmaticStreamSerializationAllowed = 1;
+  cfg.attrs = attr;
+  cfg.numAttrs = (flags & 128) ? 1 : 0;
+  auto k = mode == 1 ? moe_gemv_kernel<1> : moe_gemv_kernel<2>;
+  cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, 8 * 8192);
+  cudaLaunchKernelEx(&cfg, k, reinterpret_cast<const __nv_bfloat16*>(a_src.data_ptr()),
+                     (const int32_t*)row_route.data_ptr<int32_t>(), reinterpret_cast<const uint4*>(wq.data_ptr()),
+                     reinterpret_cast<const uint2*>(ws.data_ptr()), (const float*)gs.data_ptr<float>(),
+                     (const int32_t*)active.data_ptr<int32_t>(), (const int32_t*)n_active.data_ptr<int32_t>(),
+                     (const int32_t*)exp_start.data_ptr<int32_t>(), reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),
+                     part.data_ptr<float>(), mode == 1 ? 8 : (int)part.size(1), (int)S, counters.data_ptr<int32_t>(), (int)flags);
+}
 """
 
 
@@ -2755,6 +2899,7 @@ MOE_CUDA_SRC = MOE_HOST_SRC.replace("#include <ATen/cuda/CUDAContext.h>\n", "#in
 
 
 MOE_CUDA_CPP = """
+void moe_gemv(int64_t mode, torch::Tensor a_src, torch::Tensor row_route, torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active, torch::Tensor exp_start, torch::Tensor out, torch::Tensor part, int64_t S, torch::Tensor counters, int64_t grid, int64_t flags);
 void moe_tiny(torch::Tensor x, torch::Tensor row_route, torch::Tensor exp_start, torch::Tensor w13q, torch::Tensor w13s, torch::Tensor gs13, torch::Tensor w2q, torch::Tensor w2s, torch::Tensor gs2, torch::Tensor inter, torch::Tensor part1, torch::Tensor part2, torch::Tensor cnt, int64_t flags);
 void moe_gemm_wg(int64_t mode, int64_t n_tok, int64_t stages, torch::Tensor a_src, torch::Tensor row_route,
                  torch::Tensor wq, torch::Tensor ws, torch::Tensor gs, torch::Tensor active, torch::Tensor n_active,
@@ -2789,7 +2934,7 @@ def moe_cuda_module(prof=False, variant=""):
         _MOE_MODULES[key] = load_inline(
             name="okc_moe_gemm" + ("_prof" if prof else "") + (f"_{variant}" if variant else ""),
             cpp_sources=MOE_CUDA_CPP, cuda_sources=MOE_CUDA_SRC,
-            functions=["moe_gemm", "moe_gemm_ws", "moe_gemm_sab", "moe_gemm_wg", "moe_tiny"],
+            functions=["moe_gemm", "moe_gemm_ws", "moe_gemm_sab", "moe_gemm_wg", "moe_tiny", "moe_gemv"],
             extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"] + flags, verbose=False)
     return _MOE_MODULES[key]
 
@@ -2846,6 +2991,45 @@ def repack_expert_weights(packed, sf, pair_gate_up):
     words = torch.where(words >= 2 ** 31, words - 2 ** 32, words).to(torch.int32)
     ws = sf.view(torch.uint8).view(groups, 8, 32, 8).permute(0, 2, 1, 3).contiguous()  # [g, chunk, row, step]
     return words.contiguous(), ws
+
+
+def repack_gemv(packed, sf, pair_gate_up):
+    """One expert for moe_gemv_kernel: packed uint8 [N, 2048] (low nibble first), sf E4M3 [N, 256] ->
+    (codes int32 [G, 32 blocks, 4 q, 32 lanes, 4], scales uint8 [G, 32 blocks, 32 lanes, 8]); a lane
+    is one row of a 32-row group (pair_gate_up: gate rows 16g.. then the same up rows), word 4q + c
+    of a block holds k = 8 (4q + c) .. + 7 in unpack8's bit order (operand o = k pair, element e)."""
+    n = packed.shape[0]
+    device = packed.device
+    codes = torch.stack((packed & 0xF, packed >> 4), dim=-1).reshape(n, -1)
+    if pair_gate_up:
+        half = n // 2
+        order = torch.stack((torch.arange(0, half, device=device).view(-1, 16),
+                             torch.arange(half, n, device=device).view(-1, 16)), dim=1).reshape(-1)
+        codes, sf = codes[order], sf[order]
+    g = n // 32
+    c = codes.view(g, 32, 32, 16, 8).to(torch.int64)                 # [G, lane, block, word, value]
+    words = torch.zeros((g, 32, 32, 16), dtype=torch.int64, device=device)
+    for o in range(4):
+        for e in range(2):
+            for j in range(4):
+                words |= ((c[..., 2 * o + e] >> j) & 1) << _bit_source(o, e, j)
+    words = torch.where(words >= 2 ** 31, words - 2 ** 32, words).to(torch.int32)
+    wq = words.view(g, 32, 32, 4, 4).permute(0, 2, 3, 1, 4).contiguous()
+    ws = sf.view(torch.uint8).view(g, 32, 32, 8).permute(0, 2, 1, 3).contiguous()
+    return wq, ws
+
+
+def gemv_layout(bank, weights, start=0, count=32):
+    """Adds the bs 1 GEMV layout (moe_gemv_kernel) for the local experts (prepare)."""
+    for name, pair in (("w13", True), ("w2", False)):
+        qs, ss = [], []
+        for e in range(start, start + count):
+            q, sc = repack_gemv(weights[name][e], weights[name + "_sf"][e], pair)
+            qs.append(q); ss.append(sc)
+        bank[name + "gv"] = torch.stack(qs).contiguous()
+        bank[name + "gvs"] = torch.stack(ss).contiguous()
+    bank["gv_cnt"] = torch.zeros(8 * 256, dtype=torch.int32, device=bank["w13gv"].device)
+    return bank
 
 
 def scales_supported(sf):
@@ -3029,6 +3213,51 @@ def ws_layout(bank):
     return bank
 
 
+def moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices=16, chain=True, topk=8):
+    """One token: route, GEMM1 GEMV (silu(gate) * up by each group's last slice), GEMM2 GEMV (fp32
+    slices), the parts post-norm (KP = slices). Needs gemv_layout(bank)."""
+    m, hidden = x.shape
+    assert m == 1, "moe_gemv: one token"
+    mod = moe_cuda_module()
+    x = x.contiguous()
+    if ids.dtype != torch.int32 or not ids.is_contiguous():
+        ids = ids.to(torch.int32).contiguous()
+    topk_weights = topk_weights.to(torch.float32).contiguous()
+    p = m * topk
+    count = bank["count"]
+    device = x.device
+    row_route = torch.empty((p,), dtype=torch.int32, device=device)
+    pos_of_route = torch.empty((p,), dtype=torch.int32, device=device)
+    exp_start = torch.empty((count + 1,), dtype=torch.int32, device=device)
+    active = torch.empty((2 * count + 2 * p + 1,), dtype=torch.int32, device=device)
+    n_active = torch.empty((2,), dtype=torch.int32, device=device)
+    inter = torch.empty((p, 4096), dtype=torch.bfloat16, device=device)
+    part1 = torch.empty((slices, 8, 8192), dtype=torch.float32, device=device)
+    part2 = torch.empty((slices, p, 4096), dtype=torch.float32, device=device)
+    out = torch.empty((m, hidden), dtype=x.dtype, device=device)
+    cnt = bank["gv_cnt"]
+    fl = 128 if chain else 0
+
+    def route():
+        _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, 8,
+                                        NE=256, E=count, CHUNK=max(256, triton.next_power_of_2(p)), SPLIT=0, ROWS2=64,
+                                        PDL=chain, num_warps=4)
+
+    def gemm1():
+        mod.moe_gemv(1, x, row_route, bank["w13gv"], bank["w13gvs"], bank["w13_gs"], active, n_active[0:1], exp_start,
+                     inter, part1, slices, cnt, 132 * 2, fl)
+
+    def gemm2():
+        mod.moe_gemv(2, inter, row_route, bank["w2gv"], bank["w2gvs"], bank["w2_gs"], active, n_active[0:1], exp_start,
+                     inter, part2, slices, cnt, 132 * 2, fl)
+
+    def post():
+        _post_norm_parts_kernel[(m,)](part2, norm_w, topk_weights, pos_of_route, out, eps, p, KP=slices, TOPK=topk, H=4096,
+                                      PDL=chain, num_warps=8, **(dict(launch_pdl=True) if chain else {}))
+
+    return [route, gemm1, gemm2, post], out
+
+
 def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=True, topk=8, tiny_ring=4, stamps=False, **_):
     """Tiny batches (<= 8 rows per local expert, i.e. bs <= 8): route, then ONE persistent grid for
     both expert GEMMs (moe_tiny_kernel: GEMM2's first unit per CTA resident in shared memory from
@@ -3073,7 +3302,7 @@ def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
                     fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0, tiny=False, _tiny_stamps=False, apost=False,
-                    fused=False):
+                    fused=False, gemv=0):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -3092,6 +3321,8 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     previous kernel's output.
     fused (v6 only): GEMM1 and GEMM2 in one persistent launch (kernel MODE 3): GEMM2's items follow
     GEMM1's on the same work queue and wait per token chunk for its GEMM1 items (counters)."""
+    if gemv:   # bs 1: both GEMMs on CUDA cores (moe_gemv_kernel), gemv = K slices
+        return moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices=gemv, chain=chain, topk=topk)
     if tiny:   # bs <= 8: one persistent grid for both GEMMs (moe_tiny_kernel)
         return moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=chain, topk=topk,
                                tiny_ring=tiny if tiny is not True else 4, stamps=_tiny_stamps)
@@ -3285,6 +3516,9 @@ CUDA_CONFIGS = {
     "s2wc": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, chain=True),
     "s2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True),
     # fused: GEMM1 and GEMM2 in one persistent launch (GEMM2 items wait per token chunk; bitwise = v6)
+    # bs 1: both GEMMs as CUDA-core GEMVs (no tensor cores), K split 16 / 8 ways
+    "g16": dict(gemv=16, chain=True),
+    "g8": dict(gemv=8, chain=True),
     "f1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True, fused=True),
     "f2wc": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, chain=True, fused=True),
     "f2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True, fused=True),
@@ -3314,6 +3548,7 @@ def _build_cuda(weights, start, count):
             print("moe cuda: scales outside the fast decode's range, CUDA path off")
             return None
         ws_layout(bank)
+        gemv_layout(bank, weights, start, count)
         for k in ("w13q", "w13s", "w2q", "w2s"):
             del bank[k]
         torch.cuda.synchronize()

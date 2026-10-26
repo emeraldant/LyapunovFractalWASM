@@ -1,0 +1,56 @@
+graph abl bs8 s1dw (10 exp, GEMM1 189 MB / GEMM2 94 MB) gemm1 / gemm2 us: full 60.8 / 39.4; no math 54.0 / 33.3; math only 41.5 / 24.6; loop only 23.5 / 18.2
+graph abl bs8 s1q (10 exp, GEMM1 189 MB / GEMM2 94 MB) gemm1 / gemm2 us: full 59.7 / 38.3; no math 53.4 / 32.3; math only 41.2 / 24.3; loop only 21.9 / 16.9
+graph abl bs32 s1dw (16 exp, GEMM1 302 MB / GEMM2 150 MB) gemm1 / gemm2 us: full 88.9 / 49.0; no math 78.9 / 44.7; math only 64.8 / 33.2; loop only 35.3 / 18.6
+graph abl bs32 s1q (16 exp, GEMM1 302 MB / GEMM2 150 MB) gemm1 / gemm2 us: full 90.3 / 49.6; no math 77.9 / 45.1; math only 63.9 / 31.8; loop only 32.9 / 16.9
+routing bs8 seed 8950100: tokens per local expert [5, 3, 2, 1, 1, 1, 1, 1, 1, 1]
+check s1dw bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 100.4 us (v6 s2 113.2, x1.132)
+check s1q bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 101.0 us (v6 s2 113.0, x1.121)
+routing bs32 seed 8950101: tokens per local expert [5, 5, 4, 4, 4, 3, 3, 3, 2, 1, 1, 1, 1, 1, 1, 1]
+check s1dw bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 141.9 us (v6 s2 163.6, x1.154)
+check s1q bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 140.9 us (v6 s2 162.9, x1.160)
+routing bs256 seed 8950200: tokens per local expert [57, 37, 34, 32, 17, 16, 15, 15, 14, 12, 12, 9, 9, 8, 8, 7, 5, 4, 2, 2, 1, 1, 1, 1, 1]
+check s2qv16 bs256: rel diff vs v6 4.3e-04, row worst 2.0e-03, repeat equal; 257.3 us (v6 s2 352.8, x1.373) | stages 5.8 153.8 86.6 5.2
+check v8 bs256: rel diff vs v6 5.6e-04, row worst 2.0e-03, repeat equal; 262.6 us (v6 s2 351.6, x1.339) | stages 5.4 164.2 88.2 5.1
+check v8d bs256: rel diff vs v6 5.6e-04, row worst 2.0e-03, repeat equal; 350.9 us (v6 s2 352.9, x1.007) | stages 5.6 216.1 115.6 5.2
+routing bs128 seed 8950201: tokens per local expert [31, 18, 17, 14, 14, 12, 8, 8, 8, 7, 6, 6, 6, 5, 5, 5, 3, 3, 3, 2, 2, 2, 1, 1, 1, 1]
+check s2qv16 bs128: rel diff vs v6 3.3e-04, row worst 1.0e-03, repeat equal; 260.7 us (v6 s2 295.0, x1.131) | stages 4.3 147.2 94.5 4.4
+check v8 bs128: rel diff vs v6 5.1e-04, row worst 1.0e-03, repeat equal; 261.5 us (v6 s2 295.3, x1.127) | stages 4.4 162.5 90.0 4.6
+check v8d bs128: rel diff vs v6 5.1e-04, row worst 1.0e-03, repeat equal; 352.1 us (v6 s2 295.8, x0.840) | stages 4.7 217.1 116.4 4.7
+routing bs8 seed 8970100: tokens per local expert [3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1]
+check s1dw bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 105.2 us (v6 s2 116.3, x1.110)
+check s1q bs8: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 106.6 us (v6 s2 115.6, x1.081)
+routing bs32 seed 8970101: tokens per local expert [7, 6, 5, 3, 3, 3, 3, 3, 2, 2, 1, 1, 1, 1, 1, 1]
+check s1dw bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 141.1 us (v6 s2 155.1, x1.099)
+check s1q bs32: rel diff vs v6 0.0e+00, row worst 0.0e+00, repeat equal; 141.4 us (v6 s2 156.1, x1.102)
+routing bs256 seed 8970200: tokens per local expert [55, 48, 42, 30, 27, 20, 15, 12, 10, 10, 8, 6, 6, 5, 5, 4, 4, 4, 3, 2, 2, 1, 1, 1, 1]
+check s2qv16 bs256: rel diff vs v6 4.0e-04, row worst 1.1e-03, repeat equal; 252.5 us (v6 s2 364.0, x1.445) | stages 6.0 150.5 84.4 5.2
+check v8 bs256: rel diff vs v6 5.1e-04, row worst 1.2e-03, repeat equal; 264.4 us (v6 s2 361.8, x1.368) | stages 5.3 163.7 88.8 5.1
+check v8d bs256: rel diff vs v6 5.1e-04, row worst 1.2e-03, repeat equal; 348.1 us (v6 s2 360.4, x1.035) | stages 5.4 214.0 115.7 5.2
+routing bs128 seed 8970201: tokens per local expert [35, 22, 16, 13, 13, 10, 9, 8, 8, 7, 6, 5, 5, 5, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1]
+check s2qv16 bs128: rel diff vs v6 3.5e-04, row worst 1.3e-03, repeat equal; 252.0 us (v6 s2 283.8, x1.127) | stages 5.1 149.4 91.7 4.6
+check v8 bs128: rel diff vs v6 5.6e-04, row worst 1.4e-03, repeat equal; 261.5 us (v6 s2 283.6, x1.089) | stages 4.4 162.4 89.1 4.5
+check v8d bs128: rel diff vs v6 5.6e-04, row worst 1.4e-03, repeat equal; 348.6 us (v6 s2 283.7, x0.813) | stages 4.8 215.9 115.3 4.5
+USDT:2026-10-26 13:31:46 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:46 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:31:46 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:46 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:31:46 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:46 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:31:47 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

@@ -287,7 +287,7 @@ def _run(plan, data, state):
 # ---------------------------------------------------------------------------------------
 # Our CUDA expert GEMMs (okc/moe_cuda/kernel.py)
 
-# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULES moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights scales_supported _route_compact_kernel _gather_rows_kernel _splitk_silu_kernel _post_norm_parts_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_tiny_stages moe_cuda_stages moe_cuda_forward
+# @bundle moe_cuda/kernel.py MOE_DEVICE_SRC MOE_HOST_SRC MOE_CUDA_SRC MOE_CUDA_CPP _MOE_MODULES moe_cuda_module _TARGETS _LEFTOVER _bit_source _lane_gather_index repack_expert_weights repack_gemv gemv_layout scales_supported _route_compact_kernel _gather_rows_kernel _splitk_silu_kernel _post_norm_parts_kernel _post_norm_rows_kernel build_cuda_bank ws_layout moe_gemv_stages moe_tiny_stages moe_cuda_stages moe_cuda_forward
 
 CUDA_CONFIGS = {
     "s1": dict(mt=1, stages=4, ctas_per_sm=4, sab=True),         # v6 swap-AB (mma.sync), 8 tokens per item
@@ -309,6 +309,9 @@ CUDA_CONFIGS = {
     "s2wc": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, chain=True),
     "s2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True),
     # fused: GEMM1 and GEMM2 in one persistent launch (GEMM2 items wait per token chunk; bitwise = v6)
+    # bs 1: both GEMMs as CUDA-core GEMVs (no tensor cores), K split 16 / 8 ways
+    "g16": dict(gemv=16, chain=True),
+    "g8": dict(gemv=8, chain=True),
     "f1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True, fused=True),
     "f2wc": dict(mt=2, stages=202, ctas_per_sm=4, sab=True, chain=True, fused=True),
     "f2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True, fused=True),
@@ -338,6 +341,7 @@ def _build_cuda(weights, start, count):
             print("moe cuda: scales outside the fast decode's range, CUDA path off")
             return None
         ws_layout(bank)
+        gemv_layout(bank, weights, start, count)
         for k in ("w13q", "w13s", "w2q", "w2s"):
             del bank[k]
         torch.cuda.synchronize()

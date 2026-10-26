@@ -1,0 +1,30 @@
+soak g16 bs1: 400 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak g16w bs1: 400 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak g16cg bs1: 400 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak g16 bs1: 400 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak g16w bs1: 400 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak g16cg bs1: 400 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:12 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:38:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:38:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:38:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:38:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:38:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:38:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

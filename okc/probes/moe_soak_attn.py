@@ -3649,9 +3649,9 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
     for (size_t i = gt; i < (size_t)pa.M * KTOT / 4; i += gn) reinterpret_cast<float4*>(pa.out32)[i] = make_float4(0.f, 0.f, 0.f, 0.f);
     for (size_t i = gt; i < (size_t)pa.M * KTOT / 8; i += gn) reinterpret_cast<uint4*>(pa.outb)[i] = make_uint4(0u, 0u, 0u, 0u);
   }
-  const int total = *n_active_ptr * n_blocks * kparts;   // (fused: GEMM1's items)
+  const int total = __ldcg(n_active_ptr) * n_blocks * kparts;   // (fused: GEMM1's items)
   constexpr bool FZ = MODE == 3;
-  const int total_all = FZ ? total + *n_active_ptr * pa.nb2 : total;
+  const int total_all = FZ ? total + __ldcg(n_active_ptr) * pa.nb2 : total;
   const int nch = NCHUNK / kparts;   // chunks per item
   // Stream K (sk, kparts = partial slots >= 2): the items' K ranges, in units of STAGES chunks,
   // laid end to end and cut into geff equal CTA ranges [s0, s1), so every CTA (and, at a full
@@ -3662,7 +3662,7 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
   // (int: U <= (32 + 256) chunk entries x 64 n blocks x 8 units, U x geff < 2^31)
   int U = 1, s0 = 0, s1 = 0, geff = 1;
   if (sk) {
-    U = *n_active_ptr * n_blocks * NU;
+    U = __ldcg(n_active_ptr) * n_blocks * NU;
     const int minlen = (NU + kparts - 2) / (kparts - 1);
     geff = min((int)gridDim.x, max(1, U / minlen));
     if ((int)blockIdx.x < geff) {
@@ -3679,10 +3679,10 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
         // The first item's metadata is the route's output (complete before this grid launched);
         // only its activation rows (the previous GEMM's output) wait for griddepcontrol.wait.
         const int it0 = (int)blockIdx.x / kparts, kb0 = ((int)blockIdx.x % kparts) * nch;
-        const int ch0 = active[it0 / n_blocks];
+        const int ch0 = __ldcg(active + (it0 / n_blocks));
         const int e0 = ch0 & 255, nb0 = it0 % n_blocks;
-        const int r00 = exp_start[e0] + (ch0 >> 8) * MT * 8;
-        const int live0 = min(MT * 8, exp_start[e0 + 1] - r00);
+        const int r00 = __ldcg(exp_start + (e0)) + (ch0 >> 8) * MT * 8;
+        const int live0 = min(MT * 8, __ldcg(exp_start + (e0 + 1)) - r00);
         const uint32_t tx0 = live0 * 256 * SUB + RB * (C::W_STAGE + C::S_STAGE);
         pre = min(STAGES, nch);
         if (lane == 0) {
@@ -3702,7 +3702,7 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
         __syncwarp();
       } else if (lane == 0 && !sk && (int)blockIdx.x < total) {
         const int it0 = (int)blockIdx.x / kparts, kb0 = ((int)blockIdx.x % kparts) * nch;
-        const int e0 = active[it0 / n_blocks] & 255, nb0 = it0 % n_blocks;
+        const int e0 = __ldcg(active + (it0 / n_blocks)) & 255, nb0 = it0 % n_blocks;
         const uint8_t* w0 = wq + ((((size_t)e0 * n_blocks + nb0) * RB) * NCHUNK + kb0) * C::W_STAGE;
         const uint8_t* s0p = ws + ((((size_t)e0 * n_blocks + nb0) * RB) * NCHUNK + kb0) * C::S_STAGE;
         prefetch_l2(w0, (uint32_t)min(STAGES, nch) * C::W_STAGE);
@@ -3712,7 +3712,7 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
     }
     if ((flags & 4) && pf_w != nullptr) {
       constexpr uint32_t PW = 32u * 32u * 8192u, PS = 32u * 32u * 1024u, PIECE = 64u * 1024u;   // per expert
-      const unsigned act = __ballot_sync(0xffffffffu, exp_start[lane + 1] > exp_start[lane]);
+      const unsigned act = __ballot_sync(0xffffffffu, __ldcg(exp_start + (lane + 1)) > __ldcg(exp_start + (lane)));
       const int nexp = __popc(act);
       if ((size_t)nexp * (PW + PS) <= (32u << 20)) {
         const int per = (PW + PS) / PIECE, pieces = nexp * per;
@@ -3738,16 +3738,16 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
         if (lane == 0) nx_raw = atomicAdd(sched, 1);
       } else if (step == 1) {
         nx_item = (int)gridDim.x + __shfl_sync(0xffffffffu, nx_raw, 0);
-        if (nx_item < total) nx_ch = active[(nx_item / kparts) / n_blocks];
+        if (nx_item < total) nx_ch = __ldcg(active + ((nx_item / kparts) / n_blocks));
       } else if (step == 2) {
         if (nx_item < total) {
-          nx_es0 = exp_start[nx_ch & 255];
-          nx_es1 = exp_start[(nx_ch & 255) + 1];
+          nx_es0 = __ldcg(exp_start + (nx_ch & 255));
+          nx_es1 = __ldcg(exp_start + ((nx_ch & 255) + 1));
         }
       } else if (nx_item < total) {
         const int r0 = nx_es0 + (nx_ch >> 8) * MT * 8;
         nx_src = 0;
-        if (lane < min(MT * 8, nx_es1 - r0)) nx_src = MODE == 1 ? row_route[r0 + lane] / 8 : r0 + lane;
+        if (lane < min(MT * 8, nx_es1 - r0)) nx_src = MODE == 1 ? __ldcg(row_route + (r0 + lane)) / 8 : r0 + lane;
       }
     };
     uint32_t f = 0;
@@ -3800,14 +3800,14 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
       const int nbk = g2 ? pa.nb2 : n_blocks;
       const int it = g2 ? item - total : sk ? item : item / kparts;
       const int nb = it % nbk;
-      const int ch = have_nx ? nx_ch : active[it / nbk];
+      const int ch = have_nx ? nx_ch : __ldcg(active + (it / nbk));
       const int e = ch & 255, mc = ch >> 8;
-      const int es0 = have_nx ? nx_es0 : exp_start[e], es1 = have_nx ? nx_es1 : exp_start[e + 1];
+      const int es0 = have_nx ? nx_es0 : __ldcg(exp_start + (e)), es1 = have_nx ? nx_es1 : __ldcg(exp_start + (e + 1));
       const int row0 = es0 + mc * MT * 8;
       const int live = min(MT * 8, es1 - row0);
       int src = 0;
       if (have_nx) src = nx_src;
-      else if (lane < live) src = (MODE == 1 || (FZ && !g2)) ? row_route[row0 + lane] / 8 : row0 + lane;
+      else if (lane < live) src = (MODE == 1 || (FZ && !g2)) ? __ldcg(row_route + (row0 + lane)) / 8 : row0 + lane;
       const uint8_t* a_row = reinterpret_cast<const uint8_t*>((g2 ? out : a_src) + (size_t)src * KTOT);
       const uint8_t* w_blk = (g2 ? pa.wq2 : wq) + ((size_t)e * nbk + nb) * RB * NCHUNK * C::W_STAGE;   // block nb * RB
       const uint8_t* s_blk = (g2 ? pa.ws2 : ws) + ((size_t)e * nbk + nb) * RB * NCHUNK * C::S_STAGE;
@@ -3911,10 +3911,10 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
     }
     const int prec = sk ? it * kparts + kp : item;   // profiling record
     const int nb = it % nbk;
-    const int ch = active[it / nbk];
+    const int ch = __ldcg(active + (it / nbk));
     const int e = ch & 255, mc = ch >> 8;
-    const int row0 = exp_start[e] + mc * MT * 8;
-    const int rows_e = exp_start[e + 1] - row0;
+    const int row0 = __ldcg(exp_start + (e)) + mc * MT * 8;
+    const int rows_e = __ldcg(exp_start + (e + 1)) - row0;
     const int groups = min(MT, (rows_e + 7) / 8);
     const float gsc = (g2 ? pa.gs2 : gs)[e] * 256.0f;
     long long ct0 = 0;
@@ -4107,7 +4107,7 @@ __global__ void __launch_bounds__(288, MT >= 4 ? 1 : RB > 1 ? 2 : (MT == 1 ? 4 :
         const int nrows = min(MT * 8, rows_e);
         for (int rr = 0; rr < nrows; ++rr) {
           const int row = row0 + rr;
-          const int route = row_route[row], tk = route / 8;
+          const int route = __ldcg(row_route + (row)), tk = route / 8;
           const float4* yr = reinterpret_cast<const float4*>(pa.y32 + (size_t)row * KTOT);
           float4 v[4];
           float ss = 0.f;
@@ -4989,19 +4989,21 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
   // The route's output (active list) is complete before GEMM1 signals its dependents, so GEMM2
   // (chain) issues its first unit's weight loads before waiting for GEMM1's output; GEMM1 waits
   // first. Either way the first weights are in flight before the activation rows are staged.
-  // flags 512 (test): GEMM2 also waits first; flags 1024 (test): pre-wait metadata through L2 (ld.cg)
+  // flags 512 (test): GEMM2 also waits first. Routing metadata is read through L2 (ld.cg) everywhere:
+  // with PDL, a non-coherent (L1) load of it before or after the wait returned the previous call's
+  // expert list in an alternating-input soak (195 of 400 replays wrong).
   const bool wait_first = MODE == 1 || (flags & 512);
   if ((flags & 128) && wait_first) {
     asm volatile("griddepcontrol.wait;\n" ::: "memory");
     if (threadIdx.x == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
   }
-  const int n_act = min((flags & 1024) ? __ldcg(n_active_ptr) : *n_active_ptr, 8);
+  const int n_act = min(__ldcg(n_active_ptr), 8);
   const int units = n_act * G * S;
   uint4 nw4[4];
   uint2 ns2;
   auto first_load = [&](int u) {
     const int sl = u % S, g = (u / S) % G, ia = u / (S * G);
-    const size_t blk = ((size_t)(((flags & 1024) ? __ldcg(active + ia) : active[ia]) & 255) * G + g) * 32 + sl * kb;
+    const size_t blk = ((size_t)(__ldcg(active + ia) & 255) * G + g) * 32 + sl * kb;
 #pragma unroll
     for (int q = 0; q < 4; ++q) nw4[q] = gv_ldg(wq + blk * 128 + lane + q * 32);
     ns2 = __ldg(ws + blk * 32 + lane);
@@ -5013,15 +5015,15 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
   }
   for (int i = threadIdx.x; i < n_act * 512; i += blockDim.x) {
     const int a = i / 512, o = i % 512;
-    const int row0 = exp_start[active[a] & 255];
-    const int src = MODE == 1 ? row_route[row0] / 8 : row0;
+    const int row0 = __ldcg(exp_start + (__ldcg(active + a) & 255));
+    const int src = MODE == 1 ? __ldcg(row_route + row0) / 8 : row0;
     reinterpret_cast<uint4*>(xs + a * 8192)[o] = __ldcg(reinterpret_cast<const uint4*>(a_src + (size_t)src * KTOT) + o);
   }
   __syncthreads();
   const uint32_t K2 = 0x7E807E80u;   // bf16x2 (2^126, 2^126)
   for (int u = gw; u < units; u += tw) {
     const int sl = u % S, g = (u / S) % G, ia = u / (S * G);
-    const int e = active[ia] & 255;
+    const int e = __ldcg(active + ia) & 255;
     const int j0 = sl * kb;
     const size_t blk = ((size_t)e * G + g) * 32 + j0;
     const uint4* wp = wq + blk * 128 + lane;   // (block j0 was loaded by first_load)
@@ -5083,7 +5085,7 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
       asm volatile("fence.acq_rel.gpu;\n" ::: "memory");
       float v = 0.f;
       for (int k = 0; k < S; ++k) v += __ldcg(part + ((size_t)k * 8 + ia) * ROWS + g * 32 + lane);
-      const int row0 = exp_start[e];
+      const int row0 = __ldcg(exp_start + e);
       if (MODE == 1) {
         const float up = __shfl_down_sync(0xffffffffu, v, 16);
         if (lane < 16) out[(size_t)row0 * KTOT + g * 16 + lane] = __float2bfloat16_rn(v / (1.f + __expf(-v)) * up);
@@ -6679,7 +6681,7 @@ def run_soak(cfgs, sizes=(1,), reps=2000, seed=8_960_000):
 
 
 try:
-    exec('for _sd in (8_960_000, 8_962_000):\n    run_soak({"g16": dict(gemv=16, chain=True), "g16w": dict(gemv=16, chain=True, _gemv_test=512),\n              "g16cg": dict(gemv=16, chain=True, _gemv_test=1024)}, sizes=(1,), reps=400, seed=_sd)\n')
+    exec('_S = {"g16": dict(gemv=16, chain=True), "g8": dict(gemv=8, chain=True),\n      "s1dw2fpc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True),\n      "s1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True)}\nfor _sd in (8_960_000, 8_962_000, 8_964_000):\n    run_soak(_S, sizes=(1,), reps=500, seed=_sd)\nrun_soak({"s1dwc": _S["s1dwc"], "s2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True)}, sizes=(8, 32), reps=300)\nfor _base in (8_950_000, 8_970_000, 8_990_000):\n    run_moe_profile_synth({_n: _S[_n] for _n in ("s1dw2fpc", "g8", "g16")}, sizes=(1,), abls=(), timed=True, stage_detail=True, seed_base=_base + 300)\n')
 except Exception:  # the sim must never break the submission
     import traceback
     print('sim failed:', traceback.format_exc()[-1500:])

@@ -660,3 +660,10 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   stale part. Fixed with fence.acq_rel.gpu in every lane before the count and in the last arriver before
   the reads. New soak test (sim_src.run_soak): 2000 graph replays alternating two inputs, bitwise vs
   eager; a racy variant (flags 256) is soaked too to prove the detector.
+- PDL stale-metadata bug (soak checks a5ebb192 / 8624b979): the chained GEMV returned wrong outputs on
+  ~50% of replays when two inputs alternate (always the 3-expert input after a 2-expert one); unchained 0,
+  the chained tensor-core configs 0. A rebuild that only changed the code shape around the metadata loads
+  (branch on a test flag) passed 400/400, so the non-coherent (ld.global.nc / L1) loads of the route's
+  output were returning the previous call's values under PDL. Fix: every read of routing metadata
+  (n_active, active, exp_start, row_route) in the GEMV and v6 (sab) kernels goes through L2 (__ldcg).
+  The sab chain configs never failed a judge recheck, but they read the same metadata the same way.

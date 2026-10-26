@@ -4982,6 +4982,7 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
   constexpr int G = MODE == 1 ? 256 : 128;   // 32-row groups per expert
   extern __shared__ __align__(128) uint8_t smem[];   // 8 activation rows x 8 KB
   uint8_t* xs = smem;
+  __shared__ int s_e[8], s_row0[8], s_src[8];   // per active expert: id, first row, activation row
   const int lane = threadIdx.x % 32;
   const int nw = blockDim.x / 32;
   const int gw = blockIdx.x * nw + threadIdx.x / 32, tw = gridDim.x * nw;
@@ -5001,29 +5002,34 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
   const int units = n_act * G * S;
   uint4 nw4[4];
   uint2 ns2;
-  auto first_load = [&](int u) {
-    const int sl = u % S, g = (u / S) % G, ia = u / (S * G);
-    const size_t blk = ((size_t)(__ldcg(active + ia) & 255) * G + g) * 32 + sl * kb;
+  auto first_load = [&](int u, int e) {
+    const int sl = u % S, g = (u / S) % G;
+    const size_t blk = ((size_t)e * G + g) * 32 + sl * kb;
 #pragma unroll
     for (int q = 0; q < 4; ++q) nw4[q] = gv_ldg(wq + blk * 128 + lane + q * 32);
     ns2 = __ldg(ws + blk * 32 + lane);
   };
-  if (gw < units) first_load(gw);
+  if (gw < units) first_load(gw, __ldcg(active + gw / (S * G)) & 255);
   if ((flags & 128) && !wait_first) {
     asm volatile("griddepcontrol.wait;\n" ::: "memory");
     if (threadIdx.x == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
   }
+  if (threadIdx.x < n_act) {   // the metadata once per CTA (L2), then from shared memory
+    const int e = __ldcg(active + threadIdx.x) & 255, r0 = __ldcg(exp_start + e);
+    s_e[threadIdx.x] = e;
+    s_row0[threadIdx.x] = r0;
+    s_src[threadIdx.x] = MODE == 1 ? __ldcg(row_route + r0) / 8 : r0;
+  }
+  __syncthreads();
   for (int i = threadIdx.x; i < n_act * 512; i += blockDim.x) {
     const int a = i / 512, o = i % 512;
-    const int row0 = __ldcg(exp_start + (__ldcg(active + a) & 255));
-    const int src = MODE == 1 ? __ldcg(row_route + row0) / 8 : row0;
-    reinterpret_cast<uint4*>(xs + a * 8192)[o] = __ldcg(reinterpret_cast<const uint4*>(a_src + (size_t)src * KTOT) + o);
+    reinterpret_cast<uint4*>(xs + a * 8192)[o] = __ldcg(reinterpret_cast<const uint4*>(a_src + (size_t)s_src[a] * KTOT) + o);
   }
   __syncthreads();
   const uint32_t K2 = 0x7E807E80u;   // bf16x2 (2^126, 2^126)
   for (int u = gw; u < units; u += tw) {
     const int sl = u % S, g = (u / S) % G, ia = u / (S * G);
-    const int e = __ldcg(active + ia) & 255;
+    const int e = s_e[ia];
     const int j0 = sl * kb;
     const size_t blk = ((size_t)e * G + g) * 32 + j0;
     const uint4* wp = wq + blk * 128 + lane;   // (block j0 was loaded by first_load)
@@ -5038,7 +5044,7 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
         for (int q = 0; q < 4; ++q) nw4[q] = gv_ldg(wp + (j + 1) * 128 + q * 32);
         ns2 = __ldg(sp + (j + 1) * 32);
       } else if (u + tw < units) {
-        first_load(u + tw);   // the next unit's first block, under this one's last
+        first_load(u + tw, s_e[(u + tw) / (S * G)]);   // the next unit's first block, under this one's last
       }
       const uint8_t* xk = xa + j * 256;
 #pragma unroll
@@ -5085,7 +5091,7 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
       asm volatile("fence.acq_rel.gpu;\n" ::: "memory");
       float v = 0.f;
       for (int k = 0; k < S; ++k) v += __ldcg(part + ((size_t)k * 8 + ia) * ROWS + g * 32 + lane);
-      const int row0 = __ldcg(exp_start + e);
+      const int row0 = s_row0[ia];
       if (MODE == 1) {
         const float up = __shfl_down_sync(0xffffffffu, v, 16);
         if (lane < 16) out[(size_t)row0 * KTOT + g * 16 + lane] = __float2bfloat16_rn(v / (1.f + __expf(-v)) * up);
@@ -6681,7 +6687,7 @@ def run_soak(cfgs, sizes=(1,), reps=2000, seed=8_960_000):
 
 
 try:
-    exec('_S = {"g16": dict(gemv=16, chain=True), "g8": dict(gemv=8, chain=True),\n      "s1dw2fpc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True),\n      "s1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True)}\nfor _sd in (8_960_000, 8_962_000, 8_964_000):\n    run_soak(_S, sizes=(1,), reps=500, seed=_sd)\nrun_soak({"s1dwc": _S["s1dwc"], "s2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True)}, sizes=(8, 32), reps=300)\nfor _base in (8_950_000, 8_970_000, 8_990_000):\n    run_moe_profile_synth({_n: _S[_n] for _n in ("s1dw2fpc", "g8", "g16")}, sizes=(1,), abls=(), timed=True, stage_detail=True, seed_base=_base + 300)\n')
+    exec('_S = {"g16": dict(gemv=16, chain=True), "g8": dict(gemv=8, chain=True),\n      "s1dw2fpc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True),\n      "s1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True),\n      "s1dwcm": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True, mpf=True)}\nrun_soak({_n: _S[_n] for _n in ("g16", "g8")}, sizes=(1,), reps=500, seed=8_960_000)\nfor _base in (8_950_000, 8_970_000):\n    run_moe_profile_synth({_n: _S[_n] for _n in ("s1dw2fpc", "g8", "g16")}, sizes=(1,), abls=(), timed=True, stage_detail=True, seed_base=_base + 300)\n    run_moe_profile_synth({_n: _S[_n] for _n in ("s1dwc", "s1dwcm")}, sizes=(8, 32), abls=(), timed=True, seed_base=_base + 100)\n')
 except Exception:  # the sim must never break the submission
     import traceback
     print('sim failed:', traceback.format_exc()[-1500:])

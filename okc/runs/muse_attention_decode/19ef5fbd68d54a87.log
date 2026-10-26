@@ -1,0 +1,52 @@
+soak g16 bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak g8 bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak s1dw2fpc bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak s1dwc bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak g16 bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak g8 bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak s1dw2fpc bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak s1dwc bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak g16 bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak g8 bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak s1dw2fpc bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak s1dwc bs1: 500 replays alternating two inputs (3 / 2 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak s1dwc bs8: 300 replays alternating two inputs (10 / 5 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak s2qc bs8: 300 replays alternating two inputs (10 / 5 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak s1dwc bs32: 300 replays alternating two inputs (13 / 16 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+soak s2qc bs32: 300 replays alternating two inputs (13 / 16 local experts), 0 differ from eager (worst rel 0.0e+00); by input [0, 0]
+routing bs1 seed 8950300: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 7.6e-04, row worst 7.6e-04, repeat equal; 39.8 us (v6 s2 53.6, x1.342) | stages 1.2 19.1 13.9 5.1
+check g8 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 36.7 us (v6 s2 53.6, x1.459) | stages 1.1 17.2 14.2 3.6
+check g16 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 35.3 us (v6 s2 53.7, x1.523) | stages 1.0 19.7 12.4 3.6
+routing bs1 seed 8970300: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 2.7e-04, row worst 2.7e-04, repeat equal; 39.6 us (v6 s2 53.2, x1.343) | stages 0.8 19.2 14.1 4.7
+check g8 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 36.4 us (v6 s2 53.4, x1.463) | stages 0.7 17.3 14.3 3.1
+check g16 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 35.2 us (v6 s2 53.6, x1.525) | stages 0.9 20.0 12.6 3.1
+routing bs1 seed 8990300: tokens per local expert [1, 1, 1]
+check s1dw2fpc bs1: rel diff vs v6 2.8e-04, row worst 2.8e-04, repeat equal; 50.1 us (v6 s2 66.5, x1.308) | stages 0.8 27.6 15.6 5.5
+check g8 bs1: rel diff vs v6 7.0e-03, row worst 7.0e-03, repeat equal; 49.4 us (v6 s2 67.0, x1.351) | stages 0.9 28.4 16.6 3.7
+check g16 bs1: rel diff vs v6 7.0e-03, row worst 7.0e-03, repeat equal; 51.2 us (v6 s2 66.5, x1.310) | stages 1.0 29.0 18.8 3.5
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:46:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

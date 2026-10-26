@@ -2441,11 +2441,33 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
   constexpr int G = MODE == 1 ? 256 : 128;   // 32-row groups per expert
   extern __shared__ __align__(128) uint8_t smem[];   // 8 activation rows x 8 KB
   uint8_t* xs = smem;
-  if (flags & 128) {
+  const int lane = threadIdx.x % 32;
+  const int nw = blockDim.x / 32;
+  const int gw = blockIdx.x * nw + threadIdx.x / 32, tw = gridDim.x * nw;
+  const int kb = 32 / S;
+  // The route's output (active list) is complete before GEMM1 signals its dependents, so GEMM2
+  // (chain) issues its first unit's weight loads before waiting for GEMM1's output; GEMM1 waits
+  // first. Either way the first weights are in flight before the activation rows are staged.
+  if ((flags & 128) && MODE == 1) {
     asm volatile("griddepcontrol.wait;\n" ::: "memory");
     if (threadIdx.x == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
   }
   const int n_act = min(*n_active_ptr, 8);
+  const int units = n_act * G * S;
+  uint4 nw4[4];
+  uint2 ns2;
+  auto first_load = [&](int u) {
+    const int sl = u % S, g = (u / S) % G, ia = u / (S * G);
+    const size_t blk = ((size_t)(active[ia] & 255) * G + g) * 32 + sl * kb;
+#pragma unroll
+    for (int q = 0; q < 4; ++q) nw4[q] = gv_ldg(wq + blk * 128 + lane + q * 32);
+    ns2 = __ldg(ws + blk * 32 + lane);
+  };
+  if (gw < units) first_load(gw);
+  if ((flags & 128) && MODE == 2) {
+    asm volatile("griddepcontrol.wait;\n" ::: "memory");
+    if (threadIdx.x == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
+  }
   for (int i = threadIdx.x; i < n_act * 512; i += blockDim.x) {
     const int a = i / 512, o = i % 512;
     const int row0 = exp_start[active[a] & 255];
@@ -2453,25 +2475,15 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
     reinterpret_cast<uint4*>(xs + a * 8192)[o] = __ldcg(reinterpret_cast<const uint4*>(a_src + (size_t)src * KTOT) + o);
   }
   __syncthreads();
-  const int lane = threadIdx.x % 32;
-  const int nw = blockDim.x / 32;
-  const int gw = blockIdx.x * nw + threadIdx.x / 32, tw = gridDim.x * nw;
-  const int kb = 32 / S;
-  const int units = n_act * G * S;
   const uint32_t K2 = 0x7E807E80u;   // bf16x2 (2^126, 2^126)
   for (int u = gw; u < units; u += tw) {
     const int sl = u % S, g = (u / S) % G, ia = u / (S * G);
     const int e = active[ia] & 255;
     const int j0 = sl * kb;
     const size_t blk = ((size_t)e * G + g) * 32 + j0;
-    const uint4* wp = wq + blk * 128 + lane;
+    const uint4* wp = wq + blk * 128 + lane;   // (block j0 was loaded by first_load)
     const uint2* sp = ws + blk * 32 + lane;
     const uint8_t* xa = xs + ia * 8192 + j0 * 256;
-    uint4 nw4[4];
-    uint2 ns2;
-#pragma unroll
-    for (int q = 0; q < 4; ++q) nw4[q] = gv_ldg(wp + q * 32);
-    ns2 = __ldg(sp);
     float acc = 0.f;
     for (int j = 0; j < kb; ++j) {
       const uint4 q4[4] = {nw4[0], nw4[1], nw4[2], nw4[3]};
@@ -2480,6 +2492,8 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
 #pragma unroll
         for (int q = 0; q < 4; ++q) nw4[q] = gv_ldg(wp + (j + 1) * 128 + q * 32);
         ns2 = __ldg(sp + (j + 1) * 32);
+      } else if (u + tw < units) {
+        first_load(u + tw);   // the next unit's first block, under this one's last
       }
       const uint8_t* xk = xa + j * 256;
 #pragma unroll
@@ -2505,31 +2519,33 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
       }
     }
     acc *= gs[e];
-    if (MODE == 1) {
-      float* pr = part + ((size_t)sl * 8 + ia) * 8192;   // [slice][active][group row]
-      pr[g * 32 + lane] = acc;
-      __threadfence();
-      __syncwarp();
-      int last = 0;
-      if (lane == 0) {
-        const int old = atomicAdd(counters + ia * G + g, 1);
-        last = old == S - 1;
-        if (last) counters[ia * G + g] = 0;
-      }
-      last = __shfl_sync(0xffffffffu, last, 0);
-      if (last) {
-        __threadfence();
-        float v = 0.f;
-        for (int k = 0; k < S; ++k) v += __ldcg(part + ((size_t)k * 8 + ia) * 8192 + g * 32 + lane);
-        const float up = __shfl_down_sync(0xffffffffu, v, 16);
-        if (lane < 16) {
-          const int row0 = exp_start[e];
-          out[(size_t)row0 * KTOT + g * 16 + lane] = __float2bfloat16_rn(v / (1.f + __expf(-v)) * up);
-        }
-      }
-    } else {
+    // Slices meet in fp32 parts [slice][active][row of the expert's 8192 / 4096]; the group's last
+    // slice sums them in slice order (deterministic) and writes silu(gate) * up (GEMM1) or y (GEMM2).
+    constexpr int ROWS = MODE == 1 ? 8192 : 4096;
+    part[((size_t)sl * 8 + ia) * ROWS + g * 32 + lane] = acc;
+    // Warp barrier orders the lanes' part stores before lane 0's acq_rel add (cumulative release:
+    // no full membar per unit); the last arriver's acquire + barrier orders the part reads after it.
+    __syncwarp();
+    int last = 0;
+    int* cnt = counters + (MODE == 1 ? 0 : 2048) + ia * G + g;
+    if (lane == 0) {
+      int old;
+      asm volatile("atom.acq_rel.gpu.global.add.s32 %0, [%1], 1;\n" : "=r"(old) : "l"(cnt) : "memory");
+      last = old == S - 1;
+      if (last) *cnt = 0;
+    }
+    last = __shfl_sync(0xffffffffu, last, 0);
+    if (last) {
+      __syncwarp();   // memory ordering: lane 0's acquire before every lane's part reads
+      float v = 0.f;
+      for (int k = 0; k < S; ++k) v += __ldcg(part + ((size_t)k * 8 + ia) * ROWS + g * 32 + lane);
       const int row0 = exp_start[e];
-      part[((size_t)sl * part_rows + row0) * KTOT + g * 32 + lane] = acc;
+      if (MODE == 1) {
+        const float up = __shfl_down_sync(0xffffffffu, v, 16);
+        if (lane < 16) out[(size_t)row0 * KTOT + g * 16 + lane] = __float2bfloat16_rn(v / (1.f + __expf(-v)) * up);
+      } else {
+        out[(size_t)row0 * KTOT + g * 32 + lane] = __float2bfloat16_rn(v);
+      }
     }
   }
 }
@@ -3028,7 +3044,7 @@ def gemv_layout(bank, weights, start=0, count=32):
             qs.append(q); ss.append(sc)
         bank[name + "gv"] = torch.stack(qs).contiguous()
         bank[name + "gvs"] = torch.stack(ss).contiguous()
-    bank["gv_cnt"] = torch.zeros(8 * 256, dtype=torch.int32, device=bank["w13gv"].device)
+    bank["gv_cnt"] = torch.zeros(4096, dtype=torch.int32, device=bank["w13gv"].device)
     return bank
 
 
@@ -3233,7 +3249,8 @@ def moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices
     n_active = torch.empty((2,), dtype=torch.int32, device=device)
     inter = torch.empty((p, 4096), dtype=torch.bfloat16, device=device)
     part1 = torch.empty((slices, 8, 8192), dtype=torch.float32, device=device)
-    part2 = torch.empty((slices, p, 4096), dtype=torch.float32, device=device)
+    part2 = torch.empty((slices, 8, 4096), dtype=torch.float32, device=device)
+    y = torch.empty((p, 4096), dtype=torch.bfloat16, device=device)
     out = torch.empty((m, hidden), dtype=x.dtype, device=device)
     cnt = bank["gv_cnt"]
     fl = 128 if chain else 0
@@ -3249,11 +3266,11 @@ def moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices
 
     def gemm2():
         mod.moe_gemv(2, inter, row_route, bank["w2gv"], bank["w2gvs"], bank["w2_gs"], active, n_active[0:1], exp_start,
-                     inter, part2, slices, cnt, 132 * 2, fl)
+                     y, part2, slices, cnt, 132 * 2, fl)
 
     def post():
-        _post_norm_parts_kernel[(m,)](part2, norm_w, topk_weights, pos_of_route, out, eps, p, KP=slices, TOPK=topk, H=4096,
-                                      PDL=chain, num_warps=8, **(dict(launch_pdl=True) if chain else {}))
+        _post_norm_rows_kernel[(m,)](y, norm_w, topk_weights, pos_of_route, out, eps, TOPK=topk, H=hidden, PDL=chain,
+                                     num_warps=8, **(dict(launch_pdl=True) if chain else {}))
 
     return [route, gemm1, gemm2, post], out
 

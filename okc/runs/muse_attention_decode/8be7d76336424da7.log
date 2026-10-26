@@ -1,0 +1,42 @@
+routing bs1 seed 8950300: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 7.6e-04, row worst 7.6e-04, repeat equal; 38.4 us (v6 s2 54.4, x1.418) | stages 0.6 18.0 12.5 4.6
+check g8 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 32.4 us (v6 s2 54.9, x1.690) | stages 0.4 15.1 13.2 3.0
+check g16 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 31.8 us (v6 s2 54.5, x1.718) | stages 0.6 18.1 11.0 3.1
+check g4 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 43.7 us (v6 s2 54.7, x1.245) | stages 0.6 20.0 12.9 3.2
+check g32 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 43.1 us (v6 s2 54.7, x1.263) | stages 0.4 25.3 15.7 3.1
+routing bs1 seed 8970300: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 2.7e-04, row worst 2.7e-04, repeat equal; 39.0 us (v6 s2 54.3, x1.388) | stages 0.8 17.5 12.9 4.9
+check g8 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 32.4 us (v6 s2 54.5, x1.674) | stages 0.8 15.9 13.5 3.1
+check g16 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 31.6 us (v6 s2 54.8, x1.730) | stages 0.7 18.3 11.7 3.0
+check g4 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 44.1 us (v6 s2 54.4, x1.237) | stages 0.7 20.5 13.4 3.3
+check g32 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 42.8 us (v6 s2 54.7, x1.273) | stages 1.0 25.4 16.1 2.9
+routing bs1 seed 8990300: tokens per local expert [1, 1, 1]
+check s1dw2fpc bs1: rel diff vs v6 2.8e-04, row worst 2.8e-04, repeat equal; 49.6 us (v6 s2 68.3, x1.386) | stages 0.8 26.6 14.2 5.7
+check g8 bs1: rel diff vs v6 7.0e-03, row worst 7.0e-03, repeat equal; 42.4 us (v6 s2 68.6, x1.610) | stages 0.8 25.5 14.7 3.6
+check g16 bs1: rel diff vs v6 7.0e-03, row worst 7.0e-03, repeat equal; 44.1 us (v6 s2 68.7, x1.556) | stages 0.8 25.3 17.8 3.5
+check g4 bs1: rel diff vs v6 7.0e-03, row worst 7.0e-03, repeat equal; 47.1 us (v6 s2 68.3, x1.459) | stages 0.9 22.4 21.0 3.4
+check g32 bs1: rel diff vs v6 7.0e-03, row worst 7.0e-03, repeat equal; 58.3 us (v6 s2 68.8, x1.175) | stages 0.8 35.1 21.5 3.3
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 14:03:26 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

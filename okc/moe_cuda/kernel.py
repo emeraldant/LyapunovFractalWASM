@@ -2219,7 +2219,6 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
     const uint4* wp = wq + blk * 128 + lane;   // (block j0 was loaded by first_load)
     const uint2* sp = ws + blk * 32 + lane;
     const uint8_t* xa = xs + ia * 8192 + j0 * 256;
-    if (u != gw) first_load(u);
     float acc = 0.f;
     for (int j = 0; j < kb; ++j) {
       const uint4 q4[4] = {nw4[0], nw4[1], nw4[2], nw4[3]};
@@ -2228,6 +2227,8 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
 #pragma unroll
         for (int q = 0; q < 4; ++q) nw4[q] = gv_ldg(wp + (j + 1) * 128 + q * 32);
         ns2 = __ldg(sp + (j + 1) * 32);
+      } else if (u + tw < units) {
+        first_load(u + tw);   // the next unit's first block, under this one's last
       }
       const uint8_t* xk = xa + j * 256;
 #pragma unroll

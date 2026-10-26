@@ -163,12 +163,12 @@ __global__ void ldg_region(const uint4* __restrict__ src, size_t per_warp16, int
 // unpack8, rescales by a constant (HMUL2: undo the 2^-126 placement), multiplies by the activation
 // pairs (one broadcast LDS.128 per word) with HFMA2 into a bf16x2 sum per 16-value scale block, then
 // one fp32 FMA by the block's scale. (Timing probe: bit order / denormals are not checked here.)
-template <int D>
+template <int D, int T>
 __global__ void __launch_bounds__(512) ldg_gemv(const uint4* __restrict__ w, const uint2* __restrict__ sc,
                                                 const __nv_bfloat16* __restrict__ x, float* __restrict__ part,
                                                 int groups, int kb, int nslices) {
-  __shared__ __align__(16) uint8_t xs[8192];
-  for (int i = threadIdx.x; i < 512; i += blockDim.x) reinterpret_cast<uint4*>(xs)[i] = reinterpret_cast<const uint4*>(x)[i];
+  __shared__ __align__(16) uint8_t xs[T * 8192];   // T token rows
+  for (int i = threadIdx.x; i < 512 * T; i += blockDim.x) reinterpret_cast<uint4*>(xs)[i] = reinterpret_cast<const uint4*>(x)[i];
   __syncthreads();
   const int lane = threadIdx.x % 32;
   const int nw = blockDim.x / 32;
@@ -189,7 +189,9 @@ __global__ void __launch_bounds__(512) ldg_gemv(const uint4* __restrict__ w, con
         for (int q = 0; q < 4; ++q) rw[d][q] = ldg_stream(wp + d * 128 + q * 32);
         rs[d] = *reinterpret_cast<const uint2*>(sp + d * 32);
       }
-    float acc = 0.f;
+    float acc[T];
+#pragma unroll
+    for (int t = 0; t < T; ++t) acc[t] = 0.f;
     for (int j = 0; j < kb; j += D) {
 #pragma unroll
       for (int d = 0; d < D; ++d) {
@@ -204,7 +206,9 @@ __global__ void __launch_bounds__(512) ldg_gemv(const uint4* __restrict__ w, con
           const uint8_t* xk = xs + (size_t)(j0 + j + d) * 256;
 #pragma unroll
           for (int b = 0; b < 8; ++b) {   // scale block b: words 2b, 2b + 1
-            __nv_bfloat162 s2acc = __floats2bfloat162_rn(0.f, 0.f);
+            __nv_bfloat162 s2acc[T];
+#pragma unroll
+            for (int t = 0; t < T; ++t) s2acc[t] = __floats2bfloat162_rn(0.f, 0.f);
 #pragma unroll
             for (int h = 0; h < 2; ++h) {
               const int wi = 2 * b + h;
@@ -212,22 +216,28 @@ __global__ void __launch_bounds__(512) ldg_gemv(const uint4* __restrict__ w, con
               const uint32_t word = (wi % 4) == 0 ? qq.x : (wi % 4) == 1 ? qq.y : (wi % 4) == 2 ? qq.z : qq.w;
               uint32_t v[4];
               unpack8(word, v);
-              const uint4 xv = *reinterpret_cast<const uint4*>(xk + wi * 16);
-              const uint32_t xw[4] = {xv.x, xv.y, xv.z, xv.w};
+              uint32_t a[4];
 #pragma unroll
-              for (int i = 0; i < 4; ++i) {
-                const uint32_t a = mul2(v[i], K2);
-                s2acc = __hfma2(*reinterpret_cast<const __nv_bfloat162*>(&a), *reinterpret_cast<const __nv_bfloat162*>(&xw[i]), s2acc);
+              for (int i = 0; i < 4; ++i) a[i] = mul2(v[i], K2);
+#pragma unroll
+              for (int t = 0; t < T; ++t) {
+                const uint4 xv = *reinterpret_cast<const uint4*>(xk + t * 8192 + wi * 16);
+                const uint32_t xw[4] = {xv.x, xv.y, xv.z, xv.w};
+#pragma unroll
+                for (int i = 0; i < 4; ++i)
+                  s2acc[t] = __hfma2(*reinterpret_cast<const __nv_bfloat162*>(&a[i]), *reinterpret_cast<const __nv_bfloat162*>(&xw[i]), s2acc[t]);
               }
             }
             const uint32_t sb = ((b < 4 ? s2.x : s2.y) >> (8 * (b % 4))) & 0x7Fu;
             const float scf = __uint_as_float((sb << 20) + (120u << 23));
-            acc = fmaf(scf, __low2float(s2acc) + __high2float(s2acc), acc);
+#pragma unroll
+            for (int t = 0; t < T; ++t) acc[t] = fmaf(scf, __low2float(s2acc[t]) + __high2float(s2acc[t]), acc[t]);
           }
         }
       }
     }
-    part[(size_t)sl * groups * 32 + g * 32 + lane] = acc;
+#pragma unroll
+    for (int t = 0; t < T; ++t) part[((size_t)t * nslices + sl) * groups * 32 + g * 32 + lane] = acc[t];
   }
 }
 
@@ -236,7 +246,7 @@ void ldg_setup(int64_t max_tiles) {
   g_w = torch::randint(0, 256, {max_tiles * 32 * 64 * 16}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
   g_s = torch::randint(40, 80, {max_tiles * 32 * 32 * 4}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
   g_x = torch::randn({8, 4096}, torch::dtype(torch::kBFloat16).device(torch::kCUDA));
-  g_part = torch::zeros({16 * max_tiles * 128}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
+  g_part = torch::zeros({4 * 32 * max_tiles * 16}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
   g_sink = torch::zeros({4}, torch::dtype(torch::kInt32).device(torch::kCUDA));
   const int smem = 8 * XSTRIDE;
   cudaFuncSetAttribute(ldg_mma<2, false>, cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
@@ -262,8 +272,11 @@ void ldg_launch(int64_t mode, int64_t d, int64_t tiles, int64_t nslices, int64_t
     auto* s2 = reinterpret_cast<const uint2*>(g_s.data_ptr());
     auto* xx = reinterpret_cast<const __nv_bfloat16*>(g_x.data_ptr());
     float* pp = g_part.data_ptr<float>();
-    if (d == 1) ldg_gemv<1><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
-    if (d == 2) ldg_gemv<2><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
+    // d = tokens per expert (1-4), prefetch depth 1
+    if (d == 1) ldg_gemv<1, 1><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
+    if (d == 2) ldg_gemv<1, 2><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
+    if (d == 3) ldg_gemv<1, 3><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
+    if (d == 4) ldg_gemv<1, 4><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
     return;
   }
   if (mode == 3) {
@@ -310,17 +323,17 @@ def run_ldg_probe():
     mod.ldg_setup(5120)
     def t(fn, pairs=6):
         return bench.compare(fn, lambda: tiny.add_(1), pairs=pairs)[0]
-    cases = cases[:2]
+    cases = (("bs8 G1 10x8192", 5120), ("bs8 G2 10x4096", 2560))
     for label, tiles in cases:
         nbytes = tiles * 32 * 64 * 16 * 9 // 8
         line = [f"plain {t(lambda: mod.ldg_launch(1, 0, tiles, 1, 4, 512), 8):.1f}",
-                f"mma D2 s4 2x512 {t(lambda: mod.ldg_launch(0, 2, tiles, 4, 2, 512)):.1f}",
-                f"mma D2 s8 2x512 {t(lambda: mod.ldg_launch(0, 2, tiles, 8, 2, 512)):.1f}"]
-        res = []
-        for d in (1, 2):
-            for ns in (2, 4, 8, 16):
-                for cps, th in ((1, 512), (2, 512), (4, 256)):
-                    res.append((t(lambda d=d, ns=ns, cps=cps, th=th: mod.ldg_launch(4, d, tiles, ns, cps, th)), f"gemv D{d} s{ns} {cps}x{th}"))
-        res.sort()
-        line += [f"{n} {u:.1f}" for u, n in res[:5]]
-        print(f"ldg3 {label} {nbytes / 1e6:.1f} MB (us): " + "; ".join(line), flush=True)
+                f"mma(8 tok) D2 s4 2x512 {t(lambda: mod.ldg_launch(0, 2, tiles, 4, 2, 512)):.1f}",
+                f"mma(8 tok) D2 s2 2x512 {t(lambda: mod.ldg_launch(0, 2, tiles, 2, 2, 512)):.1f}"]
+        for T in (1, 2, 3, 4):
+            res = []
+            for ns in (2, 4, 8):
+                for cps, th in ((2, 512), (4, 256)):
+                    res.append((t(lambda T=T, ns=ns, cps=cps, th=th: mod.ldg_launch(4, T, tiles, ns, cps, th)), f"s{ns} {cps}x{th}"))
+            res.sort()
+            line.append(f"gemv T{T} {res[0][0]:.1f} ({res[0][1]})")
+        print(f"ldg4 {label} {nbytes / 1e6:.1f} MB (us): " + "; ".join(line), flush=True)

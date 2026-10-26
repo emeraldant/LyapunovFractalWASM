@@ -302,6 +302,80 @@ __global__ void ldg_region(const uint4* __restrict__ src, size_t per_warp16, int
   if (x == 0x12345678u) sink[0] = x;
 }
 
+
+// bs 1 GEMV on CUDA cores (no MMA): lane = one weight row of a 32-row group; per k128 block a lane
+// loads its 64 B of codes (4 LDG.128, layout [group][block][q][lane]) + 8 scale bytes, unpacks with
+// unpack8, rescales by a constant (HMUL2: undo the 2^-126 placement), multiplies by the activation
+// pairs (one broadcast LDS.128 per word) with HFMA2 into a bf16x2 sum per 16-value scale block, then
+// one fp32 FMA by the block's scale. (Timing probe: bit order / denormals are not checked here.)
+template <int D>
+__global__ void __launch_bounds__(512) ldg_gemv(const uint4* __restrict__ w, const uint2* __restrict__ sc,
+                                                const __nv_bfloat16* __restrict__ x, float* __restrict__ part,
+                                                int groups, int kb, int nslices) {
+  __shared__ __align__(16) uint8_t xs[8192];
+  for (int i = threadIdx.x; i < 512; i += blockDim.x) reinterpret_cast<uint4*>(xs)[i] = reinterpret_cast<const uint4*>(x)[i];
+  __syncthreads();
+  const int lane = threadIdx.x % 32;
+  const int nw = blockDim.x / 32;
+  const int gw = blockIdx.x * nw + threadIdx.x / 32, tw = gridDim.x * nw;
+  const int units = groups * nslices;
+  const uint32_t K2 = 0x7E807E80u;   // bf16x2 (2^126, 2^126)
+  for (int u = gw; u < units; u += tw) {
+    const int g = u / nslices, sl = u % nslices;
+    const int j0 = sl * kb;
+    const uint4* wp = w + ((size_t)g * 32 + j0) * 128 + lane;
+    const uint2* sp = sc + ((size_t)g * 32 + j0) * 32 + lane;
+    uint4 rw[D][4];
+    uint2 rs[D];
+#pragma unroll
+    for (int d = 0; d < D; ++d)
+      if (d < kb) {
+#pragma unroll
+        for (int q = 0; q < 4; ++q) rw[d][q] = ldg_stream(wp + d * 128 + q * 32);
+        rs[d] = *reinterpret_cast<const uint2*>(sp + d * 32);
+      }
+    float acc = 0.f;
+    for (int j = 0; j < kb; j += D) {
+#pragma unroll
+      for (int d = 0; d < D; ++d) {
+        if (j + d < kb) {
+          uint4 q4[4] = {rw[d][0], rw[d][1], rw[d][2], rw[d][3]};
+          const uint2 s2 = rs[d];
+          if (j + d + D < kb) {
+#pragma unroll
+            for (int q = 0; q < 4; ++q) rw[d][q] = ldg_stream(wp + (j + d + D) * 128 + q * 32);
+            rs[d] = *reinterpret_cast<const uint2*>(sp + (j + d + D) * 32);
+          }
+          const uint8_t* xk = xs + (size_t)(j0 + j + d) * 256;
+#pragma unroll
+          for (int b = 0; b < 8; ++b) {   // scale block b: words 2b, 2b + 1
+            __nv_bfloat162 s2acc = __floats2bfloat162_rn(0.f, 0.f);
+#pragma unroll
+            for (int h = 0; h < 2; ++h) {
+              const int wi = 2 * b + h;
+              const uint4 qq = q4[wi / 4];
+              const uint32_t word = (wi % 4) == 0 ? qq.x : (wi % 4) == 1 ? qq.y : (wi % 4) == 2 ? qq.z : qq.w;
+              uint32_t v[4];
+              unpack8(word, v);
+              const uint4 xv = *reinterpret_cast<const uint4*>(xk + wi * 16);
+              const uint32_t xw[4] = {xv.x, xv.y, xv.z, xv.w};
+#pragma unroll
+              for (int i = 0; i < 4; ++i) {
+                const uint32_t a = mul2(v[i], K2);
+                s2acc = __hfma2(*reinterpret_cast<const __nv_bfloat162*>(&a), *reinterpret_cast<const __nv_bfloat162*>(&xw[i]), s2acc);
+              }
+            }
+            const uint32_t sb = ((b < 4 ? s2.x : s2.y) >> (8 * (b % 4))) & 0x7Fu;
+            const float scf = __uint_as_float((sb << 20) + (120u << 23));
+            acc = fmaf(scf, __low2float(s2acc) + __high2float(s2acc), acc);
+          }
+        }
+      }
+    }
+    part[(size_t)sl * groups * 32 + g * 32 + lane] = acc;
+  }
+}
+
 static torch::Tensor g_w, g_s, g_x, g_part, g_sink;
 void ldg_setup(int64_t max_tiles) {
   g_w = torch::randint(0, 256, {max_tiles * 32 * 64 * 16}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
@@ -325,6 +399,16 @@ void ldg_launch(int64_t mode, int64_t d, int64_t tiles, int64_t nslices, int64_t
     const size_t n = (size_t)tiles * 32 * 64 * 9 / 8;
     ldg_plain<<<grid, (int)threads, 0, st>>>(reinterpret_cast<const uint4*>(g_w.data_ptr()), n,
                                              reinterpret_cast<uint32_t*>(g_sink.data_ptr()));
+    return;
+  }
+  if (mode == 4) {   // GEMV: groups of 32 rows = tiles / 2
+    const int kb = 32 / (int)nslices;
+    auto* w4 = reinterpret_cast<const uint4*>(g_w.data_ptr());
+    auto* s2 = reinterpret_cast<const uint2*>(g_s.data_ptr());
+    auto* xx = reinterpret_cast<const __nv_bfloat16*>(g_x.data_ptr());
+    float* pp = g_part.data_ptr<float>();
+    if (d == 1) ldg_gemv<1><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
+    if (d == 2) ldg_gemv<2><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
     return;
   }
   if (mode == 3) {
@@ -373,16 +457,20 @@ def run_ldg_probe():
     mod.ldg_setup(5120)
     def t(fn, pairs=6):
         return bench.compare(fn, lambda: tiny.add_(1), pairs=pairs)[0]
+    cases = cases[:2]
     for label, tiles in cases:
         nbytes = tiles * 32 * 64 * 16 * 9 // 8
-        line = [f"plain {t(lambda: mod.ldg_launch(1, 0, tiles, 1, 4, 512), 8):.1f}"]
-        for ns in (2, 4):
-            for d in (2, 4):
-                line.append(f"region s{ns} D{d} {t(lambda ns=ns, d=d: mod.ldg_launch(3, d, tiles, ns, 2, 512)):.1f}")
-        for mode, nm in ((0, "mma"), (2, "mma-IL")):
-            for d, ns, cps, th in ((2, 4, 2, 512), (2, 2, 2, 512), (4, 2, 1, 512), (2, 8, 2, 512)):
-                line.append(f"{nm} D{d} s{ns} {cps}x{th} {t(lambda mode=mode, d=d, ns=ns, cps=cps, th=th: mod.ldg_launch(mode, d, tiles, ns, cps, th)):.1f}")
-        print(f"ldg2 {label} {nbytes / 1e6:.1f} MB (us): " + "; ".join(line), flush=True)
+        line = [f"plain {t(lambda: mod.ldg_launch(1, 0, tiles, 1, 4, 512), 8):.1f}",
+                f"mma D2 s4 2x512 {t(lambda: mod.ldg_launch(0, 2, tiles, 4, 2, 512)):.1f}",
+                f"mma D2 s8 2x512 {t(lambda: mod.ldg_launch(0, 2, tiles, 8, 2, 512)):.1f}"]
+        res = []
+        for d in (1, 2):
+            for ns in (2, 4, 8, 16):
+                for cps, th in ((1, 512), (2, 512), (4, 256)):
+                    res.append((t(lambda d=d, ns=ns, cps=cps, th=th: mod.ldg_launch(4, d, tiles, ns, cps, th)), f"gemv D{d} s{ns} {cps}x{th}"))
+        res.sort()
+        line += [f"{n} {u:.1f}" for u, n in res[:5]]
+        print(f"ldg3 {label} {nbytes / 1e6:.1f} MB (us): " + "; ".join(line), flush=True)
 
 
 

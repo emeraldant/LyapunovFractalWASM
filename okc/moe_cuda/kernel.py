@@ -2344,7 +2344,7 @@ void moe_gemm_sab(int64_t mode, int64_t mt, int64_t stages, torch::Tensor a_src,
 #define SPCASES2(A_) SPCASE2(1, 1, 4, A_) SPCASE2(2, 1, 4, A_)
     SPCASES2(0) SPCASES2(1) SPCASES2(2) SPCASES2(3) SPCASES2(4) SPCASES2(12) SPCASES2(20) SPCASES2(28)
 #define SPCASE4(M_, T_, S_, A_) if (mode == M_ && mt == T_ && stages == 400 + S_ && abl == A_) { launch_sab<M_, T_, S_, true, A_, 4>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, pp, sp, kp, pt, prow, (int)sk, pfw, pfs, cnt, pa); return; }
-#define SPCASES4(A_) SPCASE4(1, 2, 2, A_) SPCASE4(2, 2, 2, A_)
+#define SPCASES4(A_) SPCASE4(1, 2, 2, A_) SPCASE4(2, 2, 2, A_) SPCASE4(1, 1, 2, A_) SPCASE4(2, 1, 2, A_)
     SPCASES4(0) SPCASES4(1) SPCASES4(3) SPCASES4(4) SPCASES4(12) SPCASES4(28)
 #endif
     TORCH_CHECK(false, "moe_gemm_sab: no profiling build for this configuration (needs -DOKC_PROF)");
@@ -2438,7 +2438,7 @@ void moe_gemm_wg(int64_t mode, int64_t n_tok, int64_t stages, torch::Tensor a_sr
   GCASET(1, 64, 4) GCASET(2, 64, 4)
   // 500 + S: TMA, 64-row chunks, wgmma width per chunk (16 / 32 / 64 live rows)
 #define GCASEV(M_, S_) if (mode == M_ && n_tok == 64 && stages == 500 + S_) { launch_wg<M_, 64, S_, false, 0, true, false, true, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, (int)pfd); return; }
-  GCASEV(1, 4) GCASEV(2, 4)
+  GCASEV(1, 4) GCASEV(2, 4) GCASEV(1, 8) GCASEV(2, 8)   // 508: 8 stages (1 CTA/SM): a deeper weight ring
   // stages + 400: TMA with the single-buffer W0 form at 32 tokens (GEMM2: 3 CTAs/SM, 71 registers;
   // GEMM1 would serialize its wgmmas at 72: ptxas C7512, so it is not instantiated).
 #define GCASETW(M_, N_, S_) if (mode == M_ && n_tok == N_ && stages == 400 + S_) { launch_wg<M_, N_, S_, false, 0, true, false, true>(a_src, row_route, wq, ws, gs, active, n_active, exp_start, out, n_blocks, grid, nullptr, sp, (int)pfd); return; }

@@ -4989,23 +4989,25 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
   // The route's output (active list) is complete before GEMM1 signals its dependents, so GEMM2
   // (chain) issues its first unit's weight loads before waiting for GEMM1's output; GEMM1 waits
   // first. Either way the first weights are in flight before the activation rows are staged.
-  if ((flags & 128) && MODE == 1) {
+  // flags 512 (test): GEMM2 also waits first; flags 1024 (test): pre-wait metadata through L2 (ld.cg)
+  const bool wait_first = MODE == 1 || (flags & 512);
+  if ((flags & 128) && wait_first) {
     asm volatile("griddepcontrol.wait;\n" ::: "memory");
     if (threadIdx.x == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
   }
-  const int n_act = min(*n_active_ptr, 8);
+  const int n_act = min((flags & 1024) ? __ldcg(n_active_ptr) : *n_active_ptr, 8);
   const int units = n_act * G * S;
   uint4 nw4[4];
   uint2 ns2;
   auto first_load = [&](int u) {
     const int sl = u % S, g = (u / S) % G, ia = u / (S * G);
-    const size_t blk = ((size_t)(active[ia] & 255) * G + g) * 32 + sl * kb;
+    const size_t blk = ((size_t)(((flags & 1024) ? __ldcg(active + ia) : active[ia]) & 255) * G + g) * 32 + sl * kb;
 #pragma unroll
     for (int q = 0; q < 4; ++q) nw4[q] = gv_ldg(wq + blk * 128 + lane + q * 32);
     ns2 = __ldg(ws + blk * 32 + lane);
   };
   if (gw < units) first_load(gw);
-  if ((flags & 128) && MODE == 2) {
+  if ((flags & 128) && !wait_first) {
     asm volatile("griddepcontrol.wait;\n" ::: "memory");
     if (threadIdx.x == 0) asm volatile("griddepcontrol.launch_dependents;\n" ::: "memory");
   }
@@ -5771,7 +5773,8 @@ def ws_layout(bank):
     return bank
 
 
-def moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices=16, chain=True, topk=8, _racy=False):
+def moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices=16, chain=True, topk=8, _racy=False,
+                    _test=0):
     """One token: route, GEMM1 GEMV (silu(gate) * up by each group's last slice), GEMM2 GEMV (fp32
     slices), the parts post-norm (KP = slices). Needs gemv_layout(bank)."""
     m, hidden = x.shape
@@ -5795,7 +5798,7 @@ def moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices
     y = torch.empty((p, 4096), dtype=torch.bfloat16, device=device)
     out = torch.empty((m, hidden), dtype=x.dtype, device=device)
     cnt = bank["gv_cnt"]
-    fl = (128 if chain else 0) | (256 if _racy else 0)   # _racy: soak-test the detector only
+    fl = (128 if chain else 0) | (256 if _racy else 0) | _test   # _racy / _test: soak-test variants only
 
     def route():
         _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, 8,
@@ -5861,7 +5864,7 @@ def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
                     fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0, tiny=False, _tiny_stamps=False, apost=False,
-                    fused=False, gemv=0, _gemv_racy=False):
+                    fused=False, gemv=0, _gemv_racy=False, _gemv_test=0):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -5882,7 +5885,7 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     GEMM1's on the same work queue and wait per token chunk for its GEMM1 items (counters)."""
     if gemv:   # bs 1: both GEMMs on CUDA cores (moe_gemv_kernel), gemv = K slices
         return moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices=gemv, chain=chain, topk=topk,
-                               _racy=_gemv_racy)
+                               _racy=_gemv_racy, _test=_gemv_test)
     if tiny:   # bs <= 8: one persistent grid for both GEMMs (moe_tiny_kernel)
         return moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=chain, topk=topk,
                                tiny_ring=tiny if tiny is not True else 4, stamps=_tiny_stamps)
@@ -6676,7 +6679,7 @@ def run_soak(cfgs, sizes=(1,), reps=2000, seed=8_960_000):
 
 
 try:
-    exec('for _sd in (8_960_000, 8_961_000, 8_962_000):\n    run_soak({"g16": dict(gemv=16, chain=True), "g16nc": dict(gemv=16, chain=False),\n              "s1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True)}, sizes=(1,), reps=400, seed=_sd)\n')
+    exec('for _sd in (8_960_000, 8_962_000):\n    run_soak({"g16": dict(gemv=16, chain=True), "g16w": dict(gemv=16, chain=True, _gemv_test=512),\n              "g16cg": dict(gemv=16, chain=True, _gemv_test=1024)}, sizes=(1,), reps=400, seed=_sd)\n')
 except Exception:  # the sim must never break the submission
     import traceback
     print('sim failed:', traceback.format_exc()[-1500:])

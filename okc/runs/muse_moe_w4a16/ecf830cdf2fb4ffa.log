@@ -1,0 +1,164 @@
+moe cuda: ready in 70 s
+moe bs1 ('cuda', 's1'): not faster (56.9/50.9 us, 69.3/57.3 us)
+moe bs1 ('cuda', 's2'): not faster (58.2/50.8 us, 71.9/57.2 us)
+moe bs1 ('cuda', 's1d'): not faster (54.9/51.0 us, 62.5/57.2 us)
+moe bs1 ('cuda', 's1k4'): not faster (50.7/51.0 us, 61.0/57.6 us)
+moe bs1 ('cuda', 's1dw'): not faster (48.8/50.4 us, 58.4/57.7 us)
+moe bs1 ('cuda', 's2w'): not faster (53.0/50.4 us, 64.5/57.4 us)
+moe bs1 ('cuda', 's2q'): not faster (50.5/51.1 us, 60.6/57.3 us)
+moe bs1 ('cuda', 's2qv16'): not faster (57.5/51.1 us, 67.5/57.5 us)
+moe bs1 ('cuda', 's1dw2fp'): adopted over ('fast', 8, True) 45.0/50.6 us, 56.2/57.2 us
+moe bs1 ('cuda', 's1k4c'): not faster (49.0/44.5 us, 56.0/56.9 us)
+moe bs1 ('cuda', 's1dw2fpc'): adopted over ('cuda', 's1dw2fp') 44.0/44.6 us, 54.0/56.2 us
+moe bs1 ('cuda', 's1dwc'): not faster (51.4/44.0 us, 54.0/54.0 us)
+moe bs1 ('cuda', 's2wc'): not faster (61.0/43.7 us, 64.3/54.5 us)
+moe bs1 ('cuda', 's2qc'): not faster (53.6/43.8 us, 57.8/54.0 us)
+moe bs1 ('cuda', 'g16'): adopted over ('cuda', 's1dw2fpc') 37.3/43.6 us, 51.1/54.4 us
+moe bs1 ('cuda', 'g8'): adopted over ('cuda', 'g16') 37.5/37.6 us, 48.0/50.9 us
+moe bs1 ('cuda', 'f1dwc'): not faster (47.4/37.3 us, 55.7/48.0 us)
+moe bs1 ('cuda', 'f2wc'): not faster (50.7/37.5 us, 54.0/48.3 us)
+moe bs1 ('cuda', 'f2qc'): not faster (47.3/37.7 us, 56.3/48.2 us)
+moe bs1 ('cuda', 's1r2c'): not faster (76.5/37.6 us, 78.7/48.5 us)
+moe bs1 ('cuda', 's1r2wc'): not faster (69.2/37.6 us, 73.2/48.1 us)
+moe bs1 ('cuda', 't2'): not faster (58.3/37.5 us, 74.1/48.0 us)
+moe bs1 ('cuda', 't4'): not faster (62.6/37.7 us, 72.5/48.4 us)
+moe bs1 ('cuda', 'v8'): not faster (66.5/37.7 us, 83.2/48.4 us)
+moe plan bs1   : ('cuda', 'g8') 37.5 us (sglang 87.1 us)
+moe bs8 ('cuda', 's1'): adopted over ('fast', 8, False) 99.8/109.9 us, 116.1/120.2 us
+moe bs8 ('cuda', 's2'): not faster (108.2/98.7 us, 117.8/116.4 us)
+moe bs8 ('cuda', 's1d'): not faster (91.6/99.7 us, 118.0/116.5 us)
+moe bs8 ('cuda', 's1k4'): not faster (101.2/99.1 us, 107.9/116.4 us)
+moe bs8 ('cuda', 's1dw'): adopted over ('cuda', 's1') 87.9/99.5 us, 103.4/116.4 us
+moe bs8 ('cuda', 's2w'): not faster (100.0/88.0 us, 103.4/103.2 us)
+moe bs8 ('cuda', 's2q'): not faster (90.2/87.8 us, 104.9/103.5 us)
+moe bs8 ('cuda', 's2qv16'): not faster (97.9/88.0 us, 112.3/103.4 us)
+moe bs8 ('cuda', 's1dw2fp'): not faster (97.3/87.1 us, 106.2/103.2 us)
+moe bs8 ('cuda', 's1k4c'): not faster (95.1/87.9 us, 103.7/103.6 us)
+moe bs8 ('cuda', 's1dw2fpc'): not faster (92.9/87.6 us, 102.0/103.3 us)
+moe bs8 ('cuda', 's1dwc'): adopted over ('cuda', 's1dw') 81.0/87.9 us, 96.7/104.0 us
+moe bs8 ('cuda', 's2wc'): not faster (96.3/81.0 us, 98.9/96.4 us)
+moe bs8 ('cuda', 's2qc'): not faster (86.2/80.7 us, 100.9/96.3 us)
+moe bs8 ('cuda', 'g16'): AssertionError: moe_gemv: one token
+moe bs8 ('cuda', 'g8'): AssertionError: moe_gemv: one token
+moe bs8 ('cuda', 'f1dwc'): not faster (82.5/80.7 us, 91.9/96.9 us)
+moe bs8 ('cuda', 'f2wc'): not faster (92.1/81.0 us, 95.5/96.6 us)
+moe bs8 ('cuda', 'f2qc'): not faster (83.5/81.3 us, 90.6/96.8 us)
+moe bs8 ('cuda', 's1r2c'): not faster (102.2/81.0 us, 123.9/96.6 us)
+moe bs8 ('cuda', 's1r2wc'): not faster (95.9/81.1 us, 110.6/96.3 us)
+moe bs8 ('cuda', 't2'): not faster (103.6/81.0 us, 114.9/96.9 us)
+moe bs8 ('cuda', 't4'): not faster (100.8/81.1 us, 126.4/96.5 us)
+moe bs8 ('cuda', 'v8'): not faster (98.0/80.8 us, 123.2/96.9 us)
+moe plan bs8   : ('cuda', 's1dwc') 81.0 us (sglang 150.3 us)
+moe bs16 ('cuda', 's1'): adopted over ('fast', 8, False) 138.9/138.5 us, 139.3/149.4 us
+moe bs16 ('cuda', 's2'): adopted over ('cuda', 's1') 129.2/138.8 us, 132.4/139.8 us
+moe bs16 ('cuda', 's1d'): not faster (133.9/129.7 us, 142.7/132.3 us)
+moe bs16 ('cuda', 's1k4'): adopted over ('cuda', 's2') 123.3/129.4 us, 133.0/132.8 us
+moe bs16 ('cuda', 's1dw'): adopted over ('cuda', 's1k4') 115.1/123.1 us, 120.0/132.4 us
+moe bs16 ('cuda', 's2w'): not faster (117.0/115.4 us, 120.9/120.1 us)
+moe bs16 ('cuda', 's2q'): not faster (116.4/115.7 us, 120.6/120.6 us)
+moe bs16 ('cuda', 's2qv16'): not faster (124.4/115.9 us, 128.1/120.3 us)
+moe bs16 ('cuda', 's1dw2fp'): not faster (122.3/115.9 us, 131.8/120.7 us)
+moe bs16 ('cuda', 's1k4c'): not faster (119.7/115.1 us, 126.9/120.5 us)
+moe bs16 ('cuda', 's1dw2fpc'): not faster (117.9/115.0 us, 126.9/120.4 us)
+moe bs16 ('cuda', 's1dwc'): adopted over ('cuda', 's1dw') 108.1/115.0 us, 113.1/120.3 us
+moe bs16 ('cuda', 's2wc'): not faster (110.3/108.2 us, 115.5/113.5 us)
+moe bs16 ('cuda', 's2qc'): not faster (116.1/108.6 us, 119.2/113.3 us)
+moe bs16 ('cuda', 'g16'): AssertionError: moe_gemv: one token
+moe bs16 ('cuda', 'g8'): AssertionError: moe_gemv: one token
+moe bs16 ('cuda', 'f1dwc'): not faster (104.8/108.2 us, 112.4/113.2 us)
+moe bs16 ('cuda', 'f2wc'): not faster (113.6/108.8 us, 120.4/113.5 us)
+moe bs16 ('cuda', 'f2qc'): not faster (109.2/108.3 us, 111.8/112.9 us)
+moe bs16 ('cuda', 's1r2c'): not faster (132.7/108.0 us, 134.5/112.9 us)
+moe bs16 ('cuda', 's1r2wc'): not faster (114.2/108.2 us, 127.5/112.6 us)
+moe bs16 ('cuda', 't2'): not faster (138.0/107.9 us, 141.4/113.1 us)
+moe bs16 ('cuda', 't4'): not faster (141.9/108.4 us, 144.0/112.7 us)
+moe bs16 ('cuda', 'v8'): not faster (136.3/107.9 us, 138.1/112.9 us)
+moe plan bs16  : ('cuda', 's1dwc') 108.1 us (sglang 185.5 us)
+moe bs32 ('cuda', 's1'): adopted over ('fast', 8, False) 177.5/210.0 us, 150.9/179.6 us
+moe bs32 ('cuda', 's2'): not faster (178.8/178.1 us, 151.6/151.6 us)
+moe bs32 ('cuda', 's1d'): not faster (186.7/178.0 us, 169.4/150.9 us)
+moe bs32 ('cuda', 's1k4'): not faster (177.7/178.0 us, 154.0/151.1 us)
+moe bs32 ('cuda', 's1dw'): adopted over ('cuda', 's1') 162.1/179.0 us, 142.1/151.3 us
+moe bs32 ('cuda', 's2w'): not faster (165.0/162.4 us, 136.1/141.4 us)
+moe bs32 ('cuda', 's2q'): not faster (165.0/162.2 us, 130.8/140.6 us)
+moe bs32 ('cuda', 's2qv16'): not faster (172.7/163.1 us, 157.2/141.1 us)
+moe bs32 ('cuda', 's1dw2fp'): not faster (177.6/162.5 us, 153.2/140.8 us)
+moe bs32 ('cuda', 's1k4c'): not faster (175.3/163.0 us, 150.7/141.2 us)
+moe bs32 ('cuda', 's1dw2fpc'): not faster (172.4/162.0 us, 148.0/141.2 us)
+moe bs32 ('cuda', 's1dwc'): adopted over ('cuda', 's1dw') 155.6/162.3 us, 134.9/141.0 us
+moe bs32 ('cuda', 's2wc'): not faster (160.7/155.6 us, 131.5/135.0 us)
+moe bs32 ('cuda', 's2qc'): not faster (160.5/155.2 us, 126.9/135.4 us)
+moe bs32 ('cuda', 'g16'): AssertionError: moe_gemv: one token
+moe bs32 ('cuda', 'g8'): AssertionError: moe_gemv: one token
+moe bs32 ('cuda', 'f1dwc'): not faster (157.2/155.6 us, 130.0/134.9 us)
+moe bs32 ('cuda', 'f2wc'): not faster (159.0/155.0 us, 129.7/135.3 us)
+moe bs32 ('cuda', 'f2qc'): not faster (157.4/155.0 us, 119.4/135.6 us)
+moe bs32 ('cuda', 's1r2c'): not faster (181.7/155.7 us, 147.0/135.1 us)
+moe bs32 ('cuda', 's1r2wc'): not faster (167.7/155.5 us, 130.8/134.4 us)
+moe bs32 ('cuda', 't2'): not faster (185.4/155.3 us, 139.9/134.9 us)
+moe bs32 ('cuda', 't4'): not faster (202.3/156.0 us, 143.7/134.1 us)
+moe bs32 ('cuda', 'v8'): not faster (193.1/155.3 us, 140.5/135.6 us)
+moe plan bs32  : ('cuda', 's1dwc') 155.6 us (sglang 229.8 us)
+moe bs128 ('cuda', 's1'): adopted over ('fast', 16, False) 320.7/353.5 us, 324.4/364.8 us
+moe bs128 ('cuda', 's2'): adopted over ('cuda', 's1') 299.6/320.1 us, 306.4/323.3 us
+moe bs128 ('cuda', 's1d'): not faster (398.3/298.8 us, 420.6/306.8 us)
+moe bs128 ('cuda', 's1k4'): not faster (343.6/300.0 us, 360.6/307.1 us)
+moe bs128 ('cuda', 's1dw'): not faster (298.5/300.8 us, 313.2/307.7 us)
+moe bs128 ('cuda', 's2w'): adopted over ('cuda', 's2') 260.8/300.9 us, 258.1/307.9 us
+moe bs128 ('cuda', 's2q'): adopted over ('cuda', 's2w') 249.0/261.5 us, 250.4/260.4 us
+moe bs128 ('cuda', 's2qv16'): not faster (264.0/247.8 us, 249.7/248.9 us)
+moe bs128 ('cuda', 's1dw2fp'): not faster (335.0/247.9 us, 347.4/249.2 us)
+moe bs128 ('cuda', 's1k4c'): not faster (343.1/248.2 us, 358.7/249.2 us)
+moe bs128 ('cuda', 's1dw2fpc'): not faster (330.6/248.2 us, 343.0/249.8 us)
+moe bs128 ('cuda', 's1dwc'): not faster (290.1/248.4 us, 311.7/252.3 us)
+moe bs128 ('cuda', 's2wc'): not faster (252.1/249.5 us, 252.6/251.0 us)
+moe bs128 ('cuda', 's2qc'): not faster (246.5/248.2 us, 248.2/249.9 us)
+moe bs128 ('cuda', 'g16'): AssertionError: moe_gemv: one token
+moe bs128 ('cuda', 'g8'): AssertionError: moe_gemv: one token
+moe bs128 ('cuda', 'f1dwc'): not faster (297.7/248.9 us, 311.2/249.8 us)
+moe bs128 ('cuda', 'f2wc'): not faster (247.5/249.5 us, 251.7/250.3 us)
+moe bs128 ('cuda', 'f2qc'): adopted over ('cuda', 's2q') 238.2/248.7 us, 243.7/250.4 us
+moe bs128 ('cuda', 's1r2c'): not faster (329.1/238.7 us, 364.3/243.6 us)
+moe bs128 ('cuda', 's1r2wc'): not faster (276.1/239.0 us, 305.0/243.8 us)
+moe bs128 ('cuda', 't2'): not faster (276.4/238.9 us, 273.3/243.8 us)
+moe bs128 ('cuda', 't4'): not faster (287.4/242.1 us, 284.4/248.3 us)
+moe bs128 ('cuda', 'v8'): not faster (276.8/240.6 us, 259.5/245.2 us)
+moe plan bs128 : ('cuda', 'f2qc') 238.2 us (sglang 512.7 us)
+moe bs256 ('cuda', 's1'): not faster (383.7/401.2 us, 465.4/455.1 us)
+moe bs256 ('cuda', 's2'): adopted over ('fast', 16, False) 354.1/400.3 us, 408.0/455.1 us
+moe bs256 ('cuda', 's1d'): not faster (503.3/354.2 us, 618.4/407.1 us)
+moe bs256 ('cuda', 's1k4'): not faster (424.1/355.3 us, 518.0/409.3 us)
+moe bs256 ('cuda', 's1dw'): not faster (362.4/355.3 us, 444.4/407.9 us)
+moe bs256 ('cuda', 's2w'): adopted over ('cuda', 's2') 290.7/356.3 us, 330.8/407.2 us
+moe bs256 ('cuda', 's2q'): adopted over ('cuda', 's2w') 276.8/290.4 us, 317.9/330.6 us
+moe bs256 ('cuda', 's2qv16'): adopted over ('cuda', 's2q') 276.4/276.9 us, 265.4/317.8 us
+moe bs256 ('cuda', 's1dw2fp'): not faster (410.5/275.0 us, 498.6/265.5 us)
+moe bs256 ('cuda', 's1k4c'): not faster (423.6/274.2 us, 512.7/266.0 us)
+moe bs256 ('cuda', 's1dw2fpc'): not faster (407.3/275.0 us, 494.6/265.1 us)
+moe bs256 ('cuda', 's1dwc'): not faster (355.8/275.3 us, 437.8/266.6 us)
+moe bs256 ('cuda', 's2wc'): not faster (281.9/274.7 us, 322.7/265.8 us)
+moe bs256 ('cuda', 's2qc'): not faster (274.0/274.5 us, 311.2/265.9 us)
+moe bs256 ('cuda', 'g16'): AssertionError: moe_gemv: one token
+moe bs256 ('cuda', 'g8'): AssertionError: moe_gemv: one token
+moe bs256 ('cuda', 'f1dwc'): not faster (363.2/274.8 us, 446.9/264.7 us)
+moe bs256 ('cuda', 'f2wc'): not faster (276.7/274.7 us, 318.4/266.0 us)
+moe bs256 ('cuda', 'f2qc'): not faster (268.1/275.3 us, 310.1/264.7 us)
+moe bs256 ('cuda', 's1r2c'): not faster (422.0/275.7 us, 517.5/265.7 us)
+moe bs256 ('cuda', 's1r2wc'): not faster (350.3/275.6 us, 408.4/265.0 us)
+moe bs256 ('cuda', 't2'): not faster (291.2/275.4 us, 320.6/266.4 us)
+moe bs256 ('cuda', 't4'): not faster (290.5/275.6 us, 323.5/266.0 us)
+moe bs256 ('cuda', 'v8'): not faster (279.0/275.4 us, 284.1/267.1 us)
+moe plan bs256 : ('cuda', 's2qv16') 276.4 us (sglang 609.7 us)
+prepare: tuned in 89 s
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 15:01:22 75:75 SyncActivityProfilerHandler.cpp:46] profiler_stop

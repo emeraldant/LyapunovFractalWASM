@@ -670,3 +670,6 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
 - Metadata via L2 cost (check fa4bc679): GEMV with the metadata staged once per CTA in shared memory: g16 31.8 /
   32.2 us, g8 32.7 / 33.0 vs s1dw2fpc 39.3 / 39.7 (-19%), soak 0 / 500 each. sab with ld.cg metadata: s1dwc
   bs 32 139.1 / 139.9 us (prior builds 141-142: no cost); mpf neutral (138.4 / 139.7).
+- Scored run ecf830cd (GEMV g16 at bs 1): 1.878 (decode 1 2.043, decode 16 1.722, decode 32 1.436, verify 1
+  1.826, verify 16 2.116, verify 32 2.247); decode 1 up from ~1.85-1.94, the rest within run-to-run noise.
+  Board row stays 1.879. Leaderboard Oct 26: top-10 cutoff 2.406 (risen from 2.335); we are 218th.

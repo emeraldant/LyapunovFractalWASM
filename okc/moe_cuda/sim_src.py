@@ -501,6 +501,7 @@ def run_soak(cfgs, sizes=(1,), reps=2000, seed=8_960_000):
                 with torch.cuda.graph(graph, stream=stream):
                     res = moe_cuda_forward(xs, ids_s, tw_s, ls, bank, norm_w, _SIM_EPS, **kw)
             bad = 0
+            bad_by = [0, 0]
             worst = 0.0
             for r in range(reps):
                 d = (dA, dB)[r % 2]
@@ -511,10 +512,12 @@ def run_soak(cfgs, sizes=(1,), reps=2000, seed=8_960_000):
                 stream.synchronize()
                 ref = refs[r % 2]
                 if not torch.equal(res, ref):
+                    bad_by[r % 2] += 1
                     bad += 1
                     worst = max(worst, float((res.float() - ref.float()).norm() / ref.float().norm()))
-            print(f"soak {name} bs{bs}: {reps} replays alternating two inputs, {bad} differ from eager (worst rel {worst:.1e})",
-                  flush=True)
+            na = [int(torch.unique(d["topk_ids"][d["topk_ids"] < 32]).numel()) for d in (dA, dB)]
+            print(f"soak {name} bs{bs}: {reps} replays alternating two inputs ({na[0]} / {na[1]} local experts),"
+                  f" {bad} differ from eager (worst rel {worst:.1e}); by input {bad_by}", flush=True)
             del graph
     del weights, bank
     torch.cuda.empty_cache()

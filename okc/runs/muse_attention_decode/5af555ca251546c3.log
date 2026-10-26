@@ -1,0 +1,39 @@
+routing bs1 seed 8950300: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 7.6e-04, row worst 7.6e-04, repeat equal; 37.7 us (v6 s2 54.5, x1.433) | stages 0.6 17.4 12.4 4.5
+check g8 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 33.3 us (v6 s2 54.2, x1.635) | stages 0.7 16.0 13.5 3.1
+check g16 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 33.1 us (v6 s2 54.0, x1.628) | stages 0.6 19.0 11.8 3.1
+check g4 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 44.9 us (v6 s2 54.8, x1.216) | stages 0.6 20.6 13.3 3.1
+routing bs1 seed 8970300: tokens per local expert [1, 1]
+check s1dw2fpc bs1: rel diff vs v6 2.7e-04, row worst 2.7e-04, repeat equal; 38.9 us (v6 s2 54.3, x1.395) | stages 1.1 18.5 13.2 4.9
+check g8 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 33.6 us (v6 s2 54.0, x1.616) | stages 1.0 17.3 13.8 3.2
+check g16 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 32.9 us (v6 s2 54.6, x1.652) | stages 1.2 19.2 12.3 3.4
+check g4 bs1: rel diff vs v6 7.1e-03, row worst 7.1e-03, repeat equal; 44.6 us (v6 s2 54.5, x1.226) | stages 1.1 21.2 13.7 3.1
+routing bs1 seed 8990300: tokens per local expert [1, 1, 1]
+check s1dw2fpc bs1: rel diff vs v6 2.8e-04, row worst 2.8e-04, repeat equal; 49.0 us (v6 s2 67.8, x1.373) | stages 0.8 26.4 14.4 5.5
+check g8 bs1: rel diff vs v6 7.0e-03, row worst 7.0e-03, repeat equal; 43.2 us (v6 s2 68.6, x1.584) | stages 1.1 26.2 15.6 3.4
+check g16 bs1: rel diff vs v6 7.0e-03, row worst 7.0e-03, repeat equal; 45.3 us (v6 s2 68.3, x1.509) | stages 0.8 27.0 18.9 3.6
+check g4 bs1: rel diff vs v6 7.0e-03, row worst 7.0e-03, repeat equal; 48.1 us (v6 s2 68.3, x1.423) | stages 0.8 22.6 21.2 3.4
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-26 13:55:05 76:76 SyncActivityProfilerHandler.cpp:46] profiler_stop

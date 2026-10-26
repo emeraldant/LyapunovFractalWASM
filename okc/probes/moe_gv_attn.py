@@ -5063,18 +5063,20 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
     // slice sums them in slice order (deterministic) and writes silu(gate) * up (GEMM1) or y (GEMM2).
     constexpr int ROWS = MODE == 1 ? 8192 : 4096;
     part[((size_t)sl * 8 + ia) * ROWS + g * 32 + lane] = acc;
-    __threadfence();
+    // Warp barrier orders the lanes' part stores before lane 0's acq_rel add (cumulative release:
+    // no full membar per unit); the last arriver's acquire + barrier orders the part reads after it.
     __syncwarp();
     int last = 0;
     int* cnt = counters + (MODE == 1 ? 0 : 2048) + ia * G + g;
     if (lane == 0) {
-      const int old = atomicAdd(cnt, 1);
+      int old;
+      asm volatile("atom.acq_rel.gpu.global.add.s32 %0, [%1], 1;\n" : "=r"(old) : "l"(cnt) : "memory");
       last = old == S - 1;
       if (last) *cnt = 0;
     }
     last = __shfl_sync(0xffffffffu, last, 0);
     if (last) {
-      __threadfence();
+      __syncwarp();   // memory ordering: lane 0's acquire before every lane's part reads
       float v = 0.f;
       for (int k = 0; k < S; ++k) v += __ldcg(part + ((size_t)k * 8 + ia) * ROWS + g * 32 + lane);
       const int row0 = exp_start[e];
@@ -6610,7 +6612,7 @@ def run_tiny_stamps(sizes=(1,), seeds=(8_950_000, 8_970_000, 8_990_000), rings=(
 
 
 try:
-    exec('_C = {"s1dw2fpc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True),\n      "g8": dict(gemv=8, chain=True), "g16": dict(gemv=16, chain=True), "g4": dict(gemv=4, chain=True)}\nfor _base in (8_950_000, 8_970_000, 8_990_000):\n    run_moe_profile_synth(_C, sizes=(1,), abls=(), timed=True, stage_detail=True, seed_base=_base + 300)\n')
+    exec('_C = {"s1dw2fpc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True),\n      "g8": dict(gemv=8, chain=True), "g16": dict(gemv=16, chain=True), "g4": dict(gemv=4, chain=True), "g32": dict(gemv=32, chain=True)}\nfor _base in (8_950_000, 8_970_000, 8_990_000):\n    run_moe_profile_synth(_C, sizes=(1,), abls=(), timed=True, stage_detail=True, seed_base=_base + 300)\n')
 except Exception:  # the sim must never break the submission
     import traceback
     print('sim failed:', traceback.format_exc()[-1500:])

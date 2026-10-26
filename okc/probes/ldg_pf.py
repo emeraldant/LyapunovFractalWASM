@@ -308,7 +308,7 @@ __global__ void ldg_region(const uint4* __restrict__ src, size_t per_warp16, int
 // unpack8, rescales by a constant (HMUL2: undo the 2^-126 placement), multiplies by the activation
 // pairs (one broadcast LDS.128 per word) with HFMA2 into a bf16x2 sum per 16-value scale block, then
 // one fp32 FMA by the block's scale. (Timing probe: bit order / denormals are not checked here.)
-template <int D, int T>
+template <int D, int T, bool NK = false>
 __global__ void __launch_bounds__(512) ldg_gemv(const uint4* __restrict__ w, const uint2* __restrict__ sc,
                                                 const __nv_bfloat16* __restrict__ x, float* __restrict__ part,
                                                 int groups, int kb, int nslices) {
@@ -363,7 +363,7 @@ __global__ void __launch_bounds__(512) ldg_gemv(const uint4* __restrict__ w, con
               unpack8(word, v);
               uint32_t a[4];
 #pragma unroll
-              for (int i = 0; i < 4; ++i) a[i] = mul2(v[i], K2);
+              for (int i = 0; i < 4; ++i) a[i] = NK ? v[i] : mul2(v[i], K2);   // NK: x pre-scaled instead
 #pragma unroll
               for (int t = 0; t < T; ++t) {
                 const uint4 xv = *reinterpret_cast<const uint4*>(xk + t * 8192 + wi * 16);
@@ -384,6 +384,23 @@ __global__ void __launch_bounds__(512) ldg_gemv(const uint4* __restrict__ w, con
 #pragma unroll
     for (int t = 0; t < T; ++t) part[((size_t)t * nslices + sl) * groups * 32 + g * 32 + lane] = acc[t];
   }
+}
+
+// HFMA2.BF16 with a subnormal operand: each E2M1 code placed by the decode (value * 2^-126, code 0.5 is
+// subnormal) times 2^100, plus 0 -> expect e2m1 * 2^-26 if subnormal inputs are kept (no FTZ).
+__global__ void subnormal_check(float* out) {
+  const int c = threadIdx.x;   // 16 codes: bit 3 sign, bits 2-1 exponent, bit 0 mantissa
+  const uint32_t bits = ((c & 8u) << 12) | ((c & 7u) << 6);   // sign -> bit 15, eem -> bits 8..6
+  const uint32_t v = bits | (bits << 16);
+  const uint32_t xb = 0x71807180u;   // bf16x2 (2^100, 2^100)
+  __nv_bfloat162 r = __hfma2(*reinterpret_cast<const __nv_bfloat162*>(&v), *reinterpret_cast<const __nv_bfloat162*>(&xb),
+                             __floats2bfloat162_rn(0.f, 0.f));
+  out[c] = __low2float(r) * 67108864.0f;   // * 2^26
+}
+torch::Tensor subnormal_run() {
+  auto o = torch::zeros({16}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
+  subnormal_check<<<1, 16>>>(o.data_ptr<float>());
+  return o.cpu();
 }
 
 static torch::Tensor g_w, g_s, g_x, g_part, g_sink;
@@ -422,6 +439,9 @@ void ldg_launch(int64_t mode, int64_t d, int64_t tiles, int64_t nslices, int64_t
     if (d == 2) ldg_gemv<1, 2><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
     if (d == 3) ldg_gemv<1, 3><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
     if (d == 4) ldg_gemv<1, 4><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
+    if (d == 11) ldg_gemv<1, 1, true><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
+    if (d == 12) ldg_gemv<1, 2, true><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
+    if (d == 13) ldg_gemv<1, 3, true><<<grid, (int)threads, 0, st>>>(w4, s2, xx, pp, (int)(tiles / 2), kb, (int)nslices);
     return;
   }
   if (mode == 3) {
@@ -451,7 +471,7 @@ void ldg_launch(int64_t mode, int64_t d, int64_t tiles, int64_t nslices, int64_t
 """
 
 
-_LDG_CPP = ("void ldg_setup(int64_t max_tiles);\n"
+_LDG_CPP = ("void ldg_setup(int64_t max_tiles);\ntorch::Tensor subnormal_run();\n"
             "void ldg_launch(int64_t mode, int64_t d, int64_t tiles, int64_t nslices, int64_t cps, int64_t threads);\n")
 
 
@@ -460,7 +480,7 @@ def run_ldg_probe():
     from torch.utils.cpp_extension import load_inline
     t0 = time.time()
     mod = load_inline(name="okc_ldg_probe", cpp_sources=_LDG_CPP, cuda_sources=_LDG_SRC,
-                      functions=["ldg_setup", "ldg_launch"],
+                      functions=["ldg_setup", "ldg_launch", "subnormal_run"],
                       extra_cuda_cflags=["-O3", "-gencode=arch=compute_90a,code=sm_90a"], verbose=False)
     print(f"ldg probe: compiled in {time.time() - t0:.0f} s", flush=True)
     bench = SimBench()
@@ -470,19 +490,20 @@ def run_ldg_probe():
     mod.ldg_setup(5120)
     def t(fn, pairs=6):
         return bench.compare(fn, lambda: tiny.add_(1), pairs=pairs)[0]
-    cases = (("bs8 G1 10x8192", 5120), ("bs8 G2 10x4096", 2560))
+    print("subnormal check (expect 0 .5 1 1.5 2 3 4 6, then negatives):", [round(float(v), 4) for v in mod.subnormal_run()], flush=True)
+    cases = (("bs1 G1 2x8192", 1024), ("bs8 G1 10x8192", 5120), ("bs8 G2 10x4096", 2560))
     for label, tiles in cases:
         nbytes = tiles * 32 * 64 * 16 * 9 // 8
         line = [f"plain {t(lambda: mod.ldg_launch(1, 0, tiles, 1, 4, 512), 8):.1f}",
                 f"mma(8 tok) D2 s4 2x512 {t(lambda: mod.ldg_launch(0, 2, tiles, 4, 2, 512)):.1f}",
                 f"mma(8 tok) D2 s2 2x512 {t(lambda: mod.ldg_launch(0, 2, tiles, 2, 2, 512)):.1f}"]
-        for T in (1, 2, 3, 4):
+        for T in (1, 2, 3, 11, 12, 13):
             res = []
             for ns in (2, 4, 8):
                 for cps, th in ((2, 512), (4, 256)):
                     res.append((t(lambda T=T, ns=ns, cps=cps, th=th: mod.ldg_launch(4, T, tiles, ns, cps, th)), f"s{ns} {cps}x{th}"))
             res.sort()
-            line.append(f"gemv T{T} {res[0][0]:.1f} ({res[0][1]})")
+            line.append(f"gemv {'noK ' if T > 10 else ''}T{T % 10} {res[0][0]:.1f} ({res[0][1]})")
         print(f"ldg4 {label} {nbytes / 1e6:.1f} MB (us): " + "; ".join(line), flush=True)
 
 

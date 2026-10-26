@@ -673,3 +673,8 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
 - Scored run ecf830cd (GEMV g16 at bs 1): 1.878 (decode 1 2.043, decode 16 1.722, decode 32 1.436, verify 1
   1.826, verify 16 2.116, verify 32 2.247); decode 1 up from ~1.85-1.94, the rest within run-to-run noise.
   Board row stays 1.879. Leaderboard Oct 26: top-10 cutoff 2.406 (risen from 2.335); we are 218th.
+- GEMV with T tokens per expert (check 3f67e102, bs 8 sizes, us): GEMM1 189 MB plain 49.2, mma loop 65.5, GEMV
+  T1 53.6 / T2 60.1 / T3 73.8 / T4 86.8; GEMM2 94 MB plain 25.1, mma 39-40, GEMV 30.6 / 34.0 / 41.3 / 46.3. The
+  GEMV wins only at 1 token (~9% over the floor) and ties the production loop at 2 (issue-bound: +4 HFMA2 + 1 LDS
+  per octet per token). Next probe: drop the constant HMUL2 (x pre-scaled by 2^100) if HFMA2.BF16 keeps
+  subnormal inputs.

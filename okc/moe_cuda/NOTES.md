@@ -633,3 +633,10 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   for MXFP4 W4A16 MoE at medium-large batch on H200 (we are 2.1-2.3x there), small batch via cp.async +
   mma.sync, symmetric formats decoded as zero-exponent floats (our denormal trick). Guild: stronger trade
   offer to lurrobert/scout (we send the attention design first), pending.
+- FP8 path refuted statically (moe_cuda/fp8_probe.py, SASS via tools/sass.py, no check spent): mma.sync
+  m16n8k32 e4m3 is emulated on sm_90a (ptxas emits F2FP conversions + fp16 HMMA + FADDs: ~4 F2FP and 16
+  FADD per MMA); the e4m3 decode-to-FP8 loop (two-word unpack ~5 ops / 8 weights, scale on the fp32
+  accumulator) is conv-pipe bound at ~544 clk vs 278 (ALU) for the bf16 loop per 16 octets. Full-rate FP8
+  on Hopper is wgmma only; there the per-16-k scale on the accumulator costs N/2 FFMA per thread per
+  block, eating the decode saving. Also: no single shift / rotation / multiply maps FP4 nibbles to e4m3
+  byte positions (lay8.py), so the FP8 unpack needs two rotations per 16 weights.

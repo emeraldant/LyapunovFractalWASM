@@ -5064,20 +5064,21 @@ __global__ void __launch_bounds__(512, 2) moe_gemv_kernel(
     // slice sums them in slice order (deterministic) and writes silu(gate) * up (GEMM1) or y (GEMM2).
     constexpr int ROWS = MODE == 1 ? 8192 : 4096;
     part[((size_t)sl * 8 + ia) * ROWS + g * 32 + lane] = acc;
-    // Warp barrier orders the lanes' part stores before lane 0's acq_rel add (cumulative release:
-    // no full membar per unit); the last arriver's acquire + barrier orders the part reads after it.
+    // Every lane releases its own part store (fence.acq_rel.gpu, lighter than a full membar), lane 0
+    // counts; the last arriver's lanes acquire before reading the other slices' parts. (A single
+    // release by lane 0 after a warp barrier was not enough: the judge's recheck caught a stale part.)
+    if (!(flags & 256)) asm volatile("fence.acq_rel.gpu;\n" ::: "memory");   // (flags 256: test-only, racy)
     __syncwarp();
     int last = 0;
     int* cnt = counters + (MODE == 1 ? 0 : 2048) + ia * G + g;
     if (lane == 0) {
-      int old;
-      asm volatile("atom.acq_rel.gpu.global.add.s32 %0, [%1], 1;\n" : "=r"(old) : "l"(cnt) : "memory");
+      const int old = atomicAdd(cnt, 1);
       last = old == S - 1;
       if (last) *cnt = 0;
     }
     last = __shfl_sync(0xffffffffu, last, 0);
     if (last) {
-      __syncwarp();   // memory ordering: lane 0's acquire before every lane's part reads
+      asm volatile("fence.acq_rel.gpu;\n" ::: "memory");
       float v = 0.f;
       for (int k = 0; k < S; ++k) v += __ldcg(part + ((size_t)k * 8 + ia) * ROWS + g * 32 + lane);
       const int row0 = exp_start[e];
@@ -5770,7 +5771,7 @@ def ws_layout(bank):
     return bank
 
 
-def moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices=16, chain=True, topk=8):
+def moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices=16, chain=True, topk=8, _racy=False):
     """One token: route, GEMM1 GEMV (silu(gate) * up by each group's last slice), GEMM2 GEMV (fp32
     slices), the parts post-norm (KP = slices). Needs gemv_layout(bank)."""
     m, hidden = x.shape
@@ -5794,7 +5795,7 @@ def moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices
     y = torch.empty((p, 4096), dtype=torch.bfloat16, device=device)
     out = torch.empty((m, hidden), dtype=x.dtype, device=device)
     cnt = bank["gv_cnt"]
-    fl = 128 if chain else 0
+    fl = (128 if chain else 0) | (256 if _racy else 0)   # _racy: soak-test the detector only
 
     def route():
         _route_compact_kernel[(count,)](ids, local_start, row_route, pos_of_route, exp_start, active, n_active, p, 8,
@@ -5860,7 +5861,7 @@ def moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=
 def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, ctas_per_sm=2, topk=8, stages=4,
                     ws=False, ks=1, prof=None, abl=0, sab=False, wg=False, stages2=None, kparts=1, pfd=0, sk=False, dual=0, variant="", pdl=False, kparts2=None, l2pf=False,
                     fuse=False, dualv8=0, dualsab=0, mt2=2, stages_big=402, ctas2=2, mpf=False, chain=False, rb=1, l2d=0, tiny=False, _tiny_stamps=False, apost=False,
-                    fused=False, gemv=0):
+                    fused=False, gemv=0, _gemv_racy=False):
     """The pipeline as four separately callable stages (route, gemm1, gemm2, post) sharing
     buffers, for per-stage timing; moe_cuda_forward runs them in order.
     dual (v7 only): experts with more than `dual` routes go to a second launch per GEMM, the
@@ -5880,7 +5881,8 @@ def moe_cuda_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, mt=1, 
     fused (v6 only): GEMM1 and GEMM2 in one persistent launch (kernel MODE 3): GEMM2's items follow
     GEMM1's on the same work queue and wait per token chunk for its GEMM1 items (counters)."""
     if gemv:   # bs 1: both GEMMs on CUDA cores (moe_gemv_kernel), gemv = K slices
-        return moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices=gemv, chain=chain, topk=topk)
+        return moe_gemv_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, slices=gemv, chain=chain, topk=topk,
+                               _racy=_gemv_racy)
     if tiny:   # bs <= 8: one persistent grid for both GEMMs (moe_tiny_kernel)
         return moe_tiny_stages(x, ids, topk_weights, local_start, bank, norm_w, eps, chain=chain, topk=topk,
                                tiny_ring=tiny if tiny is not True else 4, stamps=_tiny_stamps)
@@ -6612,8 +6614,66 @@ def run_tiny_stamps(sizes=(1,), seeds=(8_950_000, 8_970_000, 8_990_000), rings=(
                       f" GEMM2 done {med[6]:.1f}/{med[7]:.1f} us", flush=True)
 
 
+def run_soak(cfgs, sizes=(1,), reps=2000, seed=8_960_000):
+    """Replay each config's forward as one CUDA graph `reps` times (cold-L2 flush before each, as the
+    judge) on fixed inputs; every output must equal the first bitwise (catches rare races: Guild #42)."""
+    g = torch.Generator(device="cuda").manual_seed(7)
+    E, I, H = 32, 4096, 4096
+
+    def scales(n, k):
+        e = torch.randint(4, 9, (n, k), generator=g, device="cuda", dtype=torch.int32)
+        m = torch.randint(0, 8, (n, k), generator=g, device="cuda", dtype=torch.int32)
+        return ((e << 3) | m).to(torch.uint8).view(torch.float8_e4m3fn)
+
+    weights = {"w13": torch.randint(0, 256, (E, 2 * I, H // 2), generator=g, device="cuda", dtype=torch.uint8),
+               "w2": torch.randint(0, 256, (E, H, I // 2), generator=g, device="cuda", dtype=torch.uint8),
+               "w13_gs": torch.full((E,), 1e-3, device="cuda"), "w2_gs": torch.full((E,), 1e-3, device="cuda")}
+    weights["w13_sf"] = torch.stack([scales(2 * I, H // 16) for _ in range(E)])
+    weights["w2_sf"] = torch.stack([scales(H, I // 16) for _ in range(E)])
+    bank = build_cuda_bank(weights)
+    ws_layout(bank)
+    gemv_layout(bank, weights)
+    norm_w = torch.ones(H, dtype=torch.bfloat16, device="cuda")
+    ls = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flush = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int32, device="cuda")
+    stream = torch.cuda.Stream()
+    for i, bs in enumerate(sizes):
+        # Two different inputs alternate through the captured graph's input buffers (fresh inputs
+        # every call, as the judge): a stale partial from the previous replay then shows as a mismatch.
+        dA = generate_input(bs=bs, sharding="ep8", seed=seed + i, device="cuda")
+        dB = generate_input(bs=bs, sharding="ep8", seed=seed + 500 + i, device="cuda")
+        xs, ids_s, tw_s = (dA["hidden_states"].clone(), dA["topk_ids"].clone(), dA["topk_weights"].clone())
+        for name, kw in cfgs.items():
+            refs = []
+            for d in (dA, dB):
+                refs.append(moe_cuda_forward(d["hidden_states"], d["topk_ids"], d["topk_weights"], ls, bank, norm_w, _SIM_EPS, **kw))
+            torch.cuda.synchronize()
+            with torch.cuda.stream(stream):
+                graph = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(graph, stream=stream):
+                    res = moe_cuda_forward(xs, ids_s, tw_s, ls, bank, norm_w, _SIM_EPS, **kw)
+            bad = 0
+            worst = 0.0
+            for r in range(reps):
+                d = (dA, dB)[r % 2]
+                with torch.cuda.stream(stream):
+                    xs.copy_(d["hidden_states"]); ids_s.copy_(d["topk_ids"]); tw_s.copy_(d["topk_weights"])
+                    flush.zero_()
+                    graph.replay()
+                stream.synchronize()
+                ref = refs[r % 2]
+                if not torch.equal(res, ref):
+                    bad += 1
+                    worst = max(worst, float((res.float() - ref.float()).norm() / ref.float().norm()))
+            print(f"soak {name} bs{bs}: {reps} replays alternating two inputs, {bad} differ from eager (worst rel {worst:.1e})",
+                  flush=True)
+            del graph
+    del weights, bank
+    torch.cuda.empty_cache()
+
+
 try:
-    exec('_C = {"s1dw2fpc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True),\n      "g8": dict(gemv=8, chain=True), "g16": dict(gemv=16, chain=True), "g4": dict(gemv=4, chain=True), "g32": dict(gemv=32, chain=True)}\nfor _base in (8_950_000, 8_970_000, 8_990_000):\n    run_moe_profile_synth(_C, sizes=(1,), abls=(), timed=True, stage_detail=True, seed_base=_base + 300)\n')
+    exec('run_soak({"g16": dict(gemv=16, chain=True), "g8": dict(gemv=8, chain=True)}, sizes=(1,), reps=2000)\nrun_soak({"g16racy": dict(gemv=16, chain=True, _gemv_racy=True)}, sizes=(1,), reps=2000)\nrun_soak({"s1dw2fpc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True)}, sizes=(1,), reps=1000)\nrun_soak({"g16": dict(gemv=16, chain=True)}, sizes=(1,), reps=1000, seed=8_961_000)\n_C = {"s1dw2fpc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True),\n      "g8": dict(gemv=8, chain=True), "g16": dict(gemv=16, chain=True)}\nfor _base in (8_950_000, 8_970_000, 8_990_000):\n    run_moe_profile_synth(_C, sizes=(1,), abls=(), timed=True, stage_detail=True, seed_base=_base + 300)\n')
 except Exception:  # the sim must never break the submission
     import traceback
     print('sim failed:', traceback.format_exc()[-1500:])

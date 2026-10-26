@@ -650,3 +650,13 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
     11.1; GEMM2 (18.9 MB) 7.5 vs 11.7 vs 6.1. Best K split 16, 2 CTAs x 512. bf16 sums over a 16-value
     block cost ~0.35-0.46% rel L2 per GEMM (CPU emulation). -> built: moe_gemv_kernel + repack_gemv /
     gemv_layout + moe_gemv_stages (configs g16 / g8), gate check pending.
+- bs 1 GEMV in the pipeline (stage probes 5af555ca / 8be7d763 / ecccc31d, three routings): after issuing
+  the first weights before the activation staging (GEMM2: before the PDL wait), GEMM2 reducing its own
+  slices (rows post-norm 3.0 us instead of the parts post-norm 8-13 us) and prefetching the next unit's
+  first block: g8 / g16 31.8 / 31.2, 32.3 / 31.1, 42.8 / 43.5 us vs s1dw2fpc 38.2, 39.1, 51.0 (-15-19%).
+  Accuracy 7e-3 rel vs v6 (bf16 sums over 16-value blocks), judge test bs 1 7.1e-3.
+- RACE (gate check 295cf18e): with one acq_rel atomic by lane 0 after __syncwarp (no per-lane fence),
+  the judge's recheck failed on repetition 3 of decode 1 (rel error 0.755): the last-arriving slice read a
+  stale part. Fixed with fence.acq_rel.gpu in every lane before the count and in the last arriver before
+  the reads. New soak test (sim_src.run_soak): 2000 graph replays alternating two inputs, bitwise vs
+  eager; a racy variant (flags 256) is soaked too to prove the detector.

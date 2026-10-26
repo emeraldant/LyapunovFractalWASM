@@ -1,0 +1,153 @@
+{
+ "id": "295cf18e1d8b491d",
+ "mode": "check",
+ "team": "emeraldant",
+ "board": "muse_moe_w4a16",
+ "result": {
+  "gpu": "H200",
+  "error": null,
+  "flags": [],
+  "checks": {
+   "ok": true,
+   "flagged": [],
+   "rejected": []
+  },
+  "passed": false,
+  "status": "ok",
+  "machine": {
+   "node": "n-tyjmfajcegskfoydlmojkcfmco",
+   "gpu_after": {
+    "name": "NVIDIA H200",
+    "clocks.sm": 1980.0,
+    "clocks.mem": 3201.0,
+    "power.draw": 125.18,
+    "power.limit": 700.0,
+    "clocks.max.sm": 1980.0,
+    "driver_version": "580.159.03",
+    "temperature.gpu": 39.0
+   },
+   "gpu_before": {
+    "name": "NVIDIA H200",
+    "clocks.sm": 1980.0,
+    "clocks.mem": 3201.0,
+    "power.draw": 132.44,
+    "power.limit": 700.0,
+    "clocks.max.sm": 1980.0,
+    "driver_version": "580.159.03",
+    "temperature.gpu": 35.0
+   }
+  },
+  "records": [
+   {
+    "error": null,
+    "event": "setup",
+    "first": "baseline",
+    "copies": 1,
+    "status": "pass",
+    "prepare_s": 107.58451506,
+    "prepare_pad": 21817344,
+    "baseline_copies": 4,
+    "baseline_prepare_pad": 19581440
+   },
+   {
+    "case": {
+     "bs": 4,
+     "seed": 643865537292538275,
+     "sharding": "ep8"
+    },
+    "event": "test",
+    "index": 0,
+    "status": "pass",
+    "message": "relative L2 error 3.715e-03 (worst row 3.840e-03)"
+   },
+   {
+    "case": {
+     "bs": 33,
+     "seed": 644143243276849999,
+     "sharding": "ep8"
+    },
+    "event": "test",
+    "index": 1,
+    "status": "pass",
+    "message": "relative L2 error 3.743e-03 (worst row 3.935e-03)"
+   },
+   {
+    "case": {
+     "bs": 257,
+     "seed": 644698655245473450,
+     "sharding": "ep8"
+    },
+    "event": "test",
+    "index": 2,
+    "status": "pass",
+    "message": "relative L2 error 5.536e-03 (worst row 5.962e-03)"
+   },
+   {
+    "case": {
+     "bs": 128,
+     "dist": "skewed",
+     "seed": 644976361229785177,
+     "sharding": "ep8"
+    },
+    "event": "test",
+    "index": 3,
+    "status": "pass",
+    "message": "relative L2 error 3.739e-03 (worst row 3.890e-03)"
+   },
+   {
+    "case": {
+     "bs": 1,
+     "seed": 645254067214096905,
+     "sharding": "ep8"
+    },
+    "event": "test",
+    "index": 4,
+    "status": "pass",
+    "message": "relative L2 error 7.097e-03 (worst row 7.097e-03)"
+   },
+   {
+    "case": {
+     "bs": 1,
+     "load": "decode 1",
+     "seed": 671636135723715625,
+     "weight": 60,
+     "sharding": "ep8"
+    },
+    "error": "recheck failed on repetition 3: relative L2 error 7.551e-01 > 0.015",
+    "event": "benchmark",
+    "index": 0,
+    "status": "fail"
+   }
+  ],
+  "speedup": null,
+  "score_us": null,
+  "evaluator": {
+   "files": {
+    "harness/eval.py": "0051a1bfac67a9f1fad06086b306653c6643b2bb253e15a794aa672312f070a9",
+    "harness/runner.py": "c905e5c80264c6d27620b6fc7d55b162dccdb8ed7282f8a513a4d2e6f2f226f2",
+    "harness/worker.py": "950437610f57ddffbc1176b65d9c2ae909c47bf67b1e3fe0716a81946986f568",
+    "challenge/nvfp4.py": "cfdf37c7bc14b10f7353aba7d4632f4767401b92b4b073941a8030d9a961aaaf",
+    "challenge/checks.py": "9a046c3c38db28b325dcd1557baecdf6bc9ef941d2175f9a900ba4c230bb8055",
+    "harness/static_checks.py": "c5588b69e9e86229459a525c61b30096f6f13ff2add6cadf98f272c4ac8ca0c2",
+    "configs/muse-spark-open.yaml": "98f07230e4e64fe91b7c76d9a3ce04948053c043d494d5f1fae56cfe2de033af",
+    "problems/muse_moe_w4a16/task.yml": "cc6870087c1a115e69f40093478553e0a03c1b3e92f527c2e55c4115e2db42ad",
+    "problems/muse_moe_w4a16/baseline.py": "4fc48bd9cdfd749863c93a2dbf4e556e0c38fb04acc4fa48a53ef34cbf6c92a1",
+    "problems/muse_moe_w4a16/reference.py": "a7e0b4fa86aa477a4e7bb5745b2b258954d72636b6da153bd239a717927cba44"
+   },
+   "image": "localhost:30500/kc/judge@sha256:9a7f287b80d772c6f636bbcb57422c619fe326e2aabc53803b85007bca93f68e",
+   "code_sha256": "afcead6a6ff090aa50fe9bc907f0fa8f4ba73d95fa92af93ec260b5e8ff00f00"
+  },
+  "returncode": 112,
+  "speedup_ci": null
+ },
+ "status": "done",
+ "call_id": "kc-295cf18e1d8b491d",
+ "cluster": "sfo3",
+ "dedicated": false,
+ "created_at": 1793023457.9974644,
+ "started_at": 1793023466.6222825,
+ "finished_at": 1793023611.6276011,
+ "payload_ref": "muse_moe_w4a16/327e50c3faf7d4245c6e070de397984be7a87d8ee962a402ac44f085eca64f66.py",
+ "content_hash": "327e50c3faf7d4245c6e070de397984be7a87d8ee962a402ac44f085eca64f66",
+ "duplicate_of": null
+}

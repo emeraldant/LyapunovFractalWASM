@@ -460,3 +460,61 @@ def run_tiny_stamps(sizes=(1,), seeds=(8_950_000, 8_970_000, 8_990_000), rings=(
                 print(f"tiny stamps bs{bs} seed {seed} ring {ring} ({ne} exp): start p50/max {med[0]:.1f}/{med[1]:.1f};"
                       f" GEMM1 done {med[2]:.1f}/{med[3]:.1f}; GEMM2 wait passed {med[4]:.1f}/{med[5]:.1f};"
                       f" GEMM2 done {med[6]:.1f}/{med[7]:.1f} us", flush=True)
+
+
+def run_soak(cfgs, sizes=(1,), reps=2000, seed=8_960_000):
+    """Replay each config's forward as one CUDA graph `reps` times (cold-L2 flush before each, as the
+    judge) on fixed inputs; every output must equal the first bitwise (catches rare races: Guild #42)."""
+    g = torch.Generator(device="cuda").manual_seed(7)
+    E, I, H = 32, 4096, 4096
+
+    def scales(n, k):
+        e = torch.randint(4, 9, (n, k), generator=g, device="cuda", dtype=torch.int32)
+        m = torch.randint(0, 8, (n, k), generator=g, device="cuda", dtype=torch.int32)
+        return ((e << 3) | m).to(torch.uint8).view(torch.float8_e4m3fn)
+
+    weights = {"w13": torch.randint(0, 256, (E, 2 * I, H // 2), generator=g, device="cuda", dtype=torch.uint8),
+               "w2": torch.randint(0, 256, (E, H, I // 2), generator=g, device="cuda", dtype=torch.uint8),
+               "w13_gs": torch.full((E,), 1e-3, device="cuda"), "w2_gs": torch.full((E,), 1e-3, device="cuda")}
+    weights["w13_sf"] = torch.stack([scales(2 * I, H // 16) for _ in range(E)])
+    weights["w2_sf"] = torch.stack([scales(H, I // 16) for _ in range(E)])
+    bank = build_cuda_bank(weights)
+    ws_layout(bank)
+    gemv_layout(bank, weights)
+    norm_w = torch.ones(H, dtype=torch.bfloat16, device="cuda")
+    ls = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flush = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int32, device="cuda")
+    stream = torch.cuda.Stream()
+    for i, bs in enumerate(sizes):
+        # Two different inputs alternate through the captured graph's input buffers (fresh inputs
+        # every call, as the judge): a stale partial from the previous replay then shows as a mismatch.
+        dA = generate_input(bs=bs, sharding="ep8", seed=seed + i, device="cuda")
+        dB = generate_input(bs=bs, sharding="ep8", seed=seed + 500 + i, device="cuda")
+        xs, ids_s, tw_s = (dA["hidden_states"].clone(), dA["topk_ids"].clone(), dA["topk_weights"].clone())
+        for name, kw in cfgs.items():
+            refs = []
+            for d in (dA, dB):
+                refs.append(moe_cuda_forward(d["hidden_states"], d["topk_ids"], d["topk_weights"], ls, bank, norm_w, _SIM_EPS, **kw))
+            torch.cuda.synchronize()
+            with torch.cuda.stream(stream):
+                graph = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(graph, stream=stream):
+                    res = moe_cuda_forward(xs, ids_s, tw_s, ls, bank, norm_w, _SIM_EPS, **kw)
+            bad = 0
+            worst = 0.0
+            for r in range(reps):
+                d = (dA, dB)[r % 2]
+                with torch.cuda.stream(stream):
+                    xs.copy_(d["hidden_states"]); ids_s.copy_(d["topk_ids"]); tw_s.copy_(d["topk_weights"])
+                    flush.zero_()
+                    graph.replay()
+                stream.synchronize()
+                ref = refs[r % 2]
+                if not torch.equal(res, ref):
+                    bad += 1
+                    worst = max(worst, float((res.float() - ref.float()).norm() / ref.float().norm()))
+            print(f"soak {name} bs{bs}: {reps} replays alternating two inputs, {bad} differ from eager (worst rel {worst:.1e})",
+                  flush=True)
+            del graph
+    del weights, bank
+    torch.cuda.empty_cache()

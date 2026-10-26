@@ -667,3 +667,6 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   output were returning the previous call's values under PDL. Fix: every read of routing metadata
   (n_active, active, exp_start, row_route) in the GEMV and v6 (sab) kernels goes through L2 (__ldcg).
   The sab chain configs never failed a judge recheck, but they read the same metadata the same way.
+- Metadata via L2 cost (check fa4bc679): GEMV with the metadata staged once per CTA in shared memory: g16 31.8 /
+  32.2 us, g8 32.7 / 33.0 vs s1dw2fpc 39.3 / 39.7 (-19%), soak 0 / 500 each. sab with ld.cg metadata: s1dwc
+  bs 32 139.1 / 139.9 us (prior builds 141-142: no cost); mpf neutral (138.4 / 139.7).

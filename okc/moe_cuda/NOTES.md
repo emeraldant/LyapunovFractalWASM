@@ -678,3 +678,6 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   GEMV wins only at 1 token (~9% over the floor) and ties the production loop at 2 (issue-bound: +4 HFMA2 + 1 LDS
   per octet per token). Next probe: drop the constant HMUL2 (x pre-scaled by 2^100) if HFMA2.BF16 keeps
   subnormal inputs.
+- No-rescale GEMV (check 51ab608b): HFMA2.BF16 keeps subnormal inputs (all 16 codes exact with x * 2^100), so the
+  constant HMUL2 can go (fold 2^-100 into the block scale): bs 1 GEMM1 13.1 -> 12.6 us; bs 8 GEMM1 T1 54.4 -> 53.2,
+  T2 59.8 -> 57.1, T3 74.3 -> 68.9; GEMM2 T2 33.5 -> 32.2. Hybrid (1-2 token experts on the GEMV) worth ~+2% overall.

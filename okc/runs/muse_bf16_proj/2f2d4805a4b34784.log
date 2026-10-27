@@ -1,0 +1,188 @@
+bf16 stream: ready (38 s)
+cuda qkv_gate m1 ('cuda', 2, 132): 131.2 us (best 21.0)
+cuda qkv_gate m1 ('cuda', 4, 132): 69.1 us (best 21.0)
+cuda qkv_gate m1 ('cuda', 8, 132): 39.7 us (best 21.0)
+cuda qkv_gate m1 ('cuda', 16, 132): 44.7 us (best 21.0)
+cuda qkv_gate m1 ('cuda', 32, 132): 42.9 us (best 21.0)
+cuda qkv_gate m1 ('cuda', 64, 132): 55.2 us (best 21.0)
+plan qkv_gate  m1    n2304 : ('fma', 1, 4, 1024, 1, 4, 2) 19.2 us (sglang 20.4 us)
+cuda o m1 ('cuda', 2, 132): 23.9 us (best 11.7)
+cuda o m1 ('cuda', 4, 132): 17.6 us (best 11.7)
+cuda o m1 ('cuda', 8, 132): 20.9 us (best 11.7)
+cuda o m1 ('cuda', 16, 132): 27.3 us (best 11.7)
+cuda o m1 ('cuda', 32, 132): 48.4 us (best 11.7)
+cuda o m1 ('cuda', 64, 132): 129.6 us (best 11.7)
+plan o         m1    n8192 : ('base',) 11.7 us (sglang 11.7 us)
+cuda pooler m1 ('cuda', 2, 132): 129.7 us (best 29.8)
+cuda pooler m1 ('cuda', 4, 132): 69.4 us (best 29.8)
+cuda pooler m1 ('cuda', 8, 132): 42.7 us (best 29.8)
+cuda pooler m1 ('cuda', 16, 132): 46.0 us (best 29.8)
+cuda pooler m1 ('cuda', 32, 132): 56.7 us (best 29.8)
+cuda pooler m1 ('cuda', 64, 132): 85.1 us (best 29.8)
+plan pooler    m1    n4096 : ('fma', 1, 8, 1024, 1, 4, 2) 26.8 us (sglang 30.1 us)
+cuda unpooler m1 ('cuda', 2, 132): 71.0 us (best 11.7)
+cuda unpooler m1 ('cuda', 4, 132): 38.6 us (best 11.7)
+cuda unpooler m1 ('cuda', 8, 132): 23.6 us (best 11.7)
+cuda unpooler m1 ('cuda', 16, 132): 16.9 us (best 11.7)
+cuda unpooler m1 ('cuda', 32, 132): 15.2 us (best 11.7)
+cuda unpooler m1 ('cuda', 64, 132): 24.5 us (best 11.7)
+plan unpooler  m1    n1024 : ('fma', 1, 4, 1024, 1, 4, 2) 11.4 us (sglang 11.6 us)
+plan router    m1    n256  : ('fma', 1, 8, 1024, 8, 4, 2) 11.2 us (sglang 16.1 us)
+cuda qkv_gate m8 ('cuda', 2, 132): 135.2 us (best 21.2)
+cuda qkv_gate m8 ('cuda', 4, 132): 71.3 us (best 21.2)
+cuda qkv_gate m8 ('cuda', 8, 132): 42.4 us (best 21.2)
+cuda qkv_gate m8 ('cuda', 16, 132): 49.6 us (best 21.2)
+cuda qkv_gate m8 ('cuda', 32, 132): 52.6 us (best 21.2)
+cuda qkv_gate m8 ('cuda', 64, 132): 82.3 us (best 21.2)
+plan qkv_gate  m8    n2304 : ('base',) 21.2 us (sglang 21.2 us)
+cuda o m8 ('cuda', 2, 132): 26.1 us (best 12.0)
+cuda o m8 ('cuda', 4, 132): 20.3 us (best 12.0)
+cuda o m8 ('cuda', 8, 132): 24.4 us (best 12.0)
+cuda o m8 ('cuda', 16, 132): 35.9 us (best 12.0)
+cuda o m8 ('cuda', 32, 132): 78.2 us (best 12.0)
+cuda o m8 ('cuda', 64, 132): 246.0 us (best 12.0)
+plan o         m8    n8192 : ('dot', 16, 32, 128, 1, 4, 4) 11.7 us (sglang 12.0 us)
+cuda pooler m8 ('cuda', 2, 132): 133.4 us (best 30.0)
+cuda pooler m8 ('cuda', 4, 132): 72.0 us (best 30.0)
+cuda pooler m8 ('cuda', 8, 132): 45.5 us (best 30.0)
+cuda pooler m8 ('cuda', 16, 132): 52.3 us (best 30.0)
+cuda pooler m8 ('cuda', 32, 132): 77.8 us (best 30.0)
+cuda pooler m8 ('cuda', 64, 132): 136.2 us (best 30.0)
+plan pooler    m8    n4096 : ('base',) 30.0 us (sglang 30.0 us)
+cuda unpooler m8 ('cuda', 2, 132): 73.9 us (best 11.9)
+cuda unpooler m8 ('cuda', 4, 132): 40.8 us (best 11.9)
+cuda unpooler m8 ('cuda', 8, 132): 25.3 us (best 11.9)
+cuda unpooler m8 ('cuda', 16, 132): 19.1 us (best 11.9)
+cuda unpooler m8 ('cuda', 32, 132): 19.8 us (best 11.9)
+cuda unpooler m8 ('cuda', 64, 132): 37.1 us (best 11.9)
+plan unpooler  m8    n1024 : ('base',) 11.9 us (sglang 11.9 us)
+plan router    m8    n256  : ('fma', 8, 4, 256, 4, 4, 2) 15.1 us (sglang 31.8 us)
+cuda qkv_gate m16 ('cuda', 2, 132): 71.3 us (best 21.1)
+cuda qkv_gate m16 ('cuda', 4, 132): 42.6 us (best 21.1)
+cuda qkv_gate m16 ('cuda', 8, 132): 30.2 us (best 21.1)
+cuda qkv_gate m16 ('cuda', 16, 132): 43.7 us (best 21.1)
+cuda qkv_gate m16 ('cuda', 32, 132): 65.6 us (best 21.1)
+cuda qkv_gate m16 ('cuda', 64, 132): 157.2 us (best 21.1)
+plan qkv_gate  m16   n2304 : ('base',) 21.1 us (sglang 21.1 us)
+cuda o m16 ('cuda', 2, 132): 20.7 us (best 12.1)
+cuda o m16 ('cuda', 4, 132): 20.0 us (best 12.1)
+cuda o m16 ('cuda', 8, 132): 29.8 us (best 12.1)
+cuda o m16 ('cuda', 16, 132): 56.5 us (best 12.1)
+cuda o m16 ('cuda', 32, 132): 146.8 us (best 12.1)
+cuda o m16 ('cuda', 64, 132): 493.2 us (best 12.1)
+plan o         m16   n8192 : ('dot', 16, 32, 128, 1, 4, 4) 11.5 us (sglang 11.9 us)
+cuda pooler m16 ('cuda', 2, 132): 72.3 us (best 30.1)
+cuda pooler m16 ('cuda', 4, 132): 44.7 us (best 30.1)
+cuda pooler m16 ('cuda', 8, 132): 41.7 us (best 30.1)
+cuda pooler m16 ('cuda', 16, 132): 54.1 us (best 30.1)
+cuda pooler m16 ('cuda', 32, 132): 97.6 us (best 30.1)
+cuda pooler m16 ('cuda', 64, 132): 242.2 us (best 30.1)
+plan pooler    m16   n4096 : ('base',) 30.1 us (sglang 30.1 us)
+cuda unpooler m16 ('cuda', 2, 132): 45.6 us (best 28.0)
+cuda unpooler m16 ('cuda', 4, 132): 38.0 us (best 28.0)
+cuda unpooler m16 ('cuda', 8, 132): 46.9 us (best 28.0)
+cuda unpooler m16 ('cuda', 16, 132): 71.2 us (best 28.0)
+cuda unpooler m16 ('cuda', 32, 132): 172.1 us (best 28.0)
+cuda unpooler m16 ('cuda', 64, 132): 453.5 us (best 28.0)
+plan unpooler  m16   n8192 : ('base',) 28.0 us (sglang 28.0 us)
+plan router    m16   n256  : ('dot', 16, 16, 128, 16, 4, 4) 15.5 us (sglang 20.9 us)
+cuda qkv_gate m32 ('cuda', 2, 132): 98.2 us (best 21.5)
+cuda qkv_gate m32 ('cuda', 4, 132): 57.8 us (best 21.5)
+cuda qkv_gate m32 ('cuda', 8, 132): 45.1 us (best 21.5)
+cuda qkv_gate m32 ('cuda', 16, 132): 77.8 us (best 21.5)
+cuda qkv_gate m32 ('cuda', 32, 132): 111.6 us (best 21.5)
+cuda qkv_gate m32 ('cuda', 64, 132): 316.8 us (best 21.5)
+plan qkv_gate  m32   n2304 : ('base',) 21.5 us (sglang 21.5 us)
+cuda o m32 ('cuda', 2, 132): 28.8 us (best 12.2)
+cuda o m32 ('cuda', 4, 132): 29.0 us (best 12.2)
+cuda o m32 ('cuda', 8, 132): 49.2 us (best 12.2)
+cuda o m32 ('cuda', 16, 132): 116.5 us (best 12.2)
+cuda o m32 ('cuda', 32, 132): 312.5 us (best 12.2)
+cuda o m32 ('cuda', 64, 132): 1002.2 us (best 12.2)
+plan o         m32   n8192 : ('dot', 32, 32, 128, 1, 4, 4) 11.9 us (sglang 12.0 us)
+cuda pooler m32 ('cuda', 2, 132): 100.9 us (best 30.8)
+cuda pooler m32 ('cuda', 4, 132): 62.6 us (best 30.8)
+cuda pooler m32 ('cuda', 8, 132): 62.3 us (best 30.8)
+cuda pooler m32 ('cuda', 16, 132): 94.7 us (best 30.8)
+cuda pooler m32 ('cuda', 32, 132): 166.6 us (best 30.8)
+cuda pooler m32 ('cuda', 64, 132): 536.1 us (best 30.8)
+plan pooler    m32   n4096 : ('base',) 30.8 us (sglang 30.8 us)
+cuda unpooler m32 ('cuda', 2, 132): 64.0 us (best 28.0)
+cuda unpooler m32 ('cuda', 4, 132): 57.3 us (best 28.0)
+cuda unpooler m32 ('cuda', 8, 132): 82.0 us (best 28.0)
+cuda unpooler m32 ('cuda', 16, 132): 143.0 us (best 28.0)
+cuda unpooler m32 ('cuda', 32, 132): 341.6 us (best 28.0)
+cuda unpooler m32 ('cuda', 64, 132): 1054.4 us (best 28.0)
+plan unpooler  m32   n8192 : ('base',) 28.0 us (sglang 28.0 us)
+plan router    m32   n256  : ('dot', 32, 16, 128, 16, 4, 4) 17.0 us (sglang 21.4 us)
+plan qkv_gate  m128  n2304 : ('base',) 25.0 us (sglang 25.0 us)
+plan o         m128  n8192 : ('base',) 12.8 us (sglang 12.8 us)
+plan pooler    m128  n4096 : ('base',) 31.6 us (sglang 31.6 us)
+plan unpooler  m128  n8192 : ('base',) 29.8 us (sglang 29.8 us)
+plan router    m128  n256  : ('base',) 22.2 us (sglang 22.2 us)
+plan qkv_gate  m256  n2304 : ('base',) 29.1 us (sglang 29.1 us)
+plan o         m256  n8192 : ('base',) 13.8 us (sglang 13.8 us)
+plan pooler    m256  n4096 : ('base',) 38.8 us (sglang 38.8 us)
+plan unpooler  m256  n8192 : ('base',) 33.5 us (sglang 33.5 us)
+plan router    m256  n256  : ('base',) 23.1 us (sglang 23.1 us)
+prepare: tuned in 112 s
+USDT:2026-10-27 18:50:12 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:12 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:12 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 18:50:13 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop

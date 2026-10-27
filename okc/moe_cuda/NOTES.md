@@ -682,7 +682,7 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
   constant HMUL2 can go (fold 2^-100 into the block scale): bs 1 GEMM1 13.1 -> 12.6 us; bs 8 GEMM1 T1 54.4 -> 53.2,
   T2 59.8 -> 57.1, T3 74.3 -> 68.9; GEMM2 T2 33.5 -> 32.2. Hybrid (1-2 token experts on the GEMV) worth ~+2% overall.
 
-## bf16_proj: hand-written CUDA weight stream (Oct 27) -- refuted, dropped
+## bf16_proj: hand-written CUDA weight stream (Oct 27)
 
 `bf16_cuda/kernel.py`: W prepacked into mma.sync A-fragment order, one LDG.128 per lane per k16
 step, P-deep register ring, persistent grid (132 x 512 threads, 128 regs), K split S ways with a
@@ -700,3 +700,21 @@ v4 fixed a real stall (B loaded at use = one L2 round trip per step); v5 showed 
 was not the limiter. Remaining gap is unexplained (memory-level parallelism looks sufficient on
 paper: ~8.6 MB in flight). Not pursued further; the scored submission stays on the Triton plans
 (1.065). Runs: 55a51e20 (v3), 6a50b439 (v4), bef6028c (v5).
+
+Follow-up (after "shouldn't it at least catch up?"), same check harness, tuner us:
+
+| version | change | qkv m1 | o m1 | pooler m1 | pooler m8 | qkv m32 | pooler m32 |
+|---|---|---|---|---|---|---|---|
+| plan (Triton / cuBLAS) | -- | 19.9 | 12.1 | 27.0 | 30.3 | 21.5 | 30.9 |
+| v6 | warp ids interleaved across SMs | 39.7 | 17.6 | 42.7 | 45.5 | 45.1 | 62.3 |
+| v7 | TMA bulk ring in smem (12 warps x 8 x 2 KB) | 26.6 | 18.3 | 39.0 | 47.5 | 50.1 | 70.0 |
+| v8 | CTA owns a K slice, x slice staged in smem | 21.9 | 14.6 | 31.4 | 34.2 | 41.9 | 64.5 |
+| v9 | x staged by bulk copies | 21.9 | 14.3 | 31.0 | 32.9 | 38.6 | 66.4 |
+| v10 | L2 evict_first on the weight bulk copies | 20.3 | 14.8 | 27.5 | 30.4 | 39.1 | 65.5 |
+
+Lessons: the register ring could not hold enough bytes in flight (v7); B fragments from L2 cost
+latency (v8); under the judge's dirty-L2 flush, evict_first on streamed weights matters (v10: the
+Triton plans use it too). v10 ties Triton at m1-m8 but never beats it; m >= 16 is still ~2x off
+(tile quantization: a slice's CTAs x 12 warps vs 144-512 tiles, and per-step HMMA chains). Parity
+with the plans is worth nothing on the board (they are what we already submit), so stopped here.
+Runs: 2f2d4805 (v6), 39435fc9 (v7), d584e895 (v8), c1f21ac1 (v9), 3b147d16 (v10).

@@ -204,8 +204,9 @@ def _candidates(layer, m, n, k):
     seen = set()
     if m <= 32 and layer != "router":   # the CUDA weight stream first
         nt = (m + 7) // 8
-        for S in (2, 4, 8, 16, 32, 64):   # persistent grid (1 x 512 threads per SM at 128 regs), K split S ways
-            if k % (S * 16) == 0:
+        for S in (1, 2, 4, 8, 16, 32, 64):   # persistent grid, one 12-warp CTA per SM, K split S ways
+            # 4-step (2 KB) bulk chunks; the CTA's x slice must fit beside the 96 KB weight ring
+            if k % (S * 64) == 0 and S <= sms and m * (k // S + 8) * 2 <= 120 * 1024:
                 cands.append(("cuda", S, sms))
 
     def add(plan):

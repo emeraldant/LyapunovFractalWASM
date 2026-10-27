@@ -168,14 +168,19 @@ __global__ void __launch_bounds__(512) bf16_stream_kernel(const uint4* __restric
   const int units = tiles * S;
   const int my_units = gw < units ? (units - 1 - gw) / tw + 1 : 0;
   const int total = my_units * steps;   // this warp's k16 steps over all its units
-  auto addr = [&](int q) {   // weight fragment of the warp's q-th step
-    const int u = gw + (q / steps) * tw, st = q % steps;
+  // incremental addressing (no divisions per step): the prefetch cursor runs P steps ahead of the
+  // consumer and re-derives its unit's base only when it crosses into the next unit
+  int pu = gw, pst = 0, pk = 0;
+  const uint4* pw = wq;
+  auto unit_base = [&](int u, const uint4*& w, int& kk) {
     const int t = u / S, s = u % S;
-    return wq + ((size_t)t * ktot_steps + s * steps + st) * 32 + lane;
+    w = wq + ((size_t)t * ktot_steps + s * steps) * 32 + lane;
+    kk = s * steps * 16;
   };
-  auto kof = [&](int q) {   // k offset (elements) of the warp's q-th step
-    const int u = gw + (q / steps) * tw;
-    return ((u % S) * steps + q % steps) * 16;
+  if (total > 0) unit_base(pu, pw, pk);
+  auto advance = [&]() {
+    pw += 32; pk += 16;
+    if (++pst == steps) { pst = 0; pu += tw; if (pu < units) unit_base(pu, pw, pk); }
   };
   // token rows: B fragment pointers (rows >= m read row 0 and are never stored)
   const __nv_bfloat16* xrow[NT];
@@ -186,22 +191,23 @@ __global__ void __launch_bounds__(512) bf16_stream_kernel(const uint4* __restric
   uint32_t bring[P][NT][2];
 #pragma unroll
   for (int p = 0; p < P; ++p) {
-    ring[p] = p < total ? bs_ldg(addr(p)) : make_uint4(0u, 0u, 0u, 0u);
-    const int kk = p < total ? kof(p) : 0;
+    if (p < total) {
+      ring[p] = bs_ldg(pw);
 #pragma unroll
-    for (int j = 0; j < NT; ++j) {
-      bring[p][j][0] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk));
-      bring[p][j][1] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk + 8));
+      for (int j = 0; j < NT; ++j) {
+        bring[p][j][0] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + pk));
+        bring[p][j][1] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + pk + 8));
+      }
+      advance();
     }
   }
   float acc[NT][4];
+  int cu = gw, st = 0, t = gw / S, s = gw % S;
   for (int q0 = 0; q0 < total; q0 += P) {
 #pragma unroll
     for (int p = 0; p < P; ++p) {
       const int q = q0 + p;
       if (q < total) {
-        const int st = q % steps, u = gw + (q / steps) * tw;
-        const int t = u / S, s = u % S;
         if (st == 0) {
 #pragma unroll
           for (int j = 0; j < NT; ++j) acc[j][0] = acc[j][1] = acc[j][2] = acc[j][3] = 0.f;
@@ -211,13 +217,13 @@ __global__ void __launch_bounds__(512) bf16_stream_kernel(const uint4* __restric
 #pragma unroll
         for (int j = 0; j < NT; ++j) b[j][0] = bring[p][j][0], b[j][1] = bring[p][j][1];
         if (q + P < total) {
-          ring[p] = bs_ldg(addr(q + P));
-          const int kk = kof(q + P);
+          ring[p] = bs_ldg(pw);
 #pragma unroll
           for (int j = 0; j < NT; ++j) {
-            bring[p][j][0] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk));
-            bring[p][j][1] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk + 8));
+            bring[p][j][0] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + pk));
+            bring[p][j][1] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + pk + 8));
           }
+          advance();
         }
 #pragma unroll
         for (int j = 0; j < NT; ++j) bs_mma(acc[j], a, b[j][0], b[j][1]);
@@ -256,6 +262,7 @@ __global__ void __launch_bounds__(512) bf16_stream_kernel(const uint4* __restric
             }
           }
         }
+        if (++st == steps) { st = 0; cu += tw; t = cu / S; s = cu % S; }
       }
     }
   }

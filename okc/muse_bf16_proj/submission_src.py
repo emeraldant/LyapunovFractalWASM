@@ -204,11 +204,9 @@ def _candidates(layer, m, n, k):
     seen = set()
     if m <= 32 and layer != "router":   # the CUDA weight stream first
         nt = (m + 7) // 8
-        for S in (1, 2, 4, 8, 16):
-            if k % (S * 16) or nt * 8 * (k // S * 2 + 16) > 200 * 1024 or (n // 16) * S < sms // 2:
-                continue
-            for cps in (2, 1):
-                cands.append(("cuda", S, S * -(-(sms * cps) // S)))
+        for S in (2, 4, 8, 16, 32):   # persistent grid (1 x 512 threads per SM at 128 regs), K split S ways
+            if k % (S * 16) == 0:
+                cands.append(("cuda", S, sms))
 
     def add(plan):
         kind, bm, bn, bk, split = plan[:5]
@@ -320,7 +318,7 @@ def prepare(weights: Weights):
         state["bs_mod"] = bf16_module()
         for name in ("qkv_gate", "o", "pooler", "unpooler"):
             state[name + "_pk"] = pack_bf16(state[name])
-        state["bs_part"] = torch.empty(16 * 512 * 512, dtype=torch.float32, device=router.device)
+        state["bs_part"] = torch.empty(64 * 512 * 512, dtype=torch.float32, device=router.device)
         state["bs_cnt"] = torch.zeros(512, dtype=torch.int32, device=router.device)
         print(f"bf16 stream: ready ({time.time() - t0:.0f} s)")
     except Exception as e:
@@ -348,6 +346,10 @@ def prepare(weights: Weights):
                     out = _run_plan(plan, x, state, layer, n)
                     torch.cuda.current_stream().synchronize()
                     if not _check(out, x, w_ref, layer == "router"):
+                        if plan[0] == "cuda":
+                            ref = x.double() @ w_ref.double().T
+                            print(f"cuda {layer} m{bucket} {plan}: wrong, rel err "
+                                  f"{float((out.double() - ref).norm() / ref.norm()):.2e}")
                         continue
                     # Masking: a smaller, odd token count must be right too.
                     if bucket > 1:
@@ -358,6 +360,8 @@ def prepare(weights: Weights):
                 except Exception as e:  # a config that fails to compile or launch is skipped
                     print(f"skip {layer} m{bucket} {plan}: {type(e).__name__}: {str(e)[:120]}")
                     continue
+                if plan[0] == "cuda":
+                    print(f"cuda {layer} m{bucket} {plan}: {t * 1e3:.1f} us (best {best_t * 1e3:.1f})")
                 if t < best_t:
                     best, best_t = plan, t
             # Re-time the winner against the baseline to guard against a lucky sample.

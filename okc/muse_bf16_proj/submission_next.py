@@ -153,82 +153,86 @@ __device__ __forceinline__ void bs_mma(float c[4], uint4 a, uint32_t b0, uint32_
                : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3]) : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w), "r"(b0), "r"(b1));
 }
 
-// NT: n8 token tiles (1-4); P: k16 steps of weights in flight per lane.
+// NT: n8 token tiles (1-4); P: k16 steps of weights in flight per lane. Persistent: units (16-row
+// tile, K slice) go to warps grid-stride, and each warp's ring of P loads runs on across its units,
+// so the next unit's first steps are in flight under the current one's last. The tokens (B
+// fragments) are read from global memory through L1 (every warp of the SM reads the same few rows).
 template <int NT, int P>
-__global__ void __launch_bounds__(256) bf16_stream_kernel(const uint4* __restrict__ wq, const __nv_bfloat16* __restrict__ x,
+__global__ void __launch_bounds__(512) bf16_stream_kernel(const uint4* __restrict__ wq, const __nv_bfloat16* __restrict__ x,
                                                           __nv_bfloat16* __restrict__ out, float* __restrict__ part,
                                                           int* __restrict__ cnt, int m, int n, int k, int S) {
-  extern __shared__ __align__(16) uint8_t xs[];
   const int kS = k / S, steps = kS / 16, tiles = n / 16, ktot_steps = k / 16;
-  const int RS = kS * 2 + 16;   // token row stride in shared memory (bytes, padded)
-  const int s = blockIdx.x % S, cs = blockIdx.x / S, ncs = gridDim.x / S;
-  // Stage this slice's activations (rows >= m zero).
-  for (int i = threadIdx.x; i < NT * 8 * (kS / 8); i += blockDim.x) {
-    const int r = i / (kS / 8), o = i % (kS / 8);
-    uint4 v = make_uint4(0u, 0u, 0u, 0u);
-    if (r < m) v = *reinterpret_cast<const uint4*>(x + (size_t)r * k + s * kS + o * 8);
-    *reinterpret_cast<uint4*>(xs + r * RS + o * 16) = v;
-  }
-  __syncthreads();
-  const int warp = threadIdx.x / 32, lane = threadIdx.x % 32, g = lane / 4, c = lane % 4;
-  for (int t = cs * 8 + warp; t < tiles; t += ncs * 8) {
-    const uint4* wp = wq + ((size_t)t * ktot_steps + s * steps) * 32 + lane;
-    uint4 ring[P];
+  const int lane = threadIdx.x % 32, g = lane / 4, c = lane % 4;
+  const int gw = blockIdx.x * (blockDim.x / 32) + threadIdx.x / 32, tw = gridDim.x * (blockDim.x / 32);
+  const int units = tiles * S;
+  const int my_units = gw < units ? (units - 1 - gw) / tw + 1 : 0;
+  const int total = my_units * steps;   // this warp's k16 steps over all its units
+  auto addr = [&](int q) {   // weight fragment of the warp's q-th step
+    const int u = gw + (q / steps) * tw, st = q % steps;
+    const int t = u / S, s = u % S;
+    return wq + ((size_t)t * ktot_steps + s * steps + st) * 32 + lane;
+  };
+  uint4 ring[P];
 #pragma unroll
-    for (int p = 0; p < P; ++p) ring[p] = p < steps ? bs_ldg(wp + p * 32) : make_uint4(0u, 0u, 0u, 0u);
-    float acc[NT][4];
+  for (int p = 0; p < P; ++p) ring[p] = p < total ? bs_ldg(addr(p)) : make_uint4(0u, 0u, 0u, 0u);
+  // token rows: B fragment pointers (rows >= m read row 0 and are never stored)
+  const __nv_bfloat16* xrow[NT];
 #pragma unroll
-    for (int j = 0; j < NT; ++j) acc[j][0] = acc[j][1] = acc[j][2] = acc[j][3] = 0.f;
-    for (int st0 = 0; st0 < steps; st0 += P) {
+  for (int j = 0; j < NT; ++j) xrow[j] = x + (size_t)min(8 * j + g, m - 1) * k + 2 * c;
+  float acc[NT][4];
+  for (int q0 = 0; q0 < total; q0 += P) {
 #pragma unroll
-      for (int p = 0; p < P; ++p) {
-        const int st = st0 + p;
-        if (st < steps) {
-          const uint4 a = ring[p];
-          if (st + P < steps) ring[p] = bs_ldg(wp + (st + P) * 32);
-          const uint8_t* xb = xs + st * 32 + c * 4;
+    for (int p = 0; p < P; ++p) {
+      const int q = q0 + p;
+      if (q < total) {
+        const int st = q % steps, u = gw + (q / steps) * tw;
+        const int t = u / S, s = u % S;
+        if (st == 0) {
 #pragma unroll
-          for (int j = 0; j < NT; ++j) {
-            const uint8_t* xr = xb + (j * 8 + g) * RS;
-            bs_mma(acc[j], a, *reinterpret_cast<const uint32_t*>(xr), *reinterpret_cast<const uint32_t*>(xr + 16));
+          for (int j = 0; j < NT; ++j) acc[j][0] = acc[j][1] = acc[j][2] = acc[j][3] = 0.f;
+        }
+        const uint4 a = ring[p];
+        if (q + P < total) ring[p] = bs_ldg(addr(q + P));
+        const int kk = (s * steps + st) * 16;
+#pragma unroll
+        for (int j = 0; j < NT; ++j)
+          bs_mma(acc[j], a, __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk)),
+                 __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk + 8)));
+        if (st == steps - 1) {   // unit done: write (S == 1) or meet the other slices
+          if (S == 1) {
+#pragma unroll
+            for (int j = 0; j < NT; ++j)
+#pragma unroll
+              for (int i = 0; i < 4; ++i) {
+                const int row = 16 * t + g + (i >= 2 ? 8 : 0), tok = 8 * j + 2 * c + (i & 1);
+                if (tok < m) out[(size_t)tok * n + row] = __float2bfloat16_rn(acc[j][i]);
+              }
+          } else {
+            float* pp = part + ((size_t)s * tiles + t) * (16 * 32);   // [slice][tile][row 16][token 32]
+#pragma unroll
+            for (int j = 0; j < NT; ++j)
+#pragma unroll
+              for (int i = 0; i < 4; ++i) pp[(g + (i >= 2 ? 8 : 0)) * 32 + 8 * j + 2 * c + (i & 1)] = acc[j][i];
+            asm volatile("fence.acq_rel.gpu;\n" ::: "memory");
+            __syncwarp();
+            int last = 0;
+            if (lane == 0) {
+              const int old = atomicAdd(cnt + t, 1);
+              last = old == S - 1;
+              if (last) cnt[t] = 0;
+            }
+            last = __shfl_sync(0xffffffffu, last, 0);
+            if (last) {
+              asm volatile("fence.acq_rel.gpu;\n" ::: "memory");
+              const int row = lane % 16;
+              for (int tok = lane / 16; tok < min(m, NT * 8); tok += 2) {
+                float v = 0.f;
+                for (int qq = 0; qq < S; ++qq) v += __ldcg(part + ((size_t)qq * tiles + t) * (16 * 32) + row * 32 + tok);
+                out[(size_t)tok * n + 16 * t + row] = __float2bfloat16_rn(v);
+              }
+            }
           }
         }
-      }
-    }
-    // acc[j]: (row 16t + g, tokens 8j + 2c, +1) in [0], [1]; row + 8 in [2], [3].
-    if (S == 1) {
-#pragma unroll
-      for (int j = 0; j < NT; ++j)
-#pragma unroll
-        for (int i = 0; i < 4; ++i) {
-          const int row = 16 * t + g + (i >= 2 ? 8 : 0), tok = 8 * j + 2 * c + (i & 1);
-          if (tok < m) out[(size_t)tok * n + row] = __float2bfloat16_rn(acc[j][i]);
-        }
-      continue;
-    }
-    float* pp = part + ((size_t)s * tiles + t) * (16 * 32);   // [slice][tile][row 16][token 32]
-#pragma unroll
-    for (int j = 0; j < NT; ++j)
-#pragma unroll
-      for (int i = 0; i < 4; ++i) pp[(g + (i >= 2 ? 8 : 0)) * 32 + 8 * j + 2 * c + (i & 1)] = acc[j][i];
-    asm volatile("fence.acq_rel.gpu;\n" ::: "memory");
-    __syncwarp();
-    int last = 0;
-    if (lane == 0) {
-      const int old = atomicAdd(cnt + t, 1);
-      last = old == S - 1;
-      if (last) cnt[t] = 0;
-    }
-    last = __shfl_sync(0xffffffffu, last, 0);
-    if (last) {
-      asm volatile("fence.acq_rel.gpu;\n" ::: "memory");
-      // 16 rows x NT*8 tokens: lane -> (row lane % 16, token half lane / 16)
-      const int row = lane % 16;
-      for (int tok = lane / 16; tok < NT * 8; tok += 2) {
-        if (tok >= m) continue;
-        float v = 0.f;
-        for (int q = 0; q < S; ++q) v += __ldcg(part + ((size_t)q * tiles + t) * (16 * 32) + row * 32 + tok);
-        out[(size_t)tok * n + 16 * t + row] = __float2bfloat16_rn(v);
       }
     }
   }
@@ -237,17 +241,15 @@ __global__ void __launch_bounds__(256) bf16_stream_kernel(const uint4* __restric
 void bf16_stream(torch::Tensor wq, torch::Tensor x, torch::Tensor out, torch::Tensor part, torch::Tensor cnt,
                  int64_t n, int64_t S, int64_t grid) {
   const int m = (int)x.size(0), k = (int)x.size(1);
-  TORCH_CHECK(m >= 1 && m <= 32 && k % (S * 16) == 0 && n % 16 == 0 && grid % S == 0, "bf16_stream: shape");
+  TORCH_CHECK(m >= 1 && m <= 32 && k % (S * 16) == 0 && n % 16 == 0, "bf16_stream: shape");
   const int nt = (m + 7) / 8;
-  const int smem = nt * 8 * ((k / (int)S) * 2 + 16);
   auto st = at::cuda::getCurrentCUDAStream();
   const uint4* w = reinterpret_cast<const uint4*>(wq.data_ptr());
   const __nv_bfloat16* xp = reinterpret_cast<const __nv_bfloat16*>(x.data_ptr());
   __nv_bfloat16* o = reinterpret_cast<__nv_bfloat16*>(out.data_ptr());
   float* pp = part.data_ptr<float>();
   int* c = cnt.data_ptr<int32_t>();
-#define BS_L(NT_) { auto kf = bf16_stream_kernel<NT_, 8>; cudaFuncSetAttribute(kf, cudaFuncAttributeMaxDynamicSharedMemorySize, smem); \
-    kf<<<(int)grid, 256, smem, st>>>(w, xp, o, pp, c, m, (int)n, k, (int)S); return; }
+#define BS_L(NT_) { bf16_stream_kernel<NT_, 8><<<(int)grid, 512, 0, st>>>(w, xp, o, pp, c, m, (int)n, k, (int)S); return; }
   if (nt == 1) BS_L(1)
   if (nt == 2) BS_L(2)
   if (nt == 3) BS_L(3)
@@ -354,11 +356,9 @@ def _candidates(layer, m, n, k):
     seen = set()
     if m <= 32 and layer != "router":   # the CUDA weight stream first
         nt = (m + 7) // 8
-        for S in (1, 2, 4, 8, 16):
-            if k % (S * 16) or nt * 8 * (k // S * 2 + 16) > 200 * 1024 or (n // 16) * S < sms // 2:
-                continue
-            for cps in (2, 1):
-                cands.append(("cuda", S, S * -(-(sms * cps) // S)))
+        for S in (2, 4, 8, 16, 32):   # persistent grid (1 x 512 threads per SM at 128 regs), K split S ways
+            if k % (S * 16) == 0:
+                cands.append(("cuda", S, sms))
 
     def add(plan):
         kind, bm, bn, bk, split = plan[:5]
@@ -470,7 +470,7 @@ def prepare(weights: Weights):
         state["bs_mod"] = bf16_module()
         for name in ("qkv_gate", "o", "pooler", "unpooler"):
             state[name + "_pk"] = pack_bf16(state[name])
-        state["bs_part"] = torch.empty(16 * 512 * 512, dtype=torch.float32, device=router.device)
+        state["bs_part"] = torch.empty(64 * 512 * 512, dtype=torch.float32, device=router.device)
         state["bs_cnt"] = torch.zeros(512, dtype=torch.int32, device=router.device)
         print(f"bf16 stream: ready ({time.time() - t0:.0f} s)")
     except Exception as e:
@@ -498,6 +498,10 @@ def prepare(weights: Weights):
                     out = _run_plan(plan, x, state, layer, n)
                     torch.cuda.current_stream().synchronize()
                     if not _check(out, x, w_ref, layer == "router"):
+                        if plan[0] == "cuda":
+                            ref = x.double() @ w_ref.double().T
+                            print(f"cuda {layer} m{bucket} {plan}: wrong, rel err "
+                                  f"{float((out.double() - ref).norm() / ref.norm()):.2e}")
                         continue
                     # Masking: a smaller, odd token count must be right too.
                     if bucket > 1:
@@ -508,6 +512,8 @@ def prepare(weights: Weights):
                 except Exception as e:  # a config that fails to compile or launch is skipped
                     print(f"skip {layer} m{bucket} {plan}: {type(e).__name__}: {str(e)[:120]}")
                     continue
+                if plan[0] == "cuda":
+                    print(f"cuda {layer} m{bucket} {plan}: {t * 1e3:.1f} us (best {best_t * 1e3:.1f})")
                 if t < best_t:
                     best, best_t = plan, t
             # Re-time the winner against the baseline to guard against a lucky sample.

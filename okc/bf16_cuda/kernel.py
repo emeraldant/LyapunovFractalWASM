@@ -22,14 +22,15 @@ __device__ __forceinline__ uint4 bs_ldg(const uint4* p) {
   return v;
 }
 __device__ __forceinline__ void bs_mma(float c[4], uint4 a, uint32_t b0, uint32_t b1) {
-  asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
+  asm("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
                : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3]) : "r"(a.x), "r"(a.y), "r"(a.z), "r"(a.w), "r"(b0), "r"(b1));
 }
 
 // NT: n8 token tiles (1-4); P: k16 steps of weights in flight per lane. Persistent: units (16-row
 // tile, K slice) go to warps grid-stride, and each warp's ring of P loads runs on across its units,
 // so the next unit's first steps are in flight under the current one's last. The tokens (B
-// fragments) are read from global memory through L1 (every warp of the SM reads the same few rows).
+// fragments) are read from global memory through L1 (every warp of the SM reads the same few rows),
+// P steps ahead like the weights: a load issued at use cost a full L2 round trip per k16 step.
 template <int NT, int P>
 __global__ void __launch_bounds__(512) bf16_stream_kernel(const uint4* __restrict__ wq, const __nv_bfloat16* __restrict__ x,
                                                           __nv_bfloat16* __restrict__ out, float* __restrict__ part,
@@ -45,13 +46,27 @@ __global__ void __launch_bounds__(512) bf16_stream_kernel(const uint4* __restric
     const int t = u / S, s = u % S;
     return wq + ((size_t)t * ktot_steps + s * steps + st) * 32 + lane;
   };
-  uint4 ring[P];
-#pragma unroll
-  for (int p = 0; p < P; ++p) ring[p] = p < total ? bs_ldg(addr(p)) : make_uint4(0u, 0u, 0u, 0u);
+  auto kof = [&](int q) {   // k offset (elements) of the warp's q-th step
+    const int u = gw + (q / steps) * tw;
+    return ((u % S) * steps + q % steps) * 16;
+  };
   // token rows: B fragment pointers (rows >= m read row 0 and are never stored)
   const __nv_bfloat16* xrow[NT];
 #pragma unroll
   for (int j = 0; j < NT; ++j) xrow[j] = x + (size_t)min(8 * j + g, m - 1) * k + 2 * c;
+  // both operands ride the ring: the B fragments (L1/L2 hits) are as latency-bound as the weights
+  uint4 ring[P];
+  uint32_t bring[P][NT][2];
+#pragma unroll
+  for (int p = 0; p < P; ++p) {
+    ring[p] = p < total ? bs_ldg(addr(p)) : make_uint4(0u, 0u, 0u, 0u);
+    const int kk = p < total ? kof(p) : 0;
+#pragma unroll
+    for (int j = 0; j < NT; ++j) {
+      bring[p][j][0] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk));
+      bring[p][j][1] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk + 8));
+    }
+  }
   float acc[NT][4];
   for (int q0 = 0; q0 < total; q0 += P) {
 #pragma unroll
@@ -65,12 +80,20 @@ __global__ void __launch_bounds__(512) bf16_stream_kernel(const uint4* __restric
           for (int j = 0; j < NT; ++j) acc[j][0] = acc[j][1] = acc[j][2] = acc[j][3] = 0.f;
         }
         const uint4 a = ring[p];
-        if (q + P < total) ring[p] = bs_ldg(addr(q + P));
-        const int kk = (s * steps + st) * 16;
+        uint32_t b[NT][2];
 #pragma unroll
-        for (int j = 0; j < NT; ++j)
-          bs_mma(acc[j], a, __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk)),
-                 __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk + 8)));
+        for (int j = 0; j < NT; ++j) b[j][0] = bring[p][j][0], b[j][1] = bring[p][j][1];
+        if (q + P < total) {
+          ring[p] = bs_ldg(addr(q + P));
+          const int kk = kof(q + P);
+#pragma unroll
+          for (int j = 0; j < NT; ++j) {
+            bring[p][j][0] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk));
+            bring[p][j][1] = __ldg(reinterpret_cast<const uint32_t*>(xrow[j] + kk + 8));
+          }
+        }
+#pragma unroll
+        for (int j = 0; j < NT; ++j) bs_mma(acc[j], a, b[j][0], b[j][1]);
         if (st == steps - 1) {   // unit done: write (S == 1) or meet the other slices
           if (S == 1) {
 #pragma unroll
@@ -122,7 +145,7 @@ void bf16_stream(torch::Tensor wq, torch::Tensor x, torch::Tensor out, torch::Te
   __nv_bfloat16* o = reinterpret_cast<__nv_bfloat16*>(out.data_ptr());
   float* pp = part.data_ptr<float>();
   int* c = cnt.data_ptr<int32_t>();
-#define BS_L(NT_) { bf16_stream_kernel<NT_, 8><<<(int)grid, 512, 0, st>>>(w, xp, o, pp, c, m, (int)n, k, (int)S); return; }
+#define BS_L(NT_) { bf16_stream_kernel<NT_, (NT_ == 1 ? 8 : NT_ <= 3 ? 4 : 3)><<<(int)grid, 512, 0, st>>>(w, xp, o, pp, c, m, (int)n, k, (int)S); return; }
   if (nt == 1) BS_L(1)
   if (nt == 2) BS_L(2)
   if (nt == 3) BS_L(3)

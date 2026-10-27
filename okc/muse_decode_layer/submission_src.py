@@ -383,6 +383,13 @@ MOE_CUDA_CONFIGS = {   # the configurations the MoE board's gate adopted (judge 
     "s2q": dict(mt=2, stages=402, ctas_per_sm=2, sab=True),
     "v8": dict(mt=8, stages=504, ctas_per_sm=2, wg=True),
     "s2qv16": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, dualv8=16),
+    # Oct 26 (MoE board gate c3420a6d): PDL-chained v6, the fused one-launch variant, the bs 1 GEMV
+    "s1dw2fpc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, kparts=2, fuse=True, pdl=True, chain=True),
+    "s1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True),
+    "s2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True),
+    "f1dwc": dict(mt=1, stages=204, ctas_per_sm=2, sab=True, chain=True, fused=True),
+    "f2qc": dict(mt=2, stages=402, ctas_per_sm=2, sab=True, chain=True, fused=True),
+    "g16": dict(gemv=16, chain=True),
 }
 MOE_CUDA_MARGIN, MOE_CUDA_EACH = 0.98, 1.01   # adopt: <= 98% over two routings, <= 101% on each
 
@@ -397,6 +404,7 @@ def _moe_cuda_bank(weights):
             print("moe cuda: scales outside the fast decode's range, CUDA path off")
             return None
         ws_layout(bank)
+        gemv_layout(bank, weights, 0, LOCAL_EXPERTS)
         for k in ("w13q", "w13s", "w2q", "w2s"):
             del bank[k]
         torch.cuda.synchronize()

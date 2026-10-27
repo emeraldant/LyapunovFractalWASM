@@ -681,3 +681,22 @@ Not yet overlapped: GEMM1's first fill (its weights depend on the route).
 - No-rescale GEMV (check 51ab608b): HFMA2.BF16 keeps subnormal inputs (all 16 codes exact with x * 2^100), so the
   constant HMUL2 can go (fold 2^-100 into the block scale): bs 1 GEMM1 13.1 -> 12.6 us; bs 8 GEMM1 T1 54.4 -> 53.2,
   T2 59.8 -> 57.1, T3 74.3 -> 68.9; GEMM2 T2 33.5 -> 32.2. Hybrid (1-2 token experts on the GEMV) worth ~+2% overall.
+
+## bf16_proj: hand-written CUDA weight stream (Oct 27) -- refuted, dropped
+
+`bf16_cuda/kernel.py`: W prepacked into mma.sync A-fragment order, one LDG.128 per lane per k16
+step, P-deep register ring, persistent grid (132 x 512 threads, 128 regs), K split S ways with a
+deterministic last-arriver reduction. Correct in every judge check (rel err <= 3e-4), but never
+wins a case (tuner times, best S per case vs the Triton/SGLang plan):
+
+| version | change | qkv m1 | o m1 | pooler m1 | unpooler m1 |
+|---|---|---|---|---|---|
+| plan (Triton fma / base) | -- | 19.9 | 12.1 | 27.3 | 11.4 |
+| v3 | persistent, ring across units | 50.5 | 20.4 | 56.6 | 16.3 |
+| v4 | B fragments ride the ring too | 37.2 | 18.0 | 41.2 | 15.7 |
+| v5 | incremental addressing (no per-step divides) | 39.7 | 17.7 | 41.8 | 14.3 |
+
+v4 fixed a real stall (B loaded at use = one L2 round trip per step); v5 showed integer overhead
+was not the limiter. Remaining gap is unexplained (memory-level parallelism looks sufficient on
+paper: ~8.6 MB in flight). Not pursued further; the scored submission stays on the Triton plans
+(1.065). Runs: 55a51e20 (v3), 6a50b439 (v4), bef6028c (v5).

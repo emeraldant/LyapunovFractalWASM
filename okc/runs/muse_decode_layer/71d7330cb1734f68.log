@@ -1,0 +1,102 @@
+moe cuda: ready in 86 s
+attention B1   L1 sliding: cuda 17.9 us, fused 18.4 us, sglang 25.9 us
+attention B1   L1 full   : cuda 29.8 us, fused 60.6 us, sglang 38.7 us
+attention B1   L8 sliding: cuda inf us, fused 40.8 us, sglang 29.1 us
+attention B1   L8 full   : cuda inf us, fused 144.4 us, sglang 44.6 us
+attention B16  L1 sliding: cuda 18.6 us, fused 22.6 us, sglang 32.6 us
+attention B16  L1 full   : cuda 123.4 us, fused 319.9 us, sglang 214.1 us
+attention B16  L8 sliding: cuda inf us, fused 43.8 us, sglang 35.7 us
+attention B16  L8 full   : cuda inf us, fused 408.4 us, sglang 218.1 us
+attention B32  L1 sliding: cuda 21.9 us, fused 28.2 us, sglang 38.8 us
+attention B32  L1 full   : cuda 223.4 us, fused 562.0 us, sglang 400.5 us
+attention B32  L8 sliding: cuda inf us, fused 64.8 us, sglang 42.1 us
+attention B32  L8 full   : cuda inf us, fused 718.2 us, sglang 401.2 us
+moe bs1 ('cuda', 's1dw2fpc'): adopted over ('fast', 8, True) 55.8/56.0 us, 44.9/48.6 us
+moe bs1 ('cuda', 'g16'): adopted over ('cuda', 's1dw2fpc') 50.3/55.4 us, 37.4/45.2 us
+moe bs1   : ('cuda', 'g16') 50.3 us (sglang 96.6 us)
+moe bs8 ('cuda', 's1k4'): adopted over ('fast', 8, False) 86.4/89.5 us, 102.9/110.2 us
+moe bs8 ('cuda', 's1dw'): adopted over ('cuda', 's1k4') 82.2/85.6 us, 88.4/102.7 us
+moe bs8 ('cuda', 's1dwc'): adopted over ('cuda', 's1dw') 76.4/81.1 us, 81.4/87.5 us
+moe bs8 ('cuda', 'g16'): AssertionError: moe_gemv: one token
+moe bs8   : ('cuda', 's1dwc') 76.4 us (sglang 133.4 us)
+moe bs16 ('cuda', 's1k4'): adopted over ('fast', 8, False) 133.5/151.3 us, 153.5/181.0 us
+moe bs16 ('cuda', 's1dw'): adopted over ('cuda', 's1k4') 119.7/133.5 us, 146.0/153.0 us
+moe bs16 ('cuda', 's1dwc'): adopted over ('cuda', 's1dw') 113.0/117.4 us, 136.9/142.8 us
+moe bs16 ('cuda', 'f1dwc'): adopted over ('cuda', 's1dwc') 112.1/112.9 us, 131.4/138.0 us
+moe bs16 ('cuda', 'g16'): AssertionError: moe_gemv: one token
+moe bs16  : ('cuda', 'f1dwc') 112.1 us (sglang 199.6 us)
+moe bs32 ('cuda', 's1k4'): adopted over ('fast', 16, False) 144.7/157.2 us, 200.4/243.8 us
+moe bs32 ('cuda', 's1dw'): adopted over ('cuda', 's1k4') 135.8/145.0 us, 187.9/200.0 us
+moe bs32 ('cuda', 's2w'): adopted over ('cuda', 's1dw') 128.8/136.2 us, 186.5/187.6 us
+moe bs32 ('cuda', 's2qc'): adopted over ('cuda', 's2w') 125.2/127.8 us, 179.7/184.7 us
+moe bs32 ('cuda', 'f2qc'): adopted over ('cuda', 's2qc') 120.4/125.6 us, 174.9/179.8 us
+moe bs32 ('cuda', 'g16'): AssertionError: moe_gemv: one token
+moe bs32  : ('cuda', 'f2qc') 120.4 us (sglang 171.4 us)
+moe bs128 ('cuda', 's1k4'): adopted over ('fast', 16, False) 280.1/300.9 us, 317.9/333.6 us
+moe bs128 ('cuda', 's1dw'): adopted over ('cuda', 's1k4') 249.5/279.5 us, 274.0/317.8 us
+moe bs128 ('cuda', 's2w'): adopted over ('cuda', 's1dw') 224.5/248.7 us, 243.3/274.4 us
+moe bs128 ('cuda', 's2q'): adopted over ('cuda', 's2w') 218.0/224.4 us, 235.8/242.9 us
+moe bs128 ('cuda', 'f2qc'): adopted over ('cuda', 's2q') 208.7/216.6 us, 224.9/234.2 us
+moe bs128 ('cuda', 'g16'): AssertionError: moe_gemv: one token
+moe bs128 : ('cuda', 'f2qc') 208.7 us (sglang 480.4 us)
+moe bs256 ('cuda', 's1dw'): adopted over ('fast', 16, False) 386.2/414.1 us, 357.2/359.8 us
+moe bs256 ('cuda', 's2w'): adopted over ('cuda', 's1dw') 291.3/385.9 us, 258.0/356.9 us
+moe bs256 ('cuda', 's2q'): adopted over ('cuda', 's2w') 281.4/291.2 us, 250.8/256.8 us
+moe bs256 ('cuda', 'v8'): adopted over ('cuda', 's2q') 276.0/281.7 us, 218.3/251.1 us
+moe bs256 ('cuda', 's2qv16'): adopted over ('cuda', 'v8') 263.6/273.9 us, 217.1/217.8 us
+moe bs256 ('cuda', 'g16'): AssertionError: moe_gemv: one token
+moe bs256 : ('cuda', 's2qv16') 263.6 us (sglang 623.7 us)
+proj qkv_gate  m1   : ('fma', 1, 4, 1024, 1, 4, 2) 19.8 us (sglang 21.2 us)
+proj o         m1   : ('base',) 12.2 us (sglang 12.2 us)
+proj pooler    m1   : ('fma', 1, 8, 1024, 1, 4, 2) 26.8 us (sglang 30.5 us)
+proj unpooler  m1   : ('fma', 1, 4, 1024, 1, 4, 2) 11.2 us (sglang 11.7 us)
+proj qkv_gate  m8   : ('base',) 21.4 us (sglang 21.4 us)
+proj o         m8   : ('dot', 16, 32, 128, 1, 4, 4) 11.9 us (sglang 12.2 us)
+proj pooler    m8   : ('base',) 30.7 us (sglang 30.7 us)
+proj unpooler  m8   : ('base',) 11.9 us (sglang 11.9 us)
+proj qkv_gate  m16  : ('base',) 21.5 us (sglang 21.5 us)
+proj o         m16  : ('dot', 16, 32, 128, 1, 4, 4) 11.8 us (sglang 12.1 us)
+proj pooler    m16  : ('base',) 30.5 us (sglang 30.5 us)
+proj unpooler  m16  : ('base',) 27.9 us (sglang 27.9 us)
+proj qkv_gate  m32  : ('base',) 21.5 us (sglang 21.5 us)
+proj o         m32  : ('dot', 32, 32, 128, 1, 4, 4) 12.0 us (sglang 12.2 us)
+proj pooler    m32  : ('base',) 31.0 us (sglang 31.0 us)
+proj unpooler  m32  : ('base',) 28.0 us (sglang 28.0 us)
+proj qkv_gate  m128 : ('base',) 24.8 us (sglang 24.8 us)
+proj o         m128 : ('base',) 12.6 us (sglang 12.6 us)
+proj pooler    m128 : ('base',) 32.8 us (sglang 32.8 us)
+proj unpooler  m128 : ('base',) 29.0 us (sglang 29.0 us)
+proj qkv_gate  m256 : ('base',) 28.6 us (sglang 28.6 us)
+proj o         m256 : ('base',) 13.8 us (sglang 13.8 us)
+proj pooler    m256 : ('base',) 38.4 us (sglang 38.4 us)
+proj unpooler  m256 : ('base',) 32.9 us (sglang 32.9 us)
+layer check B1 L1: next input 6.35e-03, stream update 7.00e-03, ids 0.750
+layer check B4 L8: next input 3.89e-03, stream update 4.31e-03, ids 1.000
+layer check B16 L1: next input 3.48e-03, stream update 4.04e-03, ids 1.000
+layer check B32 L8: next input 3.81e-03, stream update 4.28e-03, ids 1.000
+layer check: 2438/2440 expert ids identical
+prepare: 202 s
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-27 15:57:59 77:77 SyncActivityProfilerHandler.cpp:46] profiler_stop
